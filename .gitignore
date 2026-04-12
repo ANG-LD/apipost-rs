@@ -1,0 +1,36 @@
+# Rust build output
+/target/
+Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.code-workspace
+
+# Claude
+.claude/
+
+# Playwright
+.playwright-mcp/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store
+Thumbs.db
+*~
+
+# Logs
+*.log
+
+# Backup
+*.bak
+*.swp
+*.swo
+
+# Dot directories
+.*/
+!.git/
