@@ -13,6 +13,7 @@ use app::AppState;
 use config::AppConfig;
 use gpui::*;
 use gpui_component::{Root, StyledExt};
+use gpui_component_assets::Assets;
 use gpui_platform::application;
 use ui::MainView;
 use log::info;
@@ -31,7 +32,7 @@ fn main() {
     info!("配置加载完成: 语言={}, 主题={}", config.general.language, config.general.theme);
 
     // 构建并运行应用
-    application().run(move |cx: &mut App| {
+    application().with_assets(Assets).run(move |cx: &mut App| {
         // 初始化gpui-component
         gpui_component::init(cx);
 

@@ -12,6 +12,7 @@ use reqwest::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
+use reqwest::multipart;
 
 /// HTTP客户端管理器
 pub struct HttpClient {
@@ -129,7 +130,7 @@ impl HttpClient {
             custom_client
                 .request(method, &url)
                 .headers(headers)
-                .body(body.unwrap_or_default())
+                .multipart(self.build_multipart(request)?)
                 .send()
                 .await
                 .context("请求发送失败")?
@@ -137,7 +138,7 @@ impl HttpClient {
             self.client
                 .request(method, &url)
                 .headers(headers)
-                .body(body.unwrap_or_default())
+                .multipart(self.build_multipart(request)?)
                 .send()
                 .await
                 .context("请求发送失败")?
@@ -184,6 +185,41 @@ impl HttpClient {
 
         Ok(header_map)
     }
+
+    /// 构建multipart表单
+    fn build_multipart(&self, request: &HttpRequest) -> Result<multipart::Form> {
+        let mut form = multipart::Form::new();
+
+        // 添加文本字段
+        for (name, value) in &request.text_fields {
+            let value = self.env_manager.replace_variables(value);
+            form = form.text(name.clone(), value);
+        }
+
+        // 添加文件字段
+        for file_field in &request.file_fields {
+            let file_path = file_field.file_path.clone();
+            if std::path::Path::new(&file_path).exists() {
+                let file_name = std::path::Path::new(&file_path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "file".to_string());
+
+                // 读取文件内容
+                let file_content = std::fs::read(&file_path)
+                    .map_err(|e| anyhow::anyhow!("无法读取文件 {}: {}", file_path, e))?;
+
+                let part = multipart::Part::bytes(file_content)
+                    .file_name(file_name)
+                    .mime_str(&file_field.content_type)
+                    .map_err(|e| anyhow::anyhow!("无法创建文件部分: {}", e))?;
+
+                form = form.part(file_field.field_name.clone(), part);
+            }
+        }
+
+        Ok(form)
+    }
 }
 
 /// HTTP请求结构
@@ -199,6 +235,21 @@ pub struct HttpRequest {
     pub body: Option<String>,
     /// 内容类型
     pub content_type: Option<String>,
+    /// 文本字段 (for multipart)
+    pub text_fields: Vec<(String, String)>,
+    /// 文件字段 (for multipart)
+    pub file_fields: Vec<FileField>,
+}
+
+/// 文件字段
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileField {
+    /// 字段名
+    pub field_name: String,
+    /// 文件路径
+    pub file_path: String,
+    /// 内容类型
+    pub content_type: String,
 }
 
 impl HttpRequest {
@@ -210,6 +261,8 @@ impl HttpRequest {
             headers: Vec::new(),
             body: None,
             content_type: None,
+            text_fields: Vec::new(),
+            file_fields: Vec::new(),
         }
     }
 
@@ -240,6 +293,8 @@ impl HttpRequest {
             headers: Vec::new(),
             body: None,
             content_type: None,
+            text_fields: Vec::new(),
+            file_fields: Vec::new(),
         })
     }
 

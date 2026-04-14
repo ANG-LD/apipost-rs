@@ -13,10 +13,11 @@ use crate::ui::{
 };
 use gpui::prelude::*;
 use gpui::*;
+use gpui::InteractiveElement;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::select::{Select, SelectState};
 use gpui_component::button::Button;
-use gpui_component::{Disableable, IndexPath, Sizable, StyledExt};
+use gpui_component::{Disableable, Icon, IconName, IndexPath, Sizable, StyledExt};
 use std::sync::Arc;
 use tokio;
 
@@ -134,6 +135,10 @@ pub struct MainView {
     settings: RequestSettings,
     /// 设置输入状态
     settings_inputs: SettingsInputs,
+    /// 是否正在导入cURL（防止URL输入框回写触发循环）
+    is_importing_curl: bool,
+    /// 下一个标签页 ID（递增，保证唯一）
+    next_tab_id: usize,
 }
 
 impl MainView {
@@ -156,8 +161,16 @@ impl MainView {
         let _url_change_sub = cx.subscribe_in(&url_input, window, move |this, _state, event, _window, cx| {
             match event {
                 InputEvent::Change => {
+                    if this.is_importing_curl {
+                        return;
+                    }
                     let url = url_input_clone.read(cx).value().to_string();
-                    if url.contains('?') {
+                    // 检测cURL命令
+                    if url.trim().starts_with("curl ") || url.trim().starts_with("curl\n") {
+                        if let Err(e) = this.import_curl(&url, _window, cx) {
+                            log::warn!("解析cURL命令失败: {}", e);
+                        }
+                    } else if url.contains('?') {
                         this.parse_url_to_params_internal(&url, _window, cx);
                     } else {
                         // 清空params
@@ -247,6 +260,8 @@ impl MainView {
             script_state,
             settings,
             settings_inputs,
+            is_importing_curl: false,
+            next_tab_id: 2,
         }
     }
 
@@ -332,6 +347,18 @@ impl MainView {
         // 8. 获取 Body
         let body = self.body_state.to_body(cx);
 
+        // 9. 获取 form-data 字段
+        let text_fields = self.body_state.get_form_data_text_fields(cx);
+        let file_fields_raw = self.body_state.get_form_data_file_fields(cx);
+        let file_fields: Vec<crate::http::FileField> = file_fields_raw
+            .into_iter()
+            .map(|(field_name, file_path, content_type)| crate::http::FileField {
+                field_name,
+                file_path,
+                content_type,
+            })
+            .collect();
+
         // 构建历史记录用的 headers 文本（在移动 all_headers 之前）
         let headers_text_for_history: String = all_headers
             .iter()
@@ -347,6 +374,8 @@ impl MainView {
             headers: all_headers,
             body,
             content_type,
+            text_fields,
+            file_fields,
         };
 
         // 使用同步方式发送请求 (简化处理)
@@ -510,6 +539,12 @@ impl MainView {
         }
     }
 
+    /// 切换 API Key 认证的位置
+    pub fn toggle_api_key_location(&mut self, cx: &mut Context<Self>) {
+        self.auth_state.toggle_api_key_location();
+        cx.notify();
+    }
+
     // ==================== Body 操作 ====================
 
     /// 设置 Body 类型
@@ -532,6 +567,79 @@ impl MainView {
     /// 获取当前 Raw 格式
     pub fn get_raw_format(&self) -> RawFormat {
         self.body_state.raw_format
+    }
+
+    /// 切换跟随重定向设置
+    pub fn toggle_follow_redirects(&mut self, cx: &mut Context<Self>) {
+        self.settings.follow_redirects = !self.settings.follow_redirects;
+        cx.notify();
+    }
+
+    /// 切换 SSL 验证设置
+    pub fn toggle_verify_ssl(&mut self, cx: &mut Context<Self>) {
+        self.settings.verify_ssl = !self.settings.verify_ssl;
+        cx.notify();
+    }
+
+    /// 添加 form-data 条目
+    pub fn add_form_data_entry(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.body_state.add_form_data_entry(window, cx);
+    }
+
+    /// 删除 form-data 条目
+    pub fn remove_form_data_entry(&mut self, index: usize) {
+        self.body_state.remove_form_data_entry(index);
+    }
+
+    /// 切换 form-data 条目启用状态
+    pub fn toggle_form_data_entry(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.body_state.toggle_form_data_entry(index);
+        cx.notify();
+    }
+
+    /// 设置 form-data 条目类型
+    pub fn set_form_data_param_type(&mut self, index: usize, param_type: crate::ui::FormDataParamType, window: &mut Window, cx: &mut Context<Self>) {
+        self.body_state.set_form_data_param_type(index, param_type, window, cx);
+        cx.notify();
+    }
+
+    /// 为 form-data File 类型选择文件
+    pub fn pick_file_for_form_data(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        use rfd::FileDialog;
+
+        if index >= self.body_state.form_data.len() {
+            return;
+        }
+
+        let entry = &self.body_state.form_data[index];
+        if entry.param_type != crate::ui::FormDataParamType::File {
+            return;
+        }
+
+        // 打开文件选择对话框
+        if let Some(file_path) = FileDialog::new()
+            .pick_file()
+        {
+            let path_str = file_path.to_string_lossy().to_string();
+            self.body_state.update_form_data_file_path(index, &path_str, window, cx);
+            cx.notify();
+        }
+    }
+
+    /// 设置 url-encoded 条目类型
+    pub fn set_urlencoded_param_type(&mut self, index: usize, param_type: crate::ui::FormDataParamType, window: &mut Window, cx: &mut Context<Self>) {
+        self.body_state.set_urlencoded_param_type(index, param_type, window, cx);
+        cx.notify();
+    }
+
+    /// 添加 url-encoded 条目
+    pub fn add_urlencoded_entry(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.body_state.add_urlencoded_entry(window, cx);
+    }
+
+    /// 删除 url-encoded 条目
+    pub fn remove_urlencoded_entry(&mut self, index: usize) {
+        self.body_state.remove_urlencoded_entry(index);
     }
 
     // ==================== URL 与 Params 同步 ====================
@@ -613,6 +721,213 @@ impl MainView {
 
         cx.notify();
     }
+
+    /// 导入cURL命令并解析为请求参数
+    pub fn import_curl(&mut self, curl_command: &str, window: &mut Window, cx: &mut Context<Self>) -> Result<(), String> {
+        let request = crate::http::parse_curl(curl_command).map_err(|e| e.to_string())?;
+
+        self.is_importing_curl = true;
+
+        // 设置HTTP方法
+        self.method = request.method.clone();
+
+        // 同步更新 method_select 控件
+        let method_idx = ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]
+            .iter()
+            .position(|&m| m == request.method.to_uppercase().as_str())
+            .unwrap_or(0);
+        let idx_path = Some(IndexPath::new(method_idx));
+        self.method_select.update(cx, |state, cx| {
+            state.set_selected_index(idx_path, window, cx);
+        });
+
+        // 分离URL中的query参数和base URL
+        let (base_url, query_string) = if let Some(query_pos) = request.url.find('?') {
+            (&request.url[..query_pos], Some(&request.url[query_pos + 1..]))
+        } else {
+            (request.url.as_str(), None)
+        };
+
+        // 回写解析后的URL到输入框（替换掉原来的 curl 命令）
+        let base_url_str = base_url.to_string();
+        self.url = base_url_str.clone();
+        self.url_input.update(cx, |state, cx| {
+            state.set_value(&base_url_str, window, cx);
+        });
+
+        // 清空现有params和headers
+        self.params.clear();
+        self.headers.clear();
+
+        // 解析query string为params
+        if let Some(query) = query_string {
+            for pair in query.split('&') {
+                if pair.is_empty() {
+                    continue;
+                }
+                let (key, value) = if let Some(eq_pos) = pair.find('=') {
+                    let key = urlencoding::decode(&pair[..eq_pos])
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|_| pair[..eq_pos].to_string());
+                    let value = urlencoding::decode(&pair[eq_pos + 1..])
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|_| pair[eq_pos + 1..].to_string());
+                    (key, value)
+                } else {
+                    (pair.to_string(), String::new())
+                };
+
+                let key_entity = cx.new(|cx| InputState::new(window, cx).default_value(&key));
+                let value_entity = cx.new(|cx| InputState::new(window, cx).default_value(&value));
+                self.params.push(ParamEntry {
+                    key: key_entity,
+                    value: value_entity,
+                    enabled: true,
+                });
+            }
+        }
+
+        // 解析headers
+        for (key, value) in request.headers {
+            let key_entity = cx.new(|cx| InputState::new(window, cx).default_value(&key));
+            let value_entity = cx.new(|cx| InputState::new(window, cx).default_value(&value));
+            self.headers.push(HeaderEntry {
+                key: key_entity,
+                value: value_entity,
+                enabled: true,
+            });
+        }
+
+        // 如果有body，设置到body_state
+        if let Some(body) = request.body {
+            self.body_state.body_type = crate::ui::BodyType::Raw;
+            let body_owned = body;
+            self.body_state.raw_content.update(cx, move |this, cx| {
+                this.set_value(&body_owned, window, cx);
+            });
+        }
+
+        self.is_importing_curl = false;
+        cx.notify();
+        Ok(())
+    }
+
+    // ==================== 标签页管理 ====================
+
+    /// 新增请求标签页，重置表单为默认状态
+    pub fn add_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // 保存当前标签的 URL 和方法
+        self.save_current_tab_meta(cx);
+
+        let id = self.next_tab_id;
+        self.next_tab_id += 1;
+        self.request_tabs.push(RequestTab {
+            id,
+            method: "GET".to_string(),
+            url: String::new(),
+            name: "New Request".to_string(),
+        });
+        let new_idx = self.request_tabs.len() - 1;
+        self.active_tab = new_idx;
+
+        // 重置表单
+        self.method = "GET".to_string();
+        self.url = String::new();
+        self.params.clear();
+        self.headers.clear();
+        self.response = None;
+        self.error_message = None;
+
+        self.is_importing_curl = true;
+        self.url_input.update(cx, |state, cx| {
+            state.set_value("", window, cx);
+        });
+        self.method_select.update(cx, |state, cx| {
+            state.set_selected_index(Some(IndexPath::new(0)), window, cx);
+        });
+        self.is_importing_curl = false;
+
+        cx.notify();
+    }
+
+    /// 关闭指定标签页（至少保留一个）
+    pub fn close_tab(&mut self, tab_idx: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.request_tabs.len() <= 1 {
+            return;
+        }
+        self.request_tabs.remove(tab_idx);
+
+        let new_active = if self.active_tab >= self.request_tabs.len() {
+            self.request_tabs.len() - 1
+        } else if tab_idx < self.active_tab {
+            self.active_tab - 1
+        } else {
+            self.active_tab.min(self.request_tabs.len() - 1)
+        };
+
+        // 直接加载目标标签数据
+        self.active_tab = new_active;
+        let tab = self.request_tabs[new_active].clone();
+        self.load_tab_meta(&tab, window, cx);
+    }
+
+    /// 切换到指定标签页
+    pub fn switch_tab(&mut self, tab_idx: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if tab_idx == self.active_tab || tab_idx >= self.request_tabs.len() {
+            return;
+        }
+        self.save_current_tab_meta(cx);
+        self.active_tab = tab_idx;
+        let tab = self.request_tabs[tab_idx].clone();
+        self.load_tab_meta(&tab, window, cx);
+    }
+
+    /// 将当前表单的 URL / 方法写回当前标签元数据
+    fn save_current_tab_meta(&mut self, cx: &mut Context<Self>) {
+        if self.active_tab < self.request_tabs.len() {
+            let url = self.url_input.read(cx).value().to_string();
+            let method = self.method_select.read(cx)
+                .selected_value()
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "GET".to_string());
+            let short = if url.len() > 30 { format!("{}…", &url[..30]) } else { url.clone() };
+            self.request_tabs[self.active_tab].url = url;
+            self.request_tabs[self.active_tab].method = method;
+            self.request_tabs[self.active_tab].name = if short.is_empty() {
+                "New Request".to_string()
+            } else {
+                short
+            };
+        }
+    }
+
+    /// 将标签元数据加载到表单控件
+    fn load_tab_meta(&mut self, tab: &RequestTab, window: &mut Window, cx: &mut Context<Self>) {
+        self.method = tab.method.clone();
+        self.url = tab.url.clone();
+        self.params.clear();
+        self.response = None;
+        self.error_message = None;
+
+        let url = tab.url.clone();
+        let method = tab.method.clone();
+
+        let method_idx = ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]
+            .iter()
+            .position(|&m| m == method.to_uppercase().as_str())
+            .unwrap_or(0);
+
+        self.is_importing_curl = true;
+        self.url_input.update(cx, |state, cx| {
+            state.set_value(&url, window, cx);
+        });
+        self.method_select.update(cx, |state, cx| {
+            state.set_selected_index(Some(IndexPath::new(method_idx)), window, cx);
+        });
+        self.is_importing_curl = false;
+
+        cx.notify();
+    }
 }
 
 // ====== 构建器标签页按钮宏 ======
@@ -667,6 +982,89 @@ impl Render for MainView {
         let builder_tab = self.builder_tab;
         let sidebar_tab = self.sidebar_tab;
         let settings = self.settings.clone();
+        let request_tabs = self.request_tabs.clone();
+        let active_tab = self.active_tab;
+        let show_close = self.request_tabs.len() > 1;
+
+        // 构建标签页列表
+        let tab_items: Vec<Div> = (0..request_tabs.len())
+            .map(|i| {
+                let tab = &request_tabs[i];
+                let is_active = i == active_tab;
+                let method_clr = method_color(&tab.method);
+                let tab_method = tab.method.clone();
+                let tab_name = tab.name.clone();
+
+                div()
+                    .h(px(40.0))
+                    .pl_3()
+                    .pr_1()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .bg(if is_active { rgb(0x1e1e1e) } else { rgb(0x2d2d2d) })
+                    .border_b_2()
+                    .border_b(if is_active { px(2.0) } else { px(0.0) })
+                    .border_color(if is_active { rgb(0x3b82f6) } else { rgb(0x333333) })
+                    .text_xs()
+                    .children(if show_close {
+                        vec![
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .rounded_sm()
+                                .px_1()
+                                .py_px()
+                                .cursor_pointer()
+                                .hover(|s| s.bg(rgb(0x3a3a3a)))
+                                .children([
+                                    div().px_1().py_px().rounded_sm()
+                                        .bg(rgb(method_clr))
+                                        .text_xs().text_color(rgb(0xffffff))
+                                        .child(tab_method),
+                                    div()
+                                        .text_color(if is_active { rgb(0xffffff) } else { rgb(0xa0a0a0) })
+                                        .max_w(px(90.0))
+                                        .overflow_hidden()
+                                        .text_ellipsis()
+                                        .child(tab_name),
+                                ]),
+                            div()
+                                .w(px(20.0))
+                                .h(px(20.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded_sm()
+                                .text_color(rgb(0x666666))
+                                .child(Icon::new(IconName::Close).xsmall()),
+                        ]
+                    } else {
+                        vec![
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .rounded_sm()
+                                .px_1()
+                                .py_px()
+                                .children([
+                                    div().px_1().py_px().rounded_sm()
+                                        .bg(rgb(method_clr))
+                                        .text_xs().text_color(rgb(0xffffff))
+                                        .child(tab_method),
+                                    div()
+                                        .text_color(if is_active { rgb(0xffffff) } else { rgb(0xa0a0a0) })
+                                        .max_w(px(90.0))
+                                        .overflow_hidden()
+                                        .text_ellipsis()
+                                        .child(tab_name),
+                                ]),
+                        ]
+                    })
+            })
+            .collect();
 
         div()
             .size_full()
@@ -714,12 +1112,11 @@ impl Render for MainView {
                                             .justify_center()
                                             .cursor_pointer()
                                             .bg(if sidebar_tab == SidebarTab::Collections { rgb(0x3b3b3b) } else { rgb(0x2a2a2a) })
-                                            .text_xs()
-                                            .text_color(if sidebar_tab == SidebarTab::Collections { rgb(0xffffff) } else { rgb(0x888888) })
+                                            .text_color(if sidebar_tab == SidebarTab::Collections { rgb(0xffffff) } else { rgb(0x666666) })
                                             .on_click(cx.listener(|this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                 this.set_sidebar_tab(SidebarTab::Collections, cx);
                                             }))
-                                            .child("C"),
+                                            .child(Icon::new(IconName::FolderClosed).small()),
                                         div()
                                             .id("sidebar-history")
                                             .w(px(48.0))
@@ -729,12 +1126,11 @@ impl Render for MainView {
                                             .justify_center()
                                             .cursor_pointer()
                                             .bg(if sidebar_tab == SidebarTab::History { rgb(0x3b3b3b) } else { rgb(0x2a2a2a) })
-                                            .text_xs()
-                                            .text_color(if sidebar_tab == SidebarTab::History { rgb(0xffffff) } else { rgb(0x888888) })
+                                            .text_color(if sidebar_tab == SidebarTab::History { rgb(0xffffff) } else { rgb(0x666666) })
                                             .on_click(cx.listener(|this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                 this.set_sidebar_tab(SidebarTab::History, cx);
                                             }))
-                                            .child("H"),
+                                            .child(Icon::new(IconName::GalleryVerticalEnd).small()),
                                         div()
                                             .id("sidebar-environments")
                                             .w(px(48.0))
@@ -744,12 +1140,11 @@ impl Render for MainView {
                                             .justify_center()
                                             .cursor_pointer()
                                             .bg(if sidebar_tab == SidebarTab::Environments { rgb(0x3b3b3b) } else { rgb(0x2a2a2a) })
-                                            .text_xs()
-                                            .text_color(if sidebar_tab == SidebarTab::Environments { rgb(0xffffff) } else { rgb(0x888888) })
+                                            .text_color(if sidebar_tab == SidebarTab::Environments { rgb(0xffffff) } else { rgb(0x666666) })
                                             .on_click(cx.listener(|this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                 this.set_sidebar_tab(SidebarTab::Environments, cx);
                                             }))
-                                            .child("E"),
+                                            .child(Icon::new(IconName::Settings2).small()),
                                     ]),
                                 // 侧边栏内容
                                 if !self.sidebar_collapsed {
@@ -822,7 +1217,12 @@ impl Render for MainView {
                                     .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                         this.toggle_sidebar(cx);
                                     }))
-                                    .child(if self.sidebar_collapsed { ">" } else { "<" }),
+                                    .text_color(rgb(0x666666))
+                                    .child(if self.sidebar_collapsed {
+                                        Icon::new(IconName::PanelLeftOpen).small()
+                                    } else {
+                                        Icon::new(IconName::PanelLeftClose).small()
+                                    }),
                             ]),
                         // ==================== 主工作区 ====================
                         div()
@@ -838,35 +1238,98 @@ impl Render for MainView {
                                     .bg(rgb(0x2d2d2d))
                                     .border_b(px(1.0))
                                     .border_color(rgb(0x333333))
-                                    .children(self.request_tabs.iter().enumerate().map(|(i, tab)| {
-                                        let is_active = i == self.active_tab;
+                                    .children(request_tabs.iter().enumerate().map(|(i, tab)| {
+                                        let is_active = i == active_tab;
                                         let method_clr = method_color(&tab.method);
+                                        let tab_method = tab.method.clone();
+                                        let tab_name = tab.name.clone();
+                                        let show_close = show_close;
+
                                         div()
                                             .h(px(40.0))
-                                            .px_3()
+                                            .pl_3()
+                                            .pr_1()
                                             .flex()
                                             .items_center()
-                                            .gap_2()
-                                            .cursor_pointer()
-                                            .hover(|s| s.bg(rgb(0x333333)))
+                                            .gap_1()
                                             .bg(if is_active { rgb(0x1e1e1e) } else { rgb(0x2d2d2d) })
                                             .border_b_2()
                                             .border_b(if is_active { px(2.0) } else { px(0.0) })
                                             .border_color(if is_active { rgb(0x3b82f6) } else { rgb(0x333333) })
                                             .text_xs()
-                                            .children([
-                                                div().px_1().py_px().rounded_sm().bg(rgb(method_clr))
-                                                    .text_xs().text_color(rgb(0xffffff))
-                                                    .child(tab.method.clone()),
-                                                div().text_color(if is_active { rgb(0xffffff) } else { rgb(0xa0a0a0) })
-                                                    .text_ellipsis().w(px(120.0))
-                                                    .child(tab.name.clone()),
-                                                div().text_xs().text_color(rgb(0x666666)).child("x"),
-                                            ])
+                                            .children(if show_close {
+                                                vec![
+                                                    div()
+                                                        .flex()
+                                                        .items_center()
+                                                        .gap_2()
+                                                        .rounded_sm()
+                                                        .px_1()
+                                                        .py_px()
+                                                        .cursor_pointer()
+                                                        .hover(|s| s.bg(rgb(0x3a3a3a)))
+                                                        .children([
+                                                            div().px_1().py_px().rounded_sm()
+                                                                .bg(rgb(method_clr))
+                                                                .text_xs().text_color(rgb(0xffffff))
+                                                                .child(tab_method),
+                                                            div()
+                                                                .text_color(if is_active { rgb(0xffffff) } else { rgb(0xa0a0a0) })
+                                                                .max_w(px(90.0))
+                                                                .overflow_hidden()
+                                                                .text_ellipsis()
+                                                                .child(tab_name),
+                                                        ]),
+                                                    div()
+                                                        .w(px(20.0))
+                                                        .h(px(20.0))
+                                                        .flex()
+                                                        .items_center()
+                                                        .justify_center()
+                                                        .rounded_sm()
+                                                        .text_color(rgb(0x666666))
+                                                        .child(Icon::new(IconName::Close).xsmall()),
+                                                ]
+                                            } else {
+                                                vec![
+                                                    div()
+                                                        .flex()
+                                                        .items_center()
+                                                        .gap_2()
+                                                        .rounded_sm()
+                                                        .px_1()
+                                                        .py_px()
+                                                        .children([
+                                                            div().px_1().py_px().rounded_sm()
+                                                                .bg(rgb(method_clr))
+                                                                .text_xs().text_color(rgb(0xffffff))
+                                                                .child(tab_method),
+                                                            div()
+                                                                .text_color(if is_active { rgb(0xffffff) } else { rgb(0xa0a0a0) })
+                                                                .max_w(px(90.0))
+                                                                .overflow_hidden()
+                                                                .text_ellipsis()
+                                                                .child(tab_name),
+                                                        ]),
+                                                ]
+                                            })
                                     }))
+                                    // 新增标签按钮
                                     .child(
-                                        div().h(px(40.0)).px_3().flex().items_center()
-                                            .text_color(rgb(0x888888)).cursor_pointer().child("+"),
+                                        div()
+                                            .id("new-tab-btn")
+                                            .h(px(40.0))
+                                            .w(px(36.0))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .cursor_pointer()
+                                            .text_color(rgb(0x888888))
+                                            .hover(|s| s.bg(rgb(0x333333)).text_color(rgb(0xffffff)))
+                                            .on_click(cx.listener(|this, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>| {
+                                                this.add_tab(window, cx);
+                                            }))
+                                            .child(Icon::new(IconName::Plus).small())
                                     ),
                                 // 请求构造器
                                 div()
@@ -920,20 +1383,23 @@ impl Render for MainView {
                                                     ),
                                                 // 发送按钮
                                                 div()
-                                                    .w_full()
                                                     .flex()
                                                     .h(px(34.0))
                                                     .w(px(95.0))
+                                                    .mr_2()
                                                     .child(
                                                         Button::new("send")
-                                                        .large()
-                                                        .px_6()
+                                                        .px_4()
                                                         .rounded_sm()
                                                         .bg(if is_loading { rgb(0x666666) } else { rgb(0x3b82f6) })
                                                         .text_color(rgb(0xffffff))
                                                         .font_semibold()
-                                                        .label(if is_loading { "..." } else { "Send" })
-                                                        .disabled(is_loading)
+                                                        .icon(if is_loading {
+                                                            IconName::LoaderCircle
+                                                        } else {
+                                                            IconName::Play
+                                                        })
+                                                        .label(if is_loading { "Sending" } else { "Send" })
                                                         .flex_none()
                                                         .on_click(cx.listener(|this, _: &gpui::ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                             let url = this.url_input.read(cx).value().to_string();
@@ -986,14 +1452,24 @@ impl Render for MainView {
                                                         .flex_col()
                                                         .gap_2()
                                                         .py_1()
-                                                        .children(params.iter().map(|param| {
+                                                        .mt_1()
+                                                        .children(params.iter().enumerate().map(|(idx, param)| {
                                                             div()
+                                                                .mt_1()
                                                                 .flex()
                                                                 .flex_row()
                                                                 .gap_2()
                                                                 .items_center()
                                                                 .children([
-                                                                    div().w(px(30.0)).text_sm().text_color(rgb(0x666666)).child(if param.enabled { "✓" } else { "○" }),
+                                                                    div()
+                                                                        .w(px(24.0))
+                                                                        .h(px(24.0))
+                                                                        .flex()
+                                                                        .items_center()
+                                                                        .justify_center()
+                                                                        .text_sm()
+                                                                        .text_color(if param.enabled { rgb(0x22c55e) } else { rgb(0x666666) })
+                                                                        .child(if param.enabled { "✓" } else { "○" }),
                                                                     div().flex_1()
                                                                         .child(
                                                                             Input::new(&param.key)
@@ -1014,7 +1490,22 @@ impl Render for MainView {
                                                                                 .border_color(rgb(0x444444))
                                                                                 .text_color(rgb(0xe0e0e0)),
                                                                         ),
-                                                                    div().w(px(30.0)).text_sm().text_color(rgb(0xef4444)).child("×"),
+                                                                    div()
+                                                                        .w(px(20.0))
+                                                                        .h(px(20.0))
+                                                                        .flex()
+                                                                        .items_center()
+                                                                        .justify_center()
+                                                                        .child(
+                                                                            Button::new(idx.to_string())
+                                                                                .small()
+                                                                                .icon(IconName::Close)
+                                                                                .text_color(rgb(0x888888))
+                                                                                .bg(rgb(0x1e1e1e))
+                                                                                .on_click(cx.listener(move |this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                                    this.remove_param(idx, cx);
+                                                                                }))
+                                                                        ),
                                                                 ])
                                                         })),
                                                     // 添加行按钮
@@ -1024,12 +1515,13 @@ impl Render for MainView {
                                                         .py_1()
                                                         .child(
                                                             Button::new("add-param")
-                                                                .px_1()
+                                                                .px_2()
                                                                 .py_1()
                                                                 .text_sm()
+                                                                .icon(IconName::Plus)
                                                                 .text_color(rgb(0x3b82f6))
                                                                 .bg(rgb(0x1e1e1e))
-                                                                .label("+ Add parameter")
+                                                                .label("Add parameter")
                                                                 .on_click(cx.listener(|this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                                     this.add_param(_window, cx);
                                                                 }))
@@ -1060,14 +1552,24 @@ impl Render for MainView {
                                                         .flex_col()
                                                         .gap_2()
                                                         .py_1()
-                                                        .children(headers.iter().map(|header| {
+                                                        .mt_1()
+                                                        .children(headers.iter().enumerate().map(|(idx, header)| {
                                                             div()
+                                                                .mt_1()
                                                                 .flex()
                                                                 .flex_row()
                                                                 .gap_2()
                                                                 .items_center()
                                                                 .children([
-                                                                    div().w(px(30.0)).text_sm().text_color(rgb(0x666666)).child(if header.enabled { "✓" } else { "○" }),
+                                                                    div()
+                                                                        .w(px(24.0))
+                                                                        .h(px(24.0))
+                                                                        .flex()
+                                                                        .items_center()
+                                                                        .justify_center()
+                                                                        .text_sm()
+                                                                        .text_color(if header.enabled { rgb(0x22c55e) } else { rgb(0x666666) })
+                                                                        .child(if header.enabled { "✓" } else { "○" }),
                                                                     div().flex_1()
                                                                         .child(
                                                                             Input::new(&header.key)
@@ -1088,7 +1590,22 @@ impl Render for MainView {
                                                                                 .border_color(rgb(0x444444))
                                                                                 .text_color(rgb(0xe0e0e0)),
                                                                         ),
-                                                                    div().w(px(30.0)).text_sm().text_color(rgb(0xef4444)).child("×"),
+                                                                    div()
+                                                                        .w(px(20.0))
+                                                                        .h(px(20.0))
+                                                                        .flex()
+                                                                        .items_center()
+                                                                        .justify_center()
+                                                                        .child(
+                                                                            Button::new(idx.to_string())
+                                                                                .small()
+                                                                                .icon(IconName::Close)
+                                                                                .text_color(rgb(0x888888))
+                                                                                .bg(rgb(0x1e1e1e))
+                                                                                .on_click(cx.listener(move |this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                                    this.remove_header(idx, cx);
+                                                                                }))
+                                                                        ),
                                                                 ])
                                                         })),
                                                     // 添加行按钮
@@ -1098,12 +1615,13 @@ impl Render for MainView {
                                                         .py_1()
                                                         .child(
                                                             Button::new("add-header")
-                                                                .px_1()
+                                                                .px_2()
                                                                 .py_1()
                                                                 .text_sm()
+                                                                .icon(IconName::Plus)
                                                                 .text_color(rgb(0x3b82f6))
                                                                 .bg(rgb(0x1e1e1e))
-                                                                .label("+ Add Header")
+                                                                .label("Add Header")
                                                                 .on_click(cx.listener(|this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                                     this.add_header(_window, cx);
                                                                 }))
@@ -1132,23 +1650,63 @@ impl Render for MainView {
                                                                 .children([
                                                                     div()
                                                                         .text_sm()
+                                                                        .cursor_pointer()
+                                                                        .px_2()
+                                                                        .py_1()
+                                                                        .rounded_sm()
+                                                                        .bg(if body_state.body_type == BodyType::None { rgb(0x3b3b3b) } else { rgb(0x2d2d2d) })
                                                                         .text_color(if body_state.body_type == BodyType::None { rgb(0xffffff) } else { rgb(0x888888) })
+                                                                        .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                            this.set_body_type(BodyType::None.to_index(), cx);
+                                                                        }))
                                                                         .child("none"),
                                                                     div()
                                                                         .text_sm()
+                                                                        .cursor_pointer()
+                                                                        .px_2()
+                                                                        .py_1()
+                                                                        .rounded_sm()
+                                                                        .bg(if body_state.body_type == BodyType::FormData { rgb(0x3b3b3b) } else { rgb(0x2d2d2d) })
                                                                         .text_color(if body_state.body_type == BodyType::FormData { rgb(0xffffff) } else { rgb(0x888888) })
+                                                                        .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                            this.set_body_type(BodyType::FormData.to_index(), cx);
+                                                                        }))
                                                                         .child("form-data"),
                                                                     div()
                                                                         .text_sm()
+                                                                        .cursor_pointer()
+                                                                        .px_2()
+                                                                        .py_1()
+                                                                        .rounded_sm()
+                                                                        .bg(if body_state.body_type == BodyType::UrlEncoded { rgb(0x3b3b3b) } else { rgb(0x2d2d2d) })
                                                                         .text_color(if body_state.body_type == BodyType::UrlEncoded { rgb(0xffffff) } else { rgb(0x888888) })
+                                                                        .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                            this.set_body_type(BodyType::UrlEncoded.to_index(), cx);
+                                                                        }))
                                                                         .child("x-www-form-urlencoded"),
                                                                     div()
                                                                         .text_sm()
+                                                                        .cursor_pointer()
+                                                                        .px_2()
+                                                                        .py_1()
+                                                                        .rounded_sm()
+                                                                        .bg(if body_state.body_type == BodyType::Raw { rgb(0x3b3b3b) } else { rgb(0x2d2d2d) })
                                                                         .text_color(if body_state.body_type == BodyType::Raw { rgb(0xffffff) } else { rgb(0x888888) })
+                                                                        .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                            this.set_body_type(BodyType::Raw.to_index(), cx);
+                                                                        }))
                                                                         .child("raw"),
                                                                     div()
                                                                         .text_sm()
+                                                                        .cursor_pointer()
+                                                                        .px_2()
+                                                                        .py_1()
+                                                                        .rounded_sm()
+                                                                        .bg(if body_state.body_type == BodyType::Binary { rgb(0x3b3b3b) } else { rgb(0x2d2d2d) })
                                                                         .text_color(if body_state.body_type == BodyType::Binary { rgb(0xffffff) } else { rgb(0x888888) })
+                                                                        .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                            this.set_body_type(BodyType::Binary.to_index(), cx);
+                                                                        }))
                                                                         .child("binary"),
                                                                 ]),
                                                         ]),
@@ -1173,19 +1731,51 @@ impl Render for MainView {
                                                                             .children([
                                                                                 div()
                                                                                     .text_sm()
+                                                                                    .cursor_pointer()
+                                                                                    .px_2()
+                                                                                    .py_1()
+                                                                                    .rounded_sm()
+                                                                                    .bg(if body_state.raw_format == RawFormat::Json { rgb(0x3b3b3b) } else { rgb(0x2d2d2d) })
                                                                                     .text_color(if body_state.raw_format == RawFormat::Json { rgb(0xffffff) } else { rgb(0x888888) })
+                                                                                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                                        this.set_raw_format(RawFormat::Json.to_index(), cx);
+                                                                                    }))
                                                                                     .child("JSON"),
                                                                                 div()
                                                                                     .text_sm()
+                                                                                    .cursor_pointer()
+                                                                                    .px_2()
+                                                                                    .py_1()
+                                                                                    .rounded_sm()
+                                                                                    .bg(if body_state.raw_format == RawFormat::Xml { rgb(0x3b3b3b) } else { rgb(0x2d2d2d) })
                                                                                     .text_color(if body_state.raw_format == RawFormat::Xml { rgb(0xffffff) } else { rgb(0x888888) })
+                                                                                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                                        this.set_raw_format(RawFormat::Xml.to_index(), cx);
+                                                                                    }))
                                                                                     .child("XML"),
                                                                                 div()
                                                                                     .text_sm()
+                                                                                    .cursor_pointer()
+                                                                                    .px_2()
+                                                                                    .py_1()
+                                                                                    .rounded_sm()
+                                                                                    .bg(if body_state.raw_format == RawFormat::Text { rgb(0x3b3b3b) } else { rgb(0x2d2d2d) })
                                                                                     .text_color(if body_state.raw_format == RawFormat::Text { rgb(0xffffff) } else { rgb(0x888888) })
+                                                                                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                                        this.set_raw_format(RawFormat::Text.to_index(), cx);
+                                                                                    }))
                                                                                     .child("Text"),
                                                                                 div()
                                                                                     .text_sm()
+                                                                                    .cursor_pointer()
+                                                                                    .px_2()
+                                                                                    .py_1()
+                                                                                    .rounded_sm()
+                                                                                    .bg(if body_state.raw_format == RawFormat::Html { rgb(0x3b3b3b) } else { rgb(0x2d2d2d) })
                                                                                     .text_color(if body_state.raw_format == RawFormat::Html { rgb(0xffffff) } else { rgb(0x888888) })
+                                                                                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                                        this.set_raw_format(RawFormat::Html.to_index(), cx);
+                                                                                    }))
                                                                                     .child("HTML"),
                                                                             ]),
                                                                     ]),
@@ -1219,28 +1809,284 @@ impl Render for MainView {
                                                             .text_sm()
                                                             .text_color(rgb(0x666666))
                                                             .child("Binary content not supported yet")
-                                                    } else if body_state.body_type == BodyType::FormData || body_state.body_type == BodyType::UrlEncoded {
+                                                    } else if body_state.body_type == BodyType::FormData {
                                                         div()
+                                                            .flex_col()
                                                             .flex_1()
-                                                            .bg(rgb(0x2d2d2d))
-                                                            .border_1()
-                                                            .border_color(rgb(0x444444))
-                                                            .rounded_md()
-                                                            .overflow_y_hidden()
-                                                            .child(
+                                                            .gap_2()
+                                                            .children([
+                                                                // 表头 - 参考 params 样式, Type 在 Key 和 Value 中间
                                                                 div()
-                                                                    .flex_1()
-                                                                    .min_h(px(200.0))
-                                                                    .bg(rgb(0x2d2d2d))
+                                                                    .flex()
+                                                                    .flex_row()
+                                                                    .gap_2()
+                                                                    .mb_1()
+                                                                    .children([
+                                                                        div().w(px(30.0)).text_xs().text_color(rgb(0x888888)).child(""),
+                                                                        div().flex_1().text_xs().text_color(rgb(0x888888)).child("Key"),
+                                                                        div().w(px(90.0)).text_xs().text_color(rgb(0x888888)).child("Type"),
+                                                                        div().flex_1().text_xs().text_color(rgb(0x888888)).child("Value"),
+                                                                        div().w(px(30.0)).text_xs().text_color(rgb(0x888888)).child(""),
+                                                                    ]),
+                                                                // Form-data 条目
+                                                                div()
+                                                                    .flex_col()
+                                                                    .gap_2()
+                                                                    .py_1()
+                                                                    .mt_1()
+                                                                    .children(body_state.form_data.iter().enumerate().map(|(idx, entry)| {
+                                                                        let is_file = entry.param_type == crate::ui::FormDataParamType::File;
+                                                                        let value_entity = match &entry.value {
+                                                                            crate::ui::FormDataValue::Text(e) => Some(e.clone()),
+                                                                            crate::ui::FormDataValue::File(_, _) => None,
+                                                                        };
+                                                                        let param_type_copy = entry.param_type;
+                                                                        div()
+                                                                            .mt_1()
+                                                                            .flex()
+                                                                            .flex_row()
+                                                                            .gap_2()
+                                                                            .items_center()
+                                                                            .children([
+                                                                                // 启用/禁用复选框
+                                                                                div()
+                                                                                    .w(px(24.0))
+                                                                                    .h(px(24.0))
+                                                                                    .flex()
+                                                                                    .items_center()
+                                                                                    .justify_center()
+                                                                                    .text_sm()
+                                                                                    .text_color(if entry.enabled { rgb(0x22c55e) } else { rgb(0x666666) })
+                                                                                    .cursor_pointer()
+                                                                                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                                        this.toggle_form_data_entry(idx, cx);
+                                                                                    }))
+                                                                                    .child(if entry.enabled { "✓" } else { "○" }),
+                                                                                // Key 输入框
+                                                                                div().flex_1()
+                                                                                    .child(
+                                                                                        Input::new(&entry.key)
+                                                                                            .small()
+                                                                                            .h(px(32.0))
+                                                                                            .bg(rgb(0x2d2d2d))
+                                                                                            .border_1()
+                                                                                            .border_color(rgb(0x444444))
+                                                                                            .text_color(rgb(0xe0e0e0)),
+                                                                                    ),
+                                                                                // 类型选择 - 循环切换
+                                                                                div()
+                                                                                    .w(px(90.0))
+                                                                                    .h(px(28.0))
+                                                                                    .flex()
+                                                                                    .items_center()
+                                                                                    .justify_center()
+                                                                                    .cursor_pointer()
+                                                                                    .rounded_sm()
+                                                                                    .bg(rgb(0x2d2d2d))
+                                                                                    .border_1()
+                                                                                    .border_color(rgb(0x444444))
+                                                                                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                                        // 循环切换类型: Text -> Boolean -> Number -> File -> Array -> Text
+                                                                                        let next_type = match param_type_copy {
+                                                                                            crate::ui::FormDataParamType::Text => crate::ui::FormDataParamType::Boolean,
+                                                                                            crate::ui::FormDataParamType::Boolean => crate::ui::FormDataParamType::Number,
+                                                                                            crate::ui::FormDataParamType::Number => crate::ui::FormDataParamType::File,
+                                                                                            crate::ui::FormDataParamType::File => crate::ui::FormDataParamType::Array,
+                                                                                            crate::ui::FormDataParamType::Array => crate::ui::FormDataParamType::Text,
+                                                                                        };
+                                                                                        this.set_form_data_param_type(idx, next_type, _window, cx);
+                                                                                    }))
+                                                                                    .children([
+                                                                                        div().text_sm().text_color(rgb(0xe0e0e0)).child(match entry.param_type {
+                                                                                            crate::ui::FormDataParamType::Text => "Text",
+                                                                                            crate::ui::FormDataParamType::Boolean => "Boolean",
+                                                                                            crate::ui::FormDataParamType::Number => "Number",
+                                                                                            crate::ui::FormDataParamType::File => "File",
+                                                                                            crate::ui::FormDataParamType::Array => "Array",
+                                                                                        }),
+                                                                                        div().h(px(24.0)).text_sm().text_color(rgb(0x888888)).child("▼"),
+                                                                                    ]),
+                                                                                // Value 输入框 - 非 File 类型时显示
+                                                                                if !is_file {
+                                                                                    div().flex_1()
+                                                                                        .child(
+                                                                                            Input::new(&entry.value.get_input_entity())
+                                                                                                .small()
+                                                                                                .h(px(32.0))
+                                                                                                .bg(rgb(0x2d2d2d))
+                                                                                                .border_1()
+                                                                                                .border_color(rgb(0x444444))
+                                                                                                .text_color(rgb(0xe0e0e0)),
+                                                                                        )
+                                                                                } else {
+                                                                                    // File类型 - 显示文件路径或占位文本
+                                                                                    let file_path = entry.value.get_input_entity().read(cx).value().to_string();
+                                                                                    let display_path = file_path.clone();
+                                                                                    let is_placeholder = display_path.is_empty();
+                                                                                    div()
+                                                                                        .flex_1()
+                                                                                        .h(px(28.0))
+                                                                                       
+                                                                        
+                                                                                        .items_center()
+                                                                                        .rounded_sm()
+                                                                                        .bg(rgb(0x2d2d2d))
+                                                                                        .border_1()
+                                                                                        .border_color(rgb(0x444444))
+                                                                                        .cursor_pointer()
+                                                                                        .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                                            this.pick_file_for_form_data(idx, _window, cx);
+                                                                                        }))
+                                                                                        .child(
+                                                                                            div()
+                                                                                            .flex()
+                                                                                                .h(px(24.0))
+                                                                                                .flex_1()
+                                                                                                .text_sm()
+                                                                                                .text_color(if is_placeholder { rgb(0x666666) } else { rgb(0xe0e0e0) })
+                                                                                                .overflow_hidden()
+                                                                                                .text_ellipsis()
+                                                                                                .child(if is_placeholder { "Select file...".to_string() } else { display_path }),
+                                                                                        )
+                                                                                },
+                                                                                // 删除按钮
+                                                                                div()
+                                                                                    .w(px(24.0))
+                                                                                    .h(px(24.0))
+                                                                                    .flex()
+                                                                                    .items_center()
+                                                                                    .justify_center()
+                                                                                    .child(
+                                                                                        Button::new(idx.to_string())
+                                                                                            .small()
+                                                                                            .icon(IconName::Close)
+                                                                                            .text_color(rgb(0x888888))
+                                                                                            .bg(rgb(0x1e1e1e))
+                                                                                            .on_click(cx.listener(move |this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                                                this.remove_form_data_entry(idx);
+                                                                                                cx.notify();
+                                                                                            }))
+                                                                                    ),
+                                                                            ])
+                                                                    })),
+                                                                // 添加行按钮
+                                                                div()
+                                                                    .mt_2()
+                                                                    .px_1()
+                                                                    .py_1()
                                                                     .child(
-                                                                        Input::new(&body_state.raw_content)
-                                                                            .flex_1()
-                                                                            .h(px(200.0))
-                                                                            .bg(rgb(0x2d2d2d))
-                                                                            .text_color(rgb(0xe0e0e0))
-                                                                            .font_family("monospace")
-                                                                    )
-                                                            )
+                                                                        Button::new("add-formdata")
+                                                                            .px_2()
+                                                                            .py_1()
+                                                                            .text_sm()
+                                                                            .icon(IconName::Plus)
+                                                                            .text_color(rgb(0x3b82f6))
+                                                                            .bg(rgb(0x1e1e1e))
+                                                                            .label("Add form data")
+                                                                            .on_click(cx.listener(|this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                                this.add_form_data_entry(_window, cx);
+                                                                            }))
+                                                                    ),
+                                                            ])
+                                                    } else if body_state.body_type == BodyType::UrlEncoded {
+                                                        div()
+                                                            .flex_col()
+                                                            .flex_1()
+                                                            .gap_2()
+                                                            .children([
+                                                                // 表头 - 参考 params 样式
+                                                                div()
+                                                                    .flex()
+                                                                    .flex_row()
+                                                                    .gap_2()
+                                                                    .mb_1()
+                                                                    .children([
+                                                                        div().w(px(30.0)).text_xs().text_color(rgb(0x888888)).child(""),
+                                                                        div().flex_1().text_xs().text_color(rgb(0x888888)).child("Key"),
+                                                                        div().flex_1().text_xs().text_color(rgb(0x888888)).child("Value"),
+                                                                        div().w(px(30.0)).text_xs().text_color(rgb(0x888888)).child(""),
+                                                                    ]),
+                                                                // URL-encoded 条目
+                                                                div()
+                                                                    .flex_col()
+                                                                    .gap_2()
+                                                                    .py_1()
+                                                                    .mt_1()
+                                                                    .children(body_state.urlencoded_data.iter().enumerate().map(|(idx, entry)| {
+                                                                        div()
+                                                                            .mt_1()
+                                                                            .flex()
+                                                                            .flex_row()
+                                                                            .gap_2()
+                                                                            .items_center()
+                                                                            .children([
+                                                                                div()
+                                                                                    .w(px(24.0))
+                                                                                    .h(px(24.0))
+                                                                                    .flex()
+                                                                                    .items_center()
+                                                                                    .justify_center()
+                                                                                    .text_sm()
+                                                                                    .text_color(if entry.enabled { rgb(0x22c55e) } else { rgb(0x666666) })
+                                                                                    .child(if entry.enabled { "✓" } else { "○" }),
+                                                                                div().flex_1()
+                                                                                    .child(
+                                                                                        Input::new(&entry.key)
+                                                                                            .small()
+                                                                                            .h(px(32.0))
+                                                                                            .bg(rgb(0x2d2d2d))
+                                                                                            .border_1()
+                                                                                            .border_color(rgb(0x444444))
+                                                                                            .text_color(rgb(0xe0e0e0)),
+                                                                                    ),
+                                                                                div().flex_1()
+                                                                                    .child(
+                                                                                        Input::new(&entry.value.get_input_entity())
+                                                                                            .small()
+                                                                                            .h(px(32.0))
+                                                                                            .bg(rgb(0x2d2d2d))
+                                                                                            .border_1()
+                                                                                            .border_color(rgb(0x444444))
+                                                                                            .text_color(rgb(0xe0e0e0)),
+                                                                                    ),
+                                                                                div()
+                                                                                    .w(px(24.0))
+                                                                                    .h(px(24.0))
+                                                                                    .flex()
+                                                                                    .items_center()
+                                                                                    .justify_center()
+                                                                                    .child(
+                                                                                        Button::new(idx.to_string())
+                                                                                            .small()
+                                                                                            .icon(IconName::Close)
+                                                                                            .text_color(rgb(0x888888))
+                                                                                            .bg(rgb(0x1e1e1e))
+                                                                                            .on_click(cx.listener(move |this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                                                this.remove_urlencoded_entry(idx);
+                                                                                                cx.notify();
+                                                                                            }))
+                                                                                    ),
+                                                                            ])
+                                                                    })),
+                                                                // 添加行按钮
+                                                                div()
+                                                                    .mt_2()
+                                                                    .px_1()
+                                                                    .py_1()
+                                                                    .child(
+                                                                        Button::new("add-urlencoded")
+                                                                            .px_2()
+                                                                            .py_1()
+                                                                            .text_sm()
+                                                                            .icon(IconName::Plus)
+                                                                            .text_color(rgb(0x3b82f6))
+                                                                            .bg(rgb(0x1e1e1e))
+                                                                            .label("Add URL-encoded")
+                                                                            .on_click(cx.listener(|this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                                this.add_urlencoded_entry(_window, cx);
+                                                                            }))
+                                                                    ),
+                                                            ])
                                                     } else {
                                                         div().flex_1()
                                                     },
@@ -1268,19 +2114,51 @@ impl Render for MainView {
                                                                 .children([
                                                                     div()
                                                                         .text_sm()
+                                                                        .cursor_pointer()
+                                                                        .px_2()
+                                                                        .py_1()
+                                                                        .rounded_sm()
+                                                                        .bg(if auth_type == AuthType::NoAuth { rgb(0x3b3b3b) } else { rgb(0x2d2d2d) })
                                                                         .text_color(if auth_type == AuthType::NoAuth { rgb(0xffffff) } else { rgb(0x888888) })
+                                                                        .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                            this.set_auth_type(AuthType::NoAuth.to_index(), _window, cx);
+                                                                        }))
                                                                         .child("No Auth"),
                                                                     div()
                                                                         .text_sm()
+                                                                        .cursor_pointer()
+                                                                        .px_2()
+                                                                        .py_1()
+                                                                        .rounded_sm()
+                                                                        .bg(if auth_type == AuthType::BearerToken { rgb(0x3b3b3b) } else { rgb(0x2d2d2d) })
                                                                         .text_color(if auth_type == AuthType::BearerToken { rgb(0xffffff) } else { rgb(0x888888) })
+                                                                        .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                            this.set_auth_type(AuthType::BearerToken.to_index(), _window, cx);
+                                                                        }))
                                                                         .child("Bearer Token"),
                                                                     div()
                                                                         .text_sm()
+                                                                        .cursor_pointer()
+                                                                        .px_2()
+                                                                        .py_1()
+                                                                        .rounded_sm()
+                                                                        .bg(if auth_type == AuthType::BasicAuth { rgb(0x3b3b3b) } else { rgb(0x2d2d2d) })
                                                                         .text_color(if auth_type == AuthType::BasicAuth { rgb(0xffffff) } else { rgb(0x888888) })
+                                                                        .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                            this.set_auth_type(AuthType::BasicAuth.to_index(), _window, cx);
+                                                                        }))
                                                                         .child("Basic Auth"),
                                                                     div()
                                                                         .text_sm()
+                                                                        .cursor_pointer()
+                                                                        .px_2()
+                                                                        .py_1()
+                                                                        .rounded_sm()
+                                                                        .bg(if auth_type == AuthType::ApiKey { rgb(0x3b3b3b) } else { rgb(0x2d2d2d) })
                                                                         .text_color(if auth_type == AuthType::ApiKey { rgb(0xffffff) } else { rgb(0x888888) })
+                                                                        .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                            this.set_auth_type(AuthType::ApiKey.to_index(), _window, cx);
+                                                                        }))
                                                                         .child("API Key"),
                                                                 ]),
                                                         ]),
@@ -1386,11 +2264,27 @@ impl Render for MainView {
                                                                         .children([
                                                                             div()
                                                                                 .text_sm()
+                                                                                .cursor_pointer()
+                                                                                .px_2()
+                                                                                .py_1()
+                                                                                .rounded_sm()
+                                                                                .bg(if auth.location_value == ApiKeyLocation::Header { rgb(0x3b3b3b) } else { rgb(0x2d2d2d) })
                                                                                 .text_color(if auth.location_value == ApiKeyLocation::Header { rgb(0xffffff) } else { rgb(0x888888) })
+                                                                                .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                                    this.toggle_api_key_location(cx);
+                                                                                }))
                                                                                 .child("Header"),
                                                                             div()
                                                                                 .text_sm()
+                                                                                .cursor_pointer()
+                                                                                .px_2()
+                                                                                .py_1()
+                                                                                .rounded_sm()
+                                                                                .bg(if auth.location_value == ApiKeyLocation::Query { rgb(0x3b3b3b) } else { rgb(0x2d2d2d) })
                                                                                 .text_color(if auth.location_value == ApiKeyLocation::Query { rgb(0xffffff) } else { rgb(0x888888) })
+                                                                                .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                                    this.toggle_api_key_location(cx);
+                                                                                }))
                                                                                 .child("Query"),
                                                                         ]),
                                                                 ])
@@ -1516,8 +2410,10 @@ impl Render for MainView {
                                                         .children([
                                                             div().w(px(140.0)).text_sm().text_color(rgb(0xe0e0e0)).child("Follow Redirects:"),
                                                             div()
-                                                                .text_sm()
                                                                 .text_color(if settings.follow_redirects { rgb(0x22c55e) } else { rgb(0x888888) })
+                                                                .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                    this.toggle_follow_redirects(cx);
+                                                                }))
                                                                 .child(if settings.follow_redirects { "ON" } else { "OFF" }),
                                                         ]),
                                                     // 验证 SSL
@@ -1529,8 +2425,10 @@ impl Render for MainView {
                                                         .children([
                                                             div().w(px(140.0)).text_sm().text_color(rgb(0xe0e0e0)).child("Verify SSL:"),
                                                             div()
-                                                                .text_sm()
                                                                 .text_color(if settings.verify_ssl { rgb(0x22c55e) } else { rgb(0x888888) })
+                                                                .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                    this.toggle_verify_ssl(cx);
+                                                                }))
                                                                 .child(if settings.verify_ssl { "ON" } else { "OFF" }),
                                                         ]),
                                                 ])

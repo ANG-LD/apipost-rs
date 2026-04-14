@@ -19,6 +19,8 @@ pub struct CurlParser {
 impl CurlParser {
     /// 创建新的解析器
     pub fn new(input: String) -> Self {
+        // 处理 shell 换行续行符（\\\n 或 \\\r\n）
+        let input = input.replace("\\\r\n", " ").replace("\\\n", " ");
         Self { input, pos: 0 }
     }
 
@@ -170,17 +172,17 @@ impl CurlParser {
             let value = if self.current_char() == '=' {
                 self.pos += 1;
                 Some(self.parse_value())
-            } else if self.current_char() == ' ' || self.current_char() == '\t' {
-                let peek = self.peek_char();
-                if peek == '-' {
-                    None
-                } else {
-                    Some(self.parse_value())
-                }
             } else if self.pos >= self.input.len() {
                 None
             } else {
-                None
+                let ch = self.current_char();
+                if ch == '-' {
+                    // 下一个是另一个选项
+                    None
+                } else {
+                    let val = self.parse_value();
+                    if val.is_empty() { None } else { Some(val) }
+                }
             };
 
             Ok(CurlOption { name, value })

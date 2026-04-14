@@ -189,6 +189,16 @@ impl AuthState {
             SelectState::new(auth_types, Some(IndexPath::default()), window, cx)
         })
     }
+
+    /// 切换 API Key 的位置（Header / Query）
+    pub fn toggle_api_key_location(&mut self) {
+        if let AuthState::ApiKey(auth) = self {
+            auth.location_value = match auth.location_value {
+                ApiKeyLocation::Header => ApiKeyLocation::Query,
+                ApiKeyLocation::Query => ApiKeyLocation::Header,
+            };
+        }
+    }
 }
 
 /// 渲染认证类型的标签
