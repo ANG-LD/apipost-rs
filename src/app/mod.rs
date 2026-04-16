@@ -101,7 +101,30 @@ impl AppState {
 
     /// 发送HTTP请求
     pub async fn send_request(&self, request: HttpRequest) -> Result<HttpResponse, String> {
-        self.http_client.send_request(&request).await.map_err(|e| e.to_string())
+        log::info!("发送请求: {} {}", request.method, request.url);
+        log::debug!("请求头: {:?}", request.headers);
+        log::debug!("请求体: {:?}", request.body);
+        log::debug!("text_fields: {:?}", request.text_fields);
+        log::debug!("file_fields: {:?}", request.file_fields);
+
+        let result = self.http_client.send_request(&request).await;
+
+        match &result {
+            Ok(resp) => {
+                log::info!("请求成功: {} - {} ({}ms)", resp.status, resp.status_text(), resp.time_ms);
+            }
+            Err(err) => {
+                log::error!("HTTP请求失败: {:?}", err);
+                for (i, e) in err.chain().enumerate() {
+                    log::error!("  错误[{}]: {}", i, e);
+                }
+            }
+        }
+
+        result.map_err(|e| {
+            // 返回完整的错误链
+            e.chain().map(|c| c.to_string()).collect::<Vec<_>>().join(" -> ")
+        })
     }
 
     /// 发送HTTP请求（带设置）

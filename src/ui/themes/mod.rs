@@ -21,6 +21,13 @@ pub fn light_theme() -> Theme {
         success: rgb(0x22c55e),
         warning: rgb(0xf59e0b),
         error: rgb(0xef4444),
+        // JSON 语法高亮颜色（浅色主题）
+        json_key: rgb(0x0078d4),      // 蓝色 - JSON键
+        json_string: rgb(0xa31515),   // 红色 - 字符串值
+        json_number: rgb(0x098658),   // 绿色 - 数字
+        json_boolean: rgb(0x0000ff),  // 蓝色 - 布尔值
+        json_null: rgb(0x808080),     // 灰色 - null
+        json_bracket: rgb(0x000000),  // 黑色 - 括号
     }
 }
 
@@ -41,6 +48,13 @@ pub fn dark_theme() -> Theme {
         success: rgb(0x22c55e),
         warning: rgb(0xf59e0b),
         error: rgb(0xef4444),
+        // JSON 语法高亮颜色（深色主题）- 使用更亮的颜色确保可见性
+        json_key: rgb(0x4fc1ff),      // 亮蓝色 - JSON键
+        json_string: rgb(0xff8c69),   // 亮橙色 - 字符串值
+        json_number: rgb(0x98d977),   // 亮绿色 - 数字
+        json_boolean: rgb(0x79b8ff),  // 亮蓝色 - 布尔值
+        json_null: rgb(0xe0e0e0),     // 亮灰色 - null
+        json_bracket: rgb(0xffdd59),  // 亮黄色 - 括号
     }
 }
 
@@ -60,6 +74,13 @@ pub struct Theme {
     pub success: gpui::Rgba,
     pub warning: gpui::Rgba,
     pub error: gpui::Rgba,
+    // JSON 语法高亮颜色
+    pub json_key: gpui::Rgba,
+    pub json_string: gpui::Rgba,
+    pub json_number: gpui::Rgba,
+    pub json_boolean: gpui::Rgba,
+    pub json_null: gpui::Rgba,
+    pub json_bracket: gpui::Rgba,
 }
 
 impl Theme {

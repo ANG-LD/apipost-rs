@@ -9,7 +9,7 @@ use crate::app::history::CreateHistoryEntry;
 use crate::ui::{
     ApiKeyLocation, AuthState, AuthType, BodyState, BodyType,
     HeaderEntry, RawFormat, RequestSettings, ScriptState,
-    SettingsInputs,
+    SettingsInputs, Theme,
 };
 use gpui::prelude::*;
 use gpui::*;
@@ -17,6 +17,8 @@ use gpui::InteractiveElement;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::select::{Select, SelectState};
 use gpui_component::button::Button;
+use gpui_component::scroll::ScrollableElement;
+use gpui_component::scroll::Scrollable;
 use gpui_component::{Disableable, Icon, IconName, IndexPath, Sizable, StyledExt};
 use std::sync::Arc;
 use tokio;
@@ -73,6 +75,14 @@ pub enum ResponseTab {
     TestResults,
 }
 
+/// 响应体显示模式
+#[derive(Clone, Copy, PartialEq)]
+pub enum BodyViewMode {
+    Pretty,
+    Raw,
+    Preview,
+}
+
 /// URL参数条目
 #[derive(Clone)]
 pub struct ParamEntry {
@@ -97,6 +107,8 @@ pub struct MainView {
     response: Option<HttpResponse>,
     /// 响应面板标签
     response_tab: ResponseTab,
+    /// 响应体显示模式
+    body_view_mode: BodyViewMode,
     /// 是否正在加载
     is_loading: bool,
     /// 错误消息
@@ -137,6 +149,8 @@ pub struct MainView {
     settings_inputs: SettingsInputs,
     /// 是否正在导入cURL（防止URL输入框回写触发循环）
     is_importing_curl: bool,
+    /// 响应体输入状态（用于 JSON 语法高亮显示）
+    response_input: Entity<InputState>,
     /// 下一个标签页 ID（递增，保证唯一）
     next_tab_id: usize,
 }
@@ -228,6 +242,15 @@ impl MainView {
         let settings = RequestSettings::default();
         let settings_inputs = SettingsInputs::new(window, cx);
 
+        // 创建响应体输入状态（用于 JSON 语法高亮显示）
+        let response_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .code_editor("json")
+                .rows(20)
+                .soft_wrap(false)
+                .default_value("")
+        });
+
         Self {
             app_state,
             method: "GET".to_string(),
@@ -241,6 +264,7 @@ impl MainView {
             active_tab: 0,
             response: None,
             response_tab: ResponseTab::Body,
+            body_view_mode: BodyViewMode::Pretty,
             is_loading: false,
             error_message: None,
             sidebar_collapsed: false,
@@ -261,12 +285,13 @@ impl MainView {
             settings,
             settings_inputs,
             is_importing_curl: false,
+            response_input,
             next_tab_id: 2,
         }
     }
 
     /// 发送HTTP请求
-    pub fn send_request(&mut self, cx: &mut Context<Self>) {
+    pub fn send_request(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.is_loading {
             return;
         }
@@ -400,7 +425,12 @@ impl MainView {
                     log::error!("保存历史记录失败: {}", e);
                 }
 
-                self.response = Some(response);
+                self.response = Some(response.clone());
+                // 同步更新 response_input 用于显示
+                let response_body = response.format_body().to_string();
+                self.response_input.update(cx, |state, cx| {
+                    state.set_value(&response_body, window, cx);
+                });
                 // 刷新历史记录
                 if let Ok(hist) = self.app_state.db.get_history(50, 0) {
                     self.history = hist;
@@ -1407,7 +1437,7 @@ impl Render for MainView {
                                                                 .unwrap_or(&gpui::SharedString::from("GET")).clone();
                                                             this.url = url;
                                                             this.method = method.to_string();
-                                                            this.send_request(cx);
+                                                            this.send_request(_window, cx);
                                                         })),
                                                     ),
                                             ]),
@@ -2478,38 +2508,134 @@ impl Render for MainView {
                                                         .text_color(rgb(0xef4444))
                                                         .child(err)
                                                 } else if let Some(resp) = response {
+                                                    let theme = Theme::from_str(&self.app_state.theme_name);
+                                                    let header_row = div()
+                                                        .flex()
+                                                        .flex_row()
+                                                        .items_center()
+                                                        .justify_between()
+                                                        .w_full()
+                                                        .mb_2()
+                                                        .children([
+                                                            // 状态徽章
+                                                            div()
+                                                                .px_2()
+                                                                .py_px()
+                                                                .rounded_sm()
+                                                                .bg(rgb(if (200..300).contains(&resp.status) { 0x22c55e } else { 0xef4444 }))
+                                                                .text_color(rgb(0xffffff))
+                                                                .child(format!("{} {}", resp.status, resp.status_text())),
+                                                            // 模式选择按钮
+                                                            div()
+                                                                .flex()
+                                                                .flex_row()
+                                                                .gap_2()
+                                                                .children([
+                                                                    Button::new("pretty")
+                                                                        .label("Pretty")
+                                                                        .px_3()
+                                                                        .py_1()
+                                                                        .rounded_sm()
+                                                                        .text_sm()
+                                                                        .bg(if self.body_view_mode == BodyViewMode::Pretty { theme.accent } else { theme.input_background })
+                                                                        .text_color(if self.body_view_mode == BodyViewMode::Pretty { theme.accent_foreground } else { theme.muted_foreground })
+                                                                        .on_click(cx.listener(|this, _: &gpui::ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                            this.body_view_mode = BodyViewMode::Pretty;
+                                                                            cx.notify();
+                                                                        })),
+                                                                    Button::new("raw")
+                                                                        .label("Raw")
+                                                                        .px_3()
+                                                                        .py_1()
+                                                                        .rounded_sm()
+                                                                        .text_sm()
+                                                                        .bg(if self.body_view_mode == BodyViewMode::Raw { theme.accent } else { theme.input_background })
+                                                                        .text_color(if self.body_view_mode == BodyViewMode::Raw { theme.accent_foreground } else { theme.muted_foreground })
+                                                                        .on_click(cx.listener(|this, _: &gpui::ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                            this.body_view_mode = BodyViewMode::Raw;
+                                                                            cx.notify();
+                                                                        })),
+                                                                    Button::new("preview")
+                                                                        .label("Preview")
+                                                                        .px_3()
+                                                                        .py_1()
+                                                                        .rounded_sm()
+                                                                        .text_sm()
+                                                                        .bg(if self.body_view_mode == BodyViewMode::Preview { theme.accent } else { theme.input_background })
+                                                                        .text_color(if self.body_view_mode == BodyViewMode::Preview { theme.accent_foreground } else { theme.muted_foreground })
+                                                                        .on_click(cx.listener(|this, _: &gpui::ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                            this.body_view_mode = BodyViewMode::Preview;
+                                                                            cx.notify();
+                                                                        })),
+                                                                ]),
+                                                            // Time 和 Size 在右边
+                                                            div()
+                                                                .flex()
+                                                                .flex_row()
+                                                                .gap_4()
+                                                                .children([
+                                                                    div().text_color(rgb(0x888888)).child(format!("Time: {}ms", resp.time_ms)),
+                                                                    div().text_color(rgb(0x888888)).child(format!("Size: {} bytes", resp.size_bytes)),
+                                                                ]),
+                                                        ]);
+
+                                                    // 根据视图模式显示内容
+                                                    let content: Div = match self.body_view_mode {
+                                                        BodyViewMode::Pretty => {
+                                                            div()
+                                                                .flex_1()
+                                                                .flex_col()
+                                                                .overflow_hidden()
+                                                                .bg(rgb(0x2d2d2d))
+                                                                .border_1()
+                                                                .border_color(rgb(0x444444))
+                                                                .rounded_md()
+                                                                .child(
+                                                                    Input::new(&self.response_input)
+                                                                        .w_full()
+                                                                        .flex_1(),
+                                                                )
+                                                        },
+                                                        BodyViewMode::Raw => {
+                                                            div()
+                                                                .flex_1()
+                                                                .flex_col()
+                                                                .overflow_hidden()
+                                                                .bg(rgb(0x2d2d2d))
+                                                                .border_1()
+                                                                .border_color(rgb(0x444444))
+                                                                .rounded_md()
+                                                                .child(
+                                                                    div()
+                                                                        .flex_1()
+                                                                        .px_3()
+                                                                        .py_2()
+                                                                        .font_family("monospace")
+                                                                        .text_size(px(12.0))
+                                                                        .text_color(rgb(0xe0e0e0))
+                                                                        .overflow_scrollbar()
+                                                                        .child(self.response_input.read(cx).value().to_string())
+                                                                )
+                                                        },
+                                                        BodyViewMode::Preview => {
+                                                            div()
+                                                                .flex_1()
+                                                                .flex()
+                                                                .items_center()
+                                                                .justify_center()
+                                                                .text_color(rgb(0x666666))
+                                                                .child("Preview mode not implemented")
+                                                        },
+                                                    };
+
                                                     div()
                                                         .flex_col()
                                                         .gap_2()
                                                         .flex_1()
-                                                        .overflow_y_hidden()
+                                                        .overflow_hidden()
                                                         .children([
-                                                            div()
-                                                                .flex()
-                                                                .items_center()
-                                                                .gap_4()
-                                                                .children([
-                                                                    div()
-                                                                        .px_2()
-                                                                        .py_px()
-                                                                        .rounded_sm()
-                                                                        .bg(rgb(if (200..300).contains(&resp.status) { 0x22c55e } else { 0xef4444 }))
-                                                                        .text_color(rgb(0xffffff))
-                                                                        .child(format!("{} {}", resp.status, resp.status_text())),
-                                                                    div().text_color(rgb(0x888888)).child(format!("Time: {}ms", resp.time_ms)),
-                                                                    div().text_color(rgb(0x888888)).child(format!("Size: {} bytes", resp.size_bytes)),
-                                                                ]),
-                                                            div()
-                                                                .flex_1()
-                                                                .mt_2()
-                                                                .p_3()
-                                                                .rounded_md()
-                                                                .bg(rgb(0x252525))
-                                                                .font_family("monospace")
-                                                                .text_size(px(12.0))
-                                                                .text_color(rgb(0xe0e0e0))
-                                                                .overflow_y_hidden()
-                                                                .child(resp.format_body()),
+                                                            header_row,
+                                                            content,
                                                         ])
                                                 } else {
                                                     div()

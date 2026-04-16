@@ -230,6 +230,16 @@ pub struct BodyState {
     pub form_data: Vec<FormDataEntry>,
     /// URL-encoded 条目列表
     pub urlencoded_data: Vec<FormDataEntry>,
+    /// Raw 编辑器高度
+    pub raw_editor_height: f32,
+    /// 是否正在拖动调整大小
+    pub is_resizing: bool,
+    /// 拖动开始时的鼠标 Y 坐标
+    pub resize_start_y: f32,
+    /// 拖动开始时的高度
+    pub resize_start_height: f32,
+    /// 上次拖动更新时间（用于节流）
+    last_drag_update: Option<std::time::Instant>,
 }
 
 impl BodyState {
@@ -241,6 +251,11 @@ impl BodyState {
             raw_content,
             form_data: Vec::new(),
             urlencoded_data: Vec::new(),
+            raw_editor_height: 300.0,
+            is_resizing: false,
+            resize_start_y: 0.0,
+            resize_start_height: 300.0,
+            last_drag_update: None,
         }
     }
 
@@ -248,8 +263,22 @@ impl BodyState {
     pub fn content_type(&self) -> Option<String> {
         match self.body_type {
             BodyType::None => None,
-            BodyType::FormData => Some("multipart/form-data".to_string()),
-            BodyType::UrlEncoded => Some("application/x-www-form-urlencoded".to_string()),
+            BodyType::FormData => {
+                // 只有当 form_data 有实际条目时才返回 multipart content-type
+                if self.form_data.is_empty() {
+                    None
+                } else {
+                    Some("multipart/form-data".to_string())
+                }
+            }
+            BodyType::UrlEncoded => {
+                // 只有当 urlencoded_data 有实际条目时才返回 urlencoded content-type
+                if self.urlencoded_data.is_empty() {
+                    None
+                } else {
+                    Some("application/x-www-form-urlencoded".to_string())
+                }
+            }
             BodyType::Raw => Some(format!("{}", self.raw_format.content_type())),
             BodyType::Binary => None,
         }
@@ -264,9 +293,9 @@ impl BodyState {
                 if content.is_empty() { None } else { Some(content) }
             }
             BodyType::FormData | BodyType::UrlEncoded | BodyType::Binary => {
-                // 简化实现，实际应该用 form-data 编码
-                let content = self.raw_content.read(cx).value().to_string();
-                if content.is_empty() { None } else { Some(content) }
+                // FormData/UrlEncoded/Binary 的 body 由 text_fields/file_fields 处理
+                // to_body() 返回 None（body 内容已经在 http client 的 multipart 中处理）
+                None
             }
         }
     }
@@ -284,6 +313,52 @@ impl BodyState {
             }
         }
         fields
+    }
+
+    /// 设置 Raw 编辑器高度
+    pub fn set_raw_editor_height(&mut self, height: f32) {
+        self.raw_editor_height = height.max(100.0).min(800.0);
+    }
+
+    /// 开始拖动调整大小
+    pub fn start_resize(&mut self, mouse_y: f32) {
+        self.is_resizing = true;
+        self.resize_start_y = mouse_y;
+        self.resize_start_height = self.raw_editor_height;
+    }
+
+    /// 更新拖动（根据鼠标Y坐标计算新高度，带节流）
+    /// 返回是否需要重绘
+    pub fn update_resize(&mut self, mouse_y: f32) -> bool {
+        if self.is_resizing {
+            let now = std::time::Instant::now();
+            // 节流：限制更新间隔为 60fps (约 16ms)
+            if let Some(last) = self.last_drag_update {
+                if now.duration_since(last).as_millis() < 16 {
+                    return false;
+                }
+            }
+            self.last_drag_update = Some(now);
+
+            // delta 为正表示鼠标向下移动，编辑器应该变高
+            let delta = mouse_y - self.resize_start_y;
+            let new_height = self.resize_start_height + delta;
+
+            // 边界检测：只在有效范围内触发重绘
+            if new_height >= 100.0 && new_height <= 800.0 {
+                self.raw_editor_height = new_height;
+                return true;
+            }
+            // 达到边界时不触发重绘，避免"卡顿"感
+            return false;
+        }
+        false
+    }
+
+    /// 结束拖动调整大小
+    pub fn end_resize(&mut self) {
+        self.is_resizing = false;
+        self.last_drag_update = None;
     }
 
     /// 获取 form-data 文件字段
@@ -429,6 +504,128 @@ impl BodyState {
     }
 }
 
+/// JSON 格式化/折叠选项
+#[derive(Clone)]
+pub struct JsonFormatOptions {
+    /// 最大展开深度，0 表示全部展开
+    pub max_depth: usize,
+    /// 是否启用折叠
+    pub enable_fold: bool,
+    /// 折叠的缩进宽度
+    pub indent_size: usize,
+}
+
+impl Default for JsonFormatOptions {
+    fn default() -> Self {
+        Self {
+            max_depth: 3,
+            enable_fold: true,
+            indent_size: 2,
+        }
+    }
+}
+
+/// 格式化 JSON 字符串
+pub fn format_json(json_str: &str, options: &JsonFormatOptions) -> String {
+    // 尝试解析 JSON
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(json_str) {
+        if options.enable_fold {
+            format_json_value(&value, 0, options.max_depth, options.indent_size)
+        } else {
+            // 全部展开
+            serde_json::to_string_pretty(&value).unwrap_or_else(|_| json_str.to_string())
+        }
+    } else {
+        // 不是有效的 JSON，返回原字符串
+        json_str.to_string()
+    }
+}
+
+/// 递归格式化 JSON 值（带折叠）
+fn format_json_value(value: &serde_json::Value, current_depth: usize, max_depth: usize, indent_size: usize) -> String {
+    let indent = " ".repeat(current_depth * indent_size);
+    let next_indent = " ".repeat((current_depth + 1) * indent_size);
+
+    match value {
+        serde_json::Value::Object(map) => {
+            if map.is_empty() {
+                return "{}".to_string();
+            }
+
+            // 如果超过最大深度且深度限制有效（>0），显示折叠提示
+            if max_depth > 0 && current_depth >= max_depth {
+                let key_count = map.len();
+                return format!("{{ {} keys... }}", key_count);
+            }
+
+            let mut result = String::from("{\n");
+            for (i, (key, val)) in map.iter().enumerate() {
+                let comma = if i < map.len() - 1 { "," } else { "" };
+                result.push_str(&format!("{next_indent}\"{key}\": {}", format_json_value(val, current_depth + 1, max_depth, indent_size)));
+                result.push_str(comma);
+                result.push('\n');
+            }
+            result.push_str(&indent);
+            result.push('}');
+            result
+        }
+        serde_json::Value::Array(arr) => {
+            if arr.is_empty() {
+                return "[]".to_string();
+            }
+
+            // 如果超过最大深度且深度限制有效（>0），显示折叠提示
+            if max_depth > 0 && current_depth >= max_depth {
+                let len = arr.len();
+                return format!("[ {} items... ]", len);
+            }
+
+            let mut result = String::from("[\n");
+            for (i, val) in arr.iter().enumerate() {
+                let comma = if i < arr.len() - 1 { "," } else { "" };
+                result.push_str(&format!("{next_indent}{}", format_json_value(val, current_depth + 1, max_depth, indent_size)));
+                result.push_str(comma);
+                result.push('\n');
+            }
+            result.push_str(&indent);
+            result.push(']');
+            result
+        }
+        serde_json::Value::String(s) => format!("\"{}\"", escape_json_string(s)),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Null => "null".to_string(),
+    }
+}
+
+/// 转义 JSON 字符串中的特殊字符
+fn escape_json_string(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '"' => result.push_str("\\\""),
+            '\\' => result.push_str("\\\\"),
+            '\n' => result.push_str("\\n"),
+            '\r' => result.push_str("\\r"),
+            '\t' => result.push_str("\\t"),
+            c if c.is_control() => {
+                result.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c => result.push(c),
+        }
+    }
+    result
+}
+
+/// 紧凑 JSON 字符串（移除空白）
+pub fn compact_json(json_str: &str) -> String {
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(json_str) {
+        serde_json::to_string(&value).unwrap_or_else(|_| json_str.to_string())
+    } else {
+        json_str.to_string()
+    }
+}
+
 /// 根据文件扩展名推断内容类型
 fn guess_content_type(file_path: &str) -> String {
     let ext = std::path::Path::new(file_path)
@@ -463,4 +660,236 @@ fn guess_content_type(file_path: &str) -> String {
         _ => "application/octet-stream",
     }
     .to_string()
+}
+
+/// JSON 语法高亮类型
+#[derive(Clone, Debug)]
+pub enum JsonTokenType {
+    Key,
+    String,
+    Number,
+    Boolean,
+    Null,
+    Bracket,
+    Comma,
+    Colon,
+    Plain,
+}
+
+/// JSON 语法高亮标记
+#[derive(Clone, Debug)]
+pub struct JsonHighlightToken {
+    pub token_type: JsonTokenType,
+    pub text: String,
+}
+
+/// 高亮 JSON 字符串（用于渲染）
+/// 返回 (文本片段, 颜色) 的列表
+pub fn highlight_json(json_str: &str, theme: &crate::ui::themes::Theme) -> Vec<(String, gpui::Rgba)> {
+    let mut tokens = Vec::new();
+    let mut chars = json_str.chars().peekable();
+    let mut pos = 0;
+
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => {
+                // 解析字符串（可能是键或值）
+                let start_pos = pos;
+                let mut s = String::from('"');
+                while let Some(&ch) = chars.peek() {
+                    if ch == '"' {
+                        s.push(chars.next().unwrap());
+                        pos += 1;
+                        break;
+                    } else if ch == '\\' {
+                        s.push(chars.next().unwrap());
+                        pos += 1;
+                        if let Some(&escaped) = chars.peek() {
+                            s.push(escaped);
+                            chars.next();
+                            pos += 1;
+                        }
+                    } else {
+                        s.push(chars.next().unwrap());
+                        pos += 1;
+                    }
+                }
+                tokens.push(JsonHighlightToken {
+                    token_type: JsonTokenType::String,
+                    text: s,
+                });
+            }
+            '{' | '}' | '[' | ']' => {
+                tokens.push(JsonHighlightToken {
+                    token_type: JsonTokenType::Bracket,
+                    text: c.to_string(),
+                });
+                pos += 1;
+            }
+            ':' => {
+                tokens.push(JsonHighlightToken {
+                    token_type: JsonTokenType::Colon,
+                    text: c.to_string(),
+                });
+                pos += 1;
+            }
+            ',' => {
+                tokens.push(JsonHighlightToken {
+                    token_type: JsonTokenType::Comma,
+                    text: c.to_string(),
+                });
+                pos += 1;
+            }
+            'n' => {
+                let rest: String = json_str.chars().skip(pos).take(4).collect();
+                if rest == "null" {
+                    tokens.push(JsonHighlightToken {
+                        token_type: JsonTokenType::Null,
+                        text: "null".to_string(),
+                    });
+                    for _ in 0..4 { chars.next(); pos += 1; }
+                } else {
+                    tokens.push(JsonHighlightToken {
+                        token_type: JsonTokenType::Plain,
+                        text: c.to_string(),
+                    });
+                    pos += 1;
+                }
+            }
+            't' => {
+                let rest: String = json_str.chars().skip(pos).take(4).collect();
+                if rest == "true" {
+                    tokens.push(JsonHighlightToken {
+                        token_type: JsonTokenType::Boolean,
+                        text: "true".to_string(),
+                    });
+                    for _ in 0..4 { chars.next(); pos += 1; }
+                } else {
+                    tokens.push(JsonHighlightToken {
+                        token_type: JsonTokenType::Plain,
+                        text: c.to_string(),
+                    });
+                    pos += 1;
+                }
+            }
+            'f' => {
+                let rest: String = json_str.chars().skip(pos).take(5).collect();
+                if rest == "false" {
+                    tokens.push(JsonHighlightToken {
+                        token_type: JsonTokenType::Boolean,
+                        text: "false".to_string(),
+                    });
+                    for _ in 0..5 { chars.next(); pos += 1; }
+                } else {
+                    tokens.push(JsonHighlightToken {
+                        token_type: JsonTokenType::Plain,
+                        text: c.to_string(),
+                    });
+                    pos += 1;
+                }
+            }
+            c if c.is_ascii_digit() || c == '-' => {
+                let mut num = String::new();
+                if c == '-' {
+                    num.push(c);
+                    pos += 1;
+                    if let Some(&next) = chars.peek() {
+                        if next.is_ascii_digit() {
+                            num.push(chars.next().unwrap());
+                            pos += 1;
+                        }
+                    }
+                } else {
+                    num.push(c);
+                    pos += 1;
+                }
+                while let Some(&next) = chars.peek() {
+                    if next.is_ascii_digit() || next == '.' || next == 'e' || next == 'E' || next == '+' || next == '-' {
+                        if (next == '+' || next == '-') && !num.ends_with('e') && !num.ends_with('E') {
+                            break;
+                        }
+                        num.push(chars.next().unwrap());
+                        pos += 1;
+                    } else {
+                        break;
+                    }
+                }
+                tokens.push(JsonHighlightToken {
+                    token_type: JsonTokenType::Number,
+                    text: num,
+                });
+            }
+            ' ' | '\t' | '\n' | '\r' => {
+                tokens.push(JsonHighlightToken {
+                    token_type: JsonTokenType::Plain,
+                    text: c.to_string(),
+                });
+                pos += 1;
+            }
+            _ => {
+                tokens.push(JsonHighlightToken {
+                    token_type: JsonTokenType::Plain,
+                    text: c.to_string(),
+                });
+                pos += 1;
+            }
+        }
+    }
+
+    // 第二次遍历：将 String 类型修正为 Key 或 String
+    let mut result = Vec::new();
+    let mut prev_was_bracket_or_comma = true;
+
+    for token in tokens {
+        match token.token_type {
+            JsonTokenType::String => {
+                if prev_was_bracket_or_comma {
+                    result.push((token.text, theme.json_key));
+                } else {
+                    result.push((token.text, theme.json_string));
+                }
+                prev_was_bracket_or_comma = false;
+            }
+            JsonTokenType::Number => {
+                result.push((token.text, theme.json_number));
+                prev_was_bracket_or_comma = false;
+            }
+            JsonTokenType::Boolean => {
+                result.push((token.text, theme.json_boolean));
+                prev_was_bracket_or_comma = false;
+            }
+            JsonTokenType::Null => {
+                result.push((token.text, theme.json_null));
+                prev_was_bracket_or_comma = false;
+            }
+            JsonTokenType::Bracket => {
+                result.push((token.text, theme.json_bracket));
+                prev_was_bracket_or_comma = true;
+            }
+            JsonTokenType::Comma => {
+                result.push((token.text, theme.json_bracket));
+                prev_was_bracket_or_comma = true;
+            }
+            JsonTokenType::Colon => {
+                result.push((token.text, theme.json_bracket));
+                prev_was_bracket_or_comma = false;
+            }
+            JsonTokenType::Plain => {
+                result.push((token.text, theme.json_bracket));
+                prev_was_bracket_or_comma = false;
+            }
+            JsonTokenType::Key => {
+                // 不应该到达这里
+                result.push((token.text, theme.json_key));
+                prev_was_bracket_or_comma = false;
+            }
+        }
+    }
+
+    result
+}
+
+/// 检查字符串是否为有效的 JSON
+pub fn is_valid_json(s: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(s).is_ok()
 }

@@ -115,6 +115,8 @@ impl HttpClient {
         // 根据设置决定使用哪个客户端
         let use_custom_client = options.timeout_secs != 30 || !options.follow_redirects || !options.verify_ssl;
 
+        log::debug!("开始发送请求，使用自定义客户端: {}", use_custom_client);
+
         let response = if use_custom_client {
             // 构建自定义客户端
             let mut builder = Client::builder()
@@ -127,18 +129,34 @@ impl HttpClient {
 
             let custom_client = builder.build().context("创建自定义HTTP客户端失败")?;
 
-            custom_client
+            let request_builder = custom_client
                 .request(method, &url)
-                .headers(headers)
-                .multipart(self.build_multipart(request)?)
+                .headers(headers);
+
+            // 根据是否有请求体决定发送方式
+            let request_builder = if let Some(ref body_content) = body {
+                request_builder.body(body_content.clone())
+            } else {
+                request_builder.multipart(self.build_multipart(request)?)
+            };
+
+            request_builder
                 .send()
                 .await
                 .context("请求发送失败")?
         } else {
-            self.client
+            let request_builder = self.client
                 .request(method, &url)
-                .headers(headers)
-                .multipart(self.build_multipart(request)?)
+                .headers(headers);
+
+            // 根据是否有请求体决定发送方式
+            let request_builder = if let Some(ref body_content) = body {
+                request_builder.body(body_content.clone())
+            } else {
+                request_builder.multipart(self.build_multipart(request)?)
+            };
+
+            request_builder
                 .send()
                 .await
                 .context("请求发送失败")?
@@ -188,17 +206,22 @@ impl HttpClient {
 
     /// 构建multipart表单
     fn build_multipart(&self, request: &HttpRequest) -> Result<multipart::Form> {
+        log::debug!("构建multipart表单: text_fields={}, file_fields={}",
+            request.text_fields.len(), request.file_fields.len());
+
         let mut form = multipart::Form::new();
 
         // 添加文本字段
         for (name, value) in &request.text_fields {
             let value = self.env_manager.replace_variables(value);
+            log::debug!("添加文本字段: {}={}", name, value);
             form = form.text(name.clone(), value);
         }
 
         // 添加文件字段
         for file_field in &request.file_fields {
             let file_path = file_field.file_path.clone();
+            log::debug!("添加文件字段: {} -> {}", file_field.field_name, file_path);
             if std::path::Path::new(&file_path).exists() {
                 let file_name = std::path::Path::new(&file_path)
                     .file_name()
@@ -215,6 +238,8 @@ impl HttpClient {
                     .map_err(|e| anyhow::anyhow!("无法创建文件部分: {}", e))?;
 
                 form = form.part(file_field.field_name.clone(), part);
+            } else {
+                log::warn!("文件不存在: {}", file_path);
             }
         }
 
@@ -356,12 +381,83 @@ impl HttpResponse {
 
     /// 格式化响应体（如果可以）
     pub fn format_body(&self) -> String {
-        // 尝试解析并格式化JSON
-        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&self.body) {
-            serde_json::to_string_pretty(&json).unwrap_or_else(|_| self.body.clone())
-        } else {
-            self.body.clone()
+        // 使用带折叠的 JSON 格式化
+        format_json_folded(&self.body, 5, 2)
+    }
+}
+
+/// 带折叠的 JSON 格式化
+fn format_json_folded(json_str: &str, max_depth: usize, indent_size: usize) -> String {
+    let indent = |d: usize| " ".repeat(d * indent_size);
+
+    fn format_value(value: &serde_json::Value, current_depth: usize, max_depth: usize, indent_size: usize) -> String {
+        let ind = " ".repeat(current_depth * indent_size);
+        let next_ind = " ".repeat((current_depth + 1) * indent_size);
+
+        match value {
+            serde_json::Value::Object(map) => {
+                if map.is_empty() {
+                    return "{}".to_string();
+                }
+                if current_depth >= max_depth {
+                    return format!("{{ {} keys... }}", map.len());
+                }
+                let mut s = String::from("{\n");
+                for (i, (k, v)) in map.iter().enumerate() {
+                    let comma = if i < map.len() - 1 { "," } else { "" };
+                    s.push_str(&format!("{next_ind}\"{k}\": {}", format_value(v, current_depth + 1, max_depth, indent_size)));
+                    s.push_str(comma);
+                    s.push('\n');
+                }
+                s.push_str(&ind);
+                s.push('}');
+                s
+            }
+            serde_json::Value::Array(arr) => {
+                if arr.is_empty() {
+                    return "[]".to_string();
+                }
+                if current_depth >= max_depth {
+                    return format!("[ {} items... ]", arr.len());
+                }
+                let mut s = String::from("[\n");
+                for (i, v) in arr.iter().enumerate() {
+                    let comma = if i < arr.len() - 1 { "," } else { "" };
+                    s.push_str(&format!("{next_ind}{}", format_value(v, current_depth + 1, max_depth, indent_size)));
+                    s.push_str(comma);
+                    s.push('\n');
+                }
+                s.push_str(&ind);
+                s.push(']');
+                s
+            }
+            serde_json::Value::String(st) => format!("\"{}\"", escape_json_str(st)),
+            serde_json::Value::Number(n) => n.to_string(),
+            serde_json::Value::Bool(b) => b.to_string(),
+            serde_json::Value::Null => "null".to_string(),
         }
+    }
+
+    fn escape_json_str(s: &str) -> String {
+        let mut r = String::with_capacity(s.len());
+        for c in s.chars() {
+            match c {
+                '"' => r.push_str("\\\""),
+                '\\' => r.push_str("\\\\"),
+                '\n' => r.push_str("\\n"),
+                '\r' => r.push_str("\\r"),
+                '\t' => r.push_str("\\t"),
+                ch if ch.is_control() => r.push_str(&format!("\\u{:04x}", ch as u32)),
+                ch => r.push(ch),
+            }
+        }
+        r
+    }
+
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(json_str) {
+        format_value(&value, 0, max_depth, indent_size)
+    } else {
+        json_str.to_string()
     }
 }
 

@@ -36,6 +36,14 @@ fn main() {
         // 初始化gpui-component
         gpui_component::init(cx);
 
+        // 根据配置初始化深色/浅色主题（影响语法高亮颜色）
+        let theme_mode = if config.general.theme == "light" {
+            gpui_component::theme::ThemeMode::Light
+        } else {
+            gpui_component::theme::ThemeMode::Dark
+        };
+        gpui_component::theme::Theme::change(theme_mode, None, cx);
+
         // 初始化应用状态
         let app_state = AppState::try_new(config.clone())
             .expect("应用初始化失败");
