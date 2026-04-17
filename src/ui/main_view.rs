@@ -153,6 +153,12 @@ pub struct MainView {
     response_input: Entity<InputState>,
     /// 下一个标签页 ID（递增，保证唯一）
     next_tab_id: usize,
+    /// Splitter是否正在拖拽
+    splitter_dragging: bool,
+    /// 拖拽开始时的Y位置
+    splitter_start_y: f32,
+    /// 请求构造器区域高度比例（0.0-1.0，表示相对于可用空间的比例）
+    request_height_ratio: f32,
 }
 
 impl MainView {
@@ -287,6 +293,9 @@ impl MainView {
             is_importing_curl: false,
             response_input,
             next_tab_id: 2,
+            splitter_dragging: false,
+            splitter_start_y: 0.0,
+            request_height_ratio: 0.5,
         }
     }
 
@@ -478,6 +487,29 @@ impl MainView {
     pub fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
         self.sidebar_collapsed = !self.sidebar_collapsed;
         cx.notify();
+    }
+
+    /// 开始拖拽splitter
+    pub fn start_splitter_drag(&mut self, start_y: f32) {
+        self.splitter_dragging = true;
+        self.splitter_start_y = start_y;
+    }
+
+    /// 更新splitter位置（拖拽中）
+    pub fn update_splitter_drag(&mut self, current_y: f32) {
+        if self.splitter_dragging {
+            // 计算delta
+            let delta_y = current_y - self.splitter_start_y;
+            // 直接调整比例（每像素变化对应0.001的比例变化）
+            let ratio_delta = delta_y / 1000.0;
+            self.request_height_ratio = (self.request_height_ratio + ratio_delta).max(0.2).min(0.8);
+            self.splitter_start_y = current_y;
+        }
+    }
+
+    /// 结束拖拽splitter
+    pub fn end_splitter_drag(&mut self) {
+        self.splitter_dragging = false;
     }
 
     // ==================== Params 操作 ====================
@@ -1363,8 +1395,9 @@ impl Render for MainView {
                                     ),
                                 // 请求构造器
                                 div()
+                                    .h(px(400.0 * self.request_height_ratio))
                                     .flex()
-                                    .w_full() 
+                                    .w_full()
                                     .flex_col()
                                     .bg(rgb(0x1e1e1e))
                                     .children([
@@ -1563,7 +1596,7 @@ impl Render for MainView {
                                                 .flex_1()
                                                 .gap_2()
                                                 .p_3()
-                                                .overflow_hidden()
+                                                .overflow_y_hidden()
                                                 .children([
                                                     // 表头
                                                     div()
@@ -1663,7 +1696,7 @@ impl Render for MainView {
                                                 .flex_1()
                                                 .gap_3()
                                                 .p_3()
-                                                .overflow_hidden()
+                                                .overflow_y_hidden()
                                                 .children([
                                                     // Body 类型选择
                                                     div()
@@ -2466,6 +2499,29 @@ impl Render for MainView {
                                             div().flex_1().hidden()
                                         },
                                     ]),
+                                // Splitter（可拖拽调整上下区域大小）
+                                div()
+                                    .h(px(1.0))
+                                    .w_full()
+                                    .bg(rgb(0x444444))
+                                    .cursor_row_resize()
+                                    .hover(|s| s.bg(rgb(0x3b82f6)))
+                                    .on_mouse_down(MouseButton::Left, cx.listener(|this, event: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                        let y: f32 = event.position.y.into();
+                                        this.start_splitter_drag(y);
+                                        cx.notify();
+                                    }))
+                                    .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                        if this.splitter_dragging {
+                                            let y: f32 = event.position.y.into();
+                                            this.update_splitter_drag(y);
+                                            cx.notify();
+                                        }
+                                    }))
+                                    .on_mouse_up(MouseButton::Left, cx.listener(|this, _: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                        this.end_splitter_drag();
+                                        cx.notify();
+                                    })),
                                 // 响应查看器
                                 div()
                                     .flex_1()
@@ -2606,15 +2662,9 @@ impl Render for MainView {
                                                                 .border_color(rgb(0x444444))
                                                                 .rounded_md()
                                                                 .child(
-                                                                    div()
-                                                                        .flex_1()
-                                                                        .px_3()
-                                                                        .py_2()
-                                                                        .font_family("monospace")
-                                                                        .text_size(px(12.0))
-                                                                        .text_color(rgb(0xe0e0e0))
-                                                                        .overflow_scrollbar()
-                                                                        .child(self.response_input.read(cx).value().to_string())
+                                                                    Input::new(&self.response_input)
+                                                                        .w_full()
+                                                                        .flex_1(),
                                                                 )
                                                         },
                                                         BodyViewMode::Preview => {
