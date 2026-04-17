@@ -324,7 +324,7 @@ impl BodyState {
     }
 
     /// 格式化 Raw 类型的 JSON 内容
-    pub fn format_json(&mut self, cx: &Context<crate::ui::MainView>) {
+    pub fn format_json(&mut self, window: &mut Window, cx: &mut Context<crate::ui::MainView>) {
         if self.body_type != BodyType::Raw || self.raw_format != RawFormat::Json {
             return;
         }
@@ -332,8 +332,11 @@ impl BodyState {
         let text = self.raw_content.read(cx).value().to_string();
         match serde_json::from_str::<serde_json::Value>(&text) {
             Ok(value) => {
-                let formatted = serde_json::to_string_pretty(&value).unwrap_or(text);
-                self.raw_content.write(cx).set_value(&formatted);
+                let formatted = serde_json::to_string_pretty(&value).unwrap_or(text.clone());
+                let formatted_owned = formatted;
+                self.raw_content.update(cx, move |this, _cx| {
+                    this.set_value(&formatted_owned, window, _cx);
+                });
                 self.json_error = None;
             }
             Err(e) => {

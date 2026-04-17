@@ -7,7 +7,7 @@ use crate::app::HttpResponse;
 use crate::http::HttpRequest;
 use crate::app::history::CreateHistoryEntry;
 use crate::ui::{
-    ApiKeyLocation, AuthState, AuthType, BodyState, BodyType,
+    count_lines, json_editor, ApiKeyLocation, AuthState, AuthType, BodyState, BodyType,
     HeaderEntry, RawFormat, RequestSettings, ScriptState,
     SettingsInputs, Theme,
 };
@@ -489,6 +489,16 @@ impl MainView {
         cx.notify();
     }
 
+    /// 计算 body 内容的行数
+    fn calculate_body_line_count(body_state: &BodyState, cx: &Context<Self>) -> usize {
+        if body_state.body_type == BodyType::Raw && body_state.raw_format == RawFormat::Json {
+            let text = body_state.raw_content.read(cx).value().to_string();
+            count_lines(&text)
+        } else {
+            1
+        }
+    }
+
     /// 开始拖拽splitter
     pub fn start_splitter_drag(&mut self, start_y: f32) {
         self.splitter_dragging = true;
@@ -509,6 +519,11 @@ impl MainView {
     /// 结束拖拽splitter
     pub fn end_splitter_drag(&mut self) {
         self.splitter_dragging = false;
+    }
+
+    /// 格式化 JSON
+    pub fn format_json(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.body_state.format_json(window, cx);
     }
 
     // ==================== Params 操作 ====================
@@ -1855,22 +1870,34 @@ impl Render for MainView {
                                                                                     .child("HTML"),
                                                                             ]),
                                                                     ]),
-                                                                // Raw 内容编辑器
-                                                                div()
-                                                                    .flex_1()
-                                                                    .bg(rgb(0x2d2d2d))
-                                                                    .border_1()
-                                                                    .border_color(rgb(0x444444))
-                                                                    .rounded_md()
-                                                                    .overflow_y_hidden()
-                                                                    .child(
-                                                                        Input::new(&body_state.raw_content)
-                                                                            .flex_1()
-                                                                            .min_h(px(200.0))
-                                                                            .bg(rgb(0x2d2d2d))
-                                                                            .text_color(rgb(0xe0e0e0))
-                                                                            .font_family("monospace"),
-                                                                    ),
+                                                                // Raw JSON 编辑器
+                                                                if body_state.raw_format == RawFormat::Json {
+                                                                    div()
+                                                                        .flex_1()
+                                                                        .child(json_editor(
+                                                                            &body_state,
+                                                                            Self::calculate_body_line_count(&body_state, cx),
+                                                                            body_state.json_error.clone(),
+                                                                            cx,
+                                                                        ))
+                                                                } else {
+                                                                    // 其他 Raw 格式保持原样
+                                                                    div()
+                                                                        .flex_1()
+                                                                        .bg(rgb(0x2d2d2d))
+                                                                        .border_1()
+                                                                        .border_color(rgb(0x444444))
+                                                                        .rounded_md()
+                                                                        .overflow_y_hidden()
+                                                                        .child(
+                                                                            Input::new(&body_state.raw_content)
+                                                                                .flex_1()
+                                                                                .min_h(px(200.0))
+                                                                                .bg(rgb(0x2d2d2d))
+                                                                                .text_color(rgb(0xe0e0e0))
+                                                                                .font_family("monospace"),
+                                                                        )
+                                                                },
                                                             ])
                                                     } else if body_state.body_type == BodyType::Binary {
                                                         div()
