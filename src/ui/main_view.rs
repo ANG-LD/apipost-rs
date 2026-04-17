@@ -1437,7 +1437,7 @@ impl Render for MainView {
                                             .flex_row()
                                             .items_center()
                                             .overflow_hidden()
-                                            .gap(px(8.0))  
+                                            .gap(px(8.0))
                                             .px_2()
                                             .py_2()
                                             .children([
@@ -1734,7 +1734,6 @@ impl Render for MainView {
                                                         .items_center()
                                                         .gap_4()
                                                         .children([
-                                                            div().text_sm().text_color(rgb(0x888888)).child("Body:"),
                                                             div()
                                                                 .flex()
                                                                 .items_center()
@@ -1815,7 +1814,7 @@ impl Render for MainView {
                                                                     .items_center()
                                                                     .gap_2()
                                                                     .children([
-                                                                        div().text_sm().text_color(rgb(0x888888)).child("Format:"),
+                                                                        div().text_sm().text_color(rgb(0x888888)),
                                                                         div()
                                                                             .flex()
                                                                             .items_center()
@@ -2031,8 +2030,6 @@ impl Render for MainView {
                                                                                     div()
                                                                                         .flex_1()
                                                                                         .h(px(28.0))
-                                                                                       
-                                                                        
                                                                                         .items_center()
                                                                                         .rounded_sm()
                                                                                         .bg(rgb(0x2d2d2d))
