@@ -157,8 +157,8 @@ pub struct MainView {
     splitter_dragging: bool,
     /// 拖拽开始时的Y位置
     splitter_start_y: f32,
-    /// 请求构造器区域高度比例（0.0-1.0，表示相对于可用空间的比例）
-    request_height_ratio: f32,
+    /// 请求构造器高度（像素）
+    request_builder_height: f32,
 }
 
 impl MainView {
@@ -295,7 +295,7 @@ impl MainView {
             next_tab_id: 2,
             splitter_dragging: false,
             splitter_start_y: 0.0,
-            request_height_ratio: 0.5,
+            request_builder_height: 400.0,
         }
     }
 
@@ -500,9 +500,8 @@ impl MainView {
         if self.splitter_dragging {
             // 计算delta
             let delta_y = current_y - self.splitter_start_y;
-            // 直接调整比例（每像素变化对应0.001的比例变化）
-            let ratio_delta = delta_y / 1000.0;
-            self.request_height_ratio = (self.request_height_ratio + ratio_delta).max(0.2).min(0.8);
+            // 直接调整高度（每像素变化对应相同的像素变化）
+            self.request_builder_height = (self.request_builder_height + delta_y).max(100.0);
             self.splitter_start_y = current_y;
         }
     }
@@ -1291,6 +1290,19 @@ impl Render for MainView {
                             .flex_1()
                             .flex()
                             .flex_col()
+                            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                if this.splitter_dragging {
+                                    let y: f32 = event.position.y.into();
+                                    this.update_splitter_drag(y);
+                                    cx.notify();
+                                }
+                            }))
+                            .on_mouse_up(MouseButton::Left, cx.listener(|this, _: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                if this.splitter_dragging {
+                                    this.end_splitter_drag();
+                                    cx.notify();
+                                }
+                            }))
                             .children([
                                 // 请求标签栏
                                 div()
@@ -1395,10 +1407,11 @@ impl Render for MainView {
                                     ),
                                 // 请求构造器
                                 div()
-                                    .h(px(400.0 * self.request_height_ratio))
+                                    .h(px(self.request_builder_height))
                                     .flex()
                                     .w_full()
                                     .flex_col()
+                                    .overflow_hidden()
                                     .bg(rgb(0x1e1e1e))
                                     .children([
                                         // 方法和URL行
@@ -1496,7 +1509,7 @@ impl Render for MainView {
                                                 .flex_1()
                                                 .gap_2()
                                                 .p_3()
-                                                .overflow_hidden()
+                                                .overflow_y_hidden()
                                                 .children([
                                                     // 表头
                                                     div()
@@ -2160,7 +2173,7 @@ impl Render for MainView {
                                                 .flex_1()
                                                 .gap_4()
                                                 .p_3()
-                                                .overflow_hidden()
+                                                .overflow_y_hidden()
                                                 .children([
                                                     // Auth 类型选择
                                                     div()
@@ -2360,7 +2373,7 @@ impl Render for MainView {
                                                 .flex_1()
                                                 .gap_2()
                                                 .p_3()
-                                                .overflow_hidden()
+                                                .overflow_y_hidden()
                                                 .children([
                                                     div()
                                                         .text_xs()
@@ -2388,7 +2401,7 @@ impl Render for MainView {
                                                 .flex_1()
                                                 .gap_2()
                                                 .p_3()
-                                                .overflow_hidden()
+                                                .overflow_y_hidden()
                                                 .children([
                                                     div()
                                                         .text_xs()
@@ -2416,7 +2429,7 @@ impl Render for MainView {
                                                 .flex_1()
                                                 .gap_4()
                                                 .p_3()
-                                                .overflow_hidden()
+                                                .overflow_y_hidden()
                                                 .children([
                                                     // 超时设置
                                                     div()
@@ -2501,9 +2514,9 @@ impl Render for MainView {
                                     ]),
                                 // Splitter（可拖拽调整上下区域大小）
                                 div()
-                                    .h(px(1.0))
+                                    .h(px(12.0))
                                     .w_full()
-                                    .bg(rgb(0x444444))
+                                    .bg(rgb(0x333333))
                                     .cursor_row_resize()
                                     .hover(|s| s.bg(rgb(0x3b82f6)))
                                     .on_mouse_down(MouseButton::Left, cx.listener(|this, event: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
