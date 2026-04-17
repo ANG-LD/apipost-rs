@@ -240,6 +240,8 @@ pub struct BodyState {
     pub resize_start_height: f32,
     /// 上次拖动更新时间（用于节流）
     last_drag_update: Option<std::time::Instant>,
+    /// JSON 格式化错误信息
+    pub json_error: Option<String>,
 }
 
 impl BodyState {
@@ -256,6 +258,7 @@ impl BodyState {
             resize_start_y: 0.0,
             resize_start_height: 300.0,
             last_drag_update: None,
+            json_error: None,
         }
     }
 
@@ -318,6 +321,25 @@ impl BodyState {
     /// 设置 Raw 编辑器高度
     pub fn set_raw_editor_height(&mut self, height: f32) {
         self.raw_editor_height = height.max(100.0).min(800.0);
+    }
+
+    /// 格式化 Raw 类型的 JSON 内容
+    pub fn format_json(&mut self, cx: &Context<crate::ui::MainView>) {
+        if self.body_type != BodyType::Raw || self.raw_format != RawFormat::Json {
+            return;
+        }
+
+        let text = self.raw_content.read(cx).value().to_string();
+        match serde_json::from_str::<serde_json::Value>(&text) {
+            Ok(value) => {
+                let formatted = serde_json::to_string_pretty(&value).unwrap_or(text);
+                self.raw_content.write(cx).set_value(&formatted);
+                self.json_error = None;
+            }
+            Err(e) => {
+                self.json_error = Some(e.to_string());
+            }
+        }
     }
 
     /// 开始拖动调整大小
