@@ -1875,6 +1875,7 @@ impl Render for MainView {
                                                                 if body_state.raw_format == RawFormat::Json {
                                                                     div()
                                                                         .flex_1()
+                                                                        .min_h(px(200.0))
                                                                         .child(json_editor(
                                                                             &body_state,
                                                                             Self::calculate_body_line_count(&body_state, cx),

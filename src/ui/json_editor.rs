@@ -32,7 +32,6 @@ impl Default for JsonSyntaxColors {
 
 /// 计算行数
 pub fn count_lines(text: &str) -> usize {
-    // 按换行符分割并计算行数，空行也算一行
     if text.is_empty() {
         1
     } else {
@@ -59,15 +58,15 @@ pub fn json_editor(
         .flex_1()
         .gap_2()
         .children([
-            // 工具栏
+            // 工具栏 - 按钮靠右
             div()
                 .flex()
+                .justify_end()
                 .items_center()
-                .gap_2()
                 .children([
                     Button::new("format-json")
                         .label("Format")
-                        .small()
+                        .xsmall()
                         .on_click(cx.listener(|this, _: &ClickEvent, window: &mut Window, cx: &mut Context<crate::ui::MainView>| {
                             this.format_json(window, cx);
                             cx.notify();
@@ -77,6 +76,7 @@ pub fn json_editor(
             div()
                 .flex()
                 .flex_1()
+                .min_h(px(200.0))
                 .bg(rgb(0x2d2d2d))
                 .border_1()
                 .border_color(rgb(0x444444))
