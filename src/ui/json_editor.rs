@@ -86,7 +86,7 @@ pub fn json_editor(
                     // 行号列
                     div()
                         .w(px(40.0))
-                        .h_full()
+                        .h(px(300.0))
                         .bg(rgb(0x252525))
                         .flex_col()
                         .overflow_y_hidden()
@@ -105,13 +105,13 @@ pub fn json_editor(
                     // 编辑区域
                     div()
                         .flex_1()
-                        .h_full()
+                        .h(px(300.0))
                         .overflow_y_hidden()
                         .p_2()
                         .child(
                             Input::new(&content)
-                                .flex_1()
-                                .h_full()
+                                .w_full()
+                                .h(px(300.0))
                                 .bg(rgb(0x2d2d2d))
                                 .text_color(rgb(0xe0e0e0))
                                 .font_family("monospace")
