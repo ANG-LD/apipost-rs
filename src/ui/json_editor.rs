@@ -32,7 +32,12 @@ impl Default for JsonSyntaxColors {
 
 /// 计算行数
 pub fn count_lines(text: &str) -> usize {
-    text.lines().count().max(1)
+    // 按换行符分割并计算行数，空行也算一行
+    if text.is_empty() {
+        1
+    } else {
+        text.lines().count().max(1)
+    }
 }
 
 /// JSON 编辑器组件

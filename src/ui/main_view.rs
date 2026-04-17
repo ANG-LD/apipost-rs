@@ -226,6 +226,7 @@ impl MainView {
         let raw_content = cx.new(|cx| {
             InputState::new(window, cx)
                 .default_value(r#"{"key": "value"}"#)
+                .multi_line(true)
         });
         let body_state = BodyState::new(raw_content);
 
