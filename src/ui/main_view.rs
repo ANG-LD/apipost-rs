@@ -222,11 +222,14 @@ impl MainView {
         // 创建 Headers 列表（从空开始，支持动态添加）
         let headers: Vec<HeaderEntry> = vec![];
 
-        // 创建 Body 状态
+        // 创建 Body 状态（JSON 编辑器使用 code_editor 模式）
         let raw_content = cx.new(|cx| {
             InputState::new(window, cx)
                 .default_value(r#"{"key": "value"}"#)
                 .multi_line(true)
+                .code_editor("json")
+                .line_number(true)
+                .line_number_align("center")
         });
         let body_state = BodyState::new(raw_content);
 
@@ -255,6 +258,8 @@ impl MainView {
                 .code_editor("json")
                 .rows(20)
                 .soft_wrap(false)
+                .line_number(true)
+                .line_number_align("center")
                 .default_value("")
         });
 
@@ -1872,6 +1877,7 @@ impl Render for MainView {
                                                                     ]),
                                                                 // Raw JSON 编辑器
                                                                 if body_state.raw_format == RawFormat::Json {
+                                                                    let theme = Theme::from_str(&self.app_state.theme_name);
                                                                     div()
                                                                         .flex_1()
                                                                         .min_h(px(200.0))
@@ -1879,6 +1885,7 @@ impl Render for MainView {
                                                                             &body_state,
                                                                             Self::calculate_body_line_count(&body_state, cx),
                                                                             body_state.json_error.clone(),
+                                                                            &theme,
                                                                             cx,
                                                                         ))
                                                                 } else {
