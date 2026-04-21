@@ -384,10 +384,18 @@ impl HttpResponse {
         // 使用带折叠的 JSON 格式化
         format_json_folded(&self.body, 5, 2)
     }
+
+    /// 检测内容类型
+    pub fn detect_content_type(&self) -> Option<String> {
+        self.headers
+            .get("content-type")
+            .or_else(|| self.headers.get("Content-Type"))
+            .cloned()
+    }
 }
 
 /// 带折叠的 JSON 格式化
-fn format_json_folded(json_str: &str, max_depth: usize, indent_size: usize) -> String {
+pub fn format_json_folded(json_str: &str, max_depth: usize, indent_size: usize) -> String {
     let indent = |d: usize| " ".repeat(d * indent_size);
 
     fn format_value(value: &serde_json::Value, current_depth: usize, max_depth: usize, indent_size: usize) -> String {

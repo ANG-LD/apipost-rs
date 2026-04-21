@@ -151,6 +151,18 @@ pub struct MainView {
     is_importing_curl: bool,
     /// 响应体输入状态（用于 JSON 语法高亮显示）
     response_input: Entity<InputState>,
+    /// 响应体 XML 输入状态
+    response_xml_input: Entity<InputState>,
+    /// 响应体 Text 输入状态
+    response_text_input: Entity<InputState>,
+    /// 响应体 Html 输入状态
+    response_html_input: Entity<InputState>,
+    /// 响应体Raw格式选择器
+    response_raw_format: RawFormat,
+    /// 响应体Raw格式选择器状态
+    response_raw_format_select: Entity<SelectState<Vec<gpui::SharedString>>>,
+    /// 响应体软换行开关
+    response_soft_wrap: bool,
     /// 下一个标签页 ID（递增，保证唯一）
     next_tab_id: usize,
     /// Splitter是否正在拖拽
@@ -159,6 +171,12 @@ pub struct MainView {
     splitter_start_y: f32,
     /// 请求构造器高度（像素）
     request_builder_height: f32,
+    /// 响应编辑器高度（像素）
+    response_editor_height: f32,
+    /// 响应编辑器拖拽中
+    response_editor_dragging: bool,
+    /// 响应编辑器拖拽起始Y位置
+    response_editor_start_y: f32,
 }
 
 impl MainView {
@@ -231,7 +249,34 @@ impl MainView {
                 .line_number(true)
                 .line_number_align("center")
         });
-        let body_state = BodyState::new(raw_content);
+        // XML 格式的 raw_content - 复制JSON编辑框
+        let raw_content_xml = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(r#"<root></root>"#)
+                .multi_line(true)
+                .code_editor("json")
+                .line_number(true)
+                .line_number_align("center")
+        });
+        // Text 格式的 raw_content - 复制JSON编辑框
+        let raw_content_text = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(r#"plain text"#)
+                .multi_line(true)
+                .code_editor("json")
+                .line_number(true)
+                .line_number_align("center")
+        });
+        // HTML 格式的 raw_content - 复制JSON编辑框
+        let raw_content_html = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(r#"<html></html>"#)
+                .multi_line(true)
+                .code_editor("json")
+                .line_number(true)
+                .line_number_align("center")
+        });
+        let body_state = BodyState::new(raw_content, raw_content_xml, raw_content_text, raw_content_html);
 
         // 创建 Body 类型选择器
         let body_type_select = BodyState::create_body_type_select(window, cx);
@@ -256,12 +301,45 @@ impl MainView {
         let response_input = cx.new(|cx| {
             InputState::new(window, cx)
                 .code_editor("json")
-                .rows(20)
+                .multi_line(true)
                 .soft_wrap(false)
                 .line_number(true)
                 .line_number_align("center")
                 .default_value("")
         });
+
+        // 创建响应体 XML 输入状态（使用 code_editor）
+        let response_xml_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .multi_line(true)
+                .code_editor("json")
+                .line_number(true)
+                .line_number_align("center")
+                .default_value("")
+        });
+
+        // 创建响应体 Text 输入状态（使用 code_editor）
+        let response_text_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .multi_line(true)
+                .code_editor("json")
+                .line_number(true)
+                .line_number_align("center")
+                .default_value("")
+        });
+
+        // 创建响应体 Html 输入状态（使用 code_editor）
+        let response_html_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .multi_line(true)
+                .code_editor("json")
+                .line_number(true)
+                .line_number_align("center")
+                .default_value("")
+        });
+
+        // 创建响应体Raw格式选择器
+        let response_raw_format_select = BodyState::create_raw_format_select(window, cx);
 
         Self {
             app_state,
@@ -298,10 +376,19 @@ impl MainView {
             settings_inputs,
             is_importing_curl: false,
             response_input,
+            response_xml_input,
+            response_text_input,
+            response_html_input,
+            response_raw_format: RawFormat::Json,
+            response_raw_format_select,
+            response_soft_wrap: false,
             next_tab_id: 2,
             splitter_dragging: false,
             splitter_start_y: 0.0,
             request_builder_height: 400.0,
+            response_editor_height: 400.0,
+            response_editor_dragging: false,
+            response_editor_start_y: 0.0,
         }
     }
 
@@ -441,10 +528,22 @@ impl MainView {
                 }
 
                 self.response = Some(response.clone());
-                // 同步更新 response_input 用于显示
-                let response_body = response.format_body().to_string();
+                // 检测响应格式
+                let content_type = response.detect_content_type();
+                self.response_raw_format = RawFormat::detect(content_type.as_deref(), &response.body);
+                // 同步更新所有响应输入状态
+                let json_body = RawFormat::Json.format_body(&response.body);
                 self.response_input.update(cx, |state, cx| {
-                    state.set_value(&response_body, window, cx);
+                    state.set_value(&json_body, window, cx);
+                });
+                self.response_xml_input.update(cx, |state, cx| {
+                    state.set_value(&response.body, window, cx);
+                });
+                self.response_text_input.update(cx, |state, cx| {
+                    state.set_value(&response.body, window, cx);
+                });
+                self.response_html_input.update(cx, |state, cx| {
+                    state.set_value(&response.body, window, cx);
                 });
                 // 刷新历史记录
                 if let Ok(hist) = self.app_state.db.get_history(50, 0) {
@@ -525,6 +624,26 @@ impl MainView {
     /// 结束拖拽splitter
     pub fn end_splitter_drag(&mut self) {
         self.splitter_dragging = false;
+    }
+
+    /// 开始拖拽响应编辑器调整大小
+    pub fn start_response_editor_drag(&mut self, start_y: f32) {
+        self.response_editor_dragging = true;
+        self.response_editor_start_y = start_y;
+    }
+
+    /// 更新响应编辑器拖拽位置
+    pub fn update_response_editor_drag(&mut self, current_y: f32) {
+        if self.response_editor_dragging {
+            let delta_y = current_y - self.response_editor_start_y;
+            self.response_editor_height = (self.response_editor_height + delta_y).max(100.0);
+            self.response_editor_start_y = current_y;
+        }
+    }
+
+    /// 结束响应编辑器拖拽
+    pub fn end_response_editor_drag(&mut self) {
+        self.response_editor_dragging = false;
     }
 
     /// 格式化 JSON
@@ -627,6 +746,12 @@ impl MainView {
         cx.notify();
     }
 
+    /// 切换响应体软换行
+    pub fn toggle_response_soft_wrap(&mut self, cx: &mut Context<Self>) {
+        self.response_soft_wrap = !self.response_soft_wrap;
+        cx.notify();
+    }
+
     // ==================== Body 操作 ====================
 
     /// 设置 Body 类型
@@ -649,6 +774,17 @@ impl MainView {
     /// 获取当前 Raw 格式
     pub fn get_raw_format(&self) -> RawFormat {
         self.body_state.raw_format
+    }
+
+    /// 设置响应体 Raw 格式
+    pub fn set_response_raw_format(&mut self, index: usize, _window: &mut Window, cx: &mut Context<Self>) {
+        self.response_raw_format = RawFormat::from_index(index);
+        cx.notify();
+    }
+
+    /// 获取响应体 Raw 格式
+    pub fn get_response_raw_format(&self) -> RawFormat {
+        self.response_raw_format
     }
 
     /// 切换跟随重定向设置
@@ -883,7 +1019,7 @@ impl MainView {
         // 如果有body，设置到body_state
         if let Some(body) = request.body {
             self.body_state.body_type = crate::ui::BodyType::Raw;
-            let body_owned = body;
+            let body_owned = body.clone();
             self.body_state.raw_content.update(cx, move |this, cx| {
                 this.set_value(&body_owned, window, cx);
             });
@@ -1250,6 +1386,13 @@ impl Render for MainView {
                                                             let method_clr = method_color(&entry.method);
                                                             let entry_url = entry.url.clone();
                                                             let entry_method = entry.method.clone();
+                                                            let entry_clone = entry.clone();
+                                                            let entry_response_body = entry.response_body.clone();
+                                                            let entry_response_headers = entry.response_headers.clone();
+                                                            let entry_response_time_ms = entry.response_time_ms;
+                                                            let entry_response_size = entry.response_body.as_ref().map(|b| b.len() as i64);
+                                                            let display_method = entry.method.clone();
+                                                            let display_url = entry.url.clone();
                                                             div()
                                                                 .flex_col()
                                                                 .gap_1()
@@ -1258,13 +1401,67 @@ impl Render for MainView {
                                                                 .cursor_pointer()
                                                                 .hover(|s| s.bg(rgb(0x2d2d2d)))
                                                                 .bg(rgb(0x252525))
+                                                                .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                    // 更新 URL 输入框
+                                                                    this.url = entry_url.clone();
+                                                                    this.is_importing_curl = true;
+                                                                    let url_str = entry_url.clone();
+                                                                    this.url_input.update(cx, |state, cx| {
+                                                                        state.set_value(&url_str, _window, cx);
+                                                                    });
+                                                                    // 更新方法选择器
+                                                                    this.method = entry_method.clone();
+                                                                    let method_upper = entry_method.to_uppercase();
+                                                                    let method_idx = ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]
+                                                                        .iter()
+                                                                        .position(|&m| m == method_upper)
+                                                                        .unwrap_or(0);
+                                                                    let idx_path = Some(IndexPath::new(method_idx));
+                                                                    this.method_select.update(cx, |state, cx| {
+                                                                        state.set_selected_index(idx_path, _window, cx);
+                                                                    });
+                                                                    this.is_importing_curl = false;
+                                                                    // 加载响应数据到 UI 组件
+                                                                    if let Some(status) = entry_clone.response_status {
+                                                                        let resp_body = entry_response_body.clone().unwrap_or_default();
+                                                                        let resp_headers: std::collections::HashMap<String, String> = entry_response_headers.as_ref().and_then(|h| serde_json::from_str(h).ok()).unwrap_or_default();
+                                                                        let content_type = resp_headers.get("content-type").cloned();
+                                                                        let response = HttpResponse {
+                                                                            status: status as u16,
+                                                                            headers: resp_headers,
+                                                                            body: resp_body.clone(),
+                                                                            time_ms: entry_response_time_ms.unwrap_or(0),
+                                                                            size_bytes: entry_response_size.unwrap_or(0),
+                                                                        };
+                                                                        this.response = Some(response);
+                                                                        // 检测响应格式
+                                                                        this.response_raw_format = RawFormat::detect(content_type.as_deref(), &resp_body);
+                                                                        // 格式化 JSON
+                                                                        let json_body = RawFormat::Json.format_body(&resp_body);
+                                                                        this.response_input.update(cx, |state, cx| {
+                                                                            state.set_value(&json_body, _window, cx);
+                                                                        });
+                                                                        this.response_xml_input.update(cx, |state, cx| {
+                                                                            state.set_value(&resp_body, _window, cx);
+                                                                        });
+                                                                        this.response_text_input.update(cx, |state, cx| {
+                                                                            state.set_value(&resp_body, _window, cx);
+                                                                        });
+                                                                        this.response_html_input.update(cx, |state, cx| {
+                                                                            state.set_value(&resp_body, _window, cx);
+                                                                        });
+                                                                    } else {
+                                                                        this.response = None;
+                                                                    }
+                                                                    cx.notify();
+                                                                }))
                                                                 .children([
                                                                     div().flex().items_center().gap_2().children([
                                                                         div().px_1().py_px().rounded_sm().bg(rgb(method_clr))
                                                                             .text_xs().text_color(rgb(0xffffff))
-                                                                            .child(entry_method.clone()),
+                                                                            .child(display_method),
                                                                         div().flex_1().text_ellipsis().text_xs().text_color(rgb(0xe0e0e0))
-                                                                            .child(entry_url.clone()),
+                                                                            .child(display_url),
                                                                     ]),
                                                                     if let Some(status) = entry.response_status {
                                                                         let status_color = if (200..300).contains(&status) { 0x22c55e } else { 0xef4444 };
@@ -1363,6 +1560,9 @@ impl Render for MainView {
                                                         .py_px()
                                                         .cursor_pointer()
                                                         .hover(|s| s.bg(rgb(0x3a3a3a)))
+                                                        .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                            this.switch_tab(i, _window, cx);
+                                                        }))
                                                         .children([
                                                             div().px_1().py_px().rounded_sm()
                                                                 .bg(rgb(method_clr))
@@ -1382,7 +1582,12 @@ impl Render for MainView {
                                                         .items_center()
                                                         .justify_center()
                                                         .rounded_sm()
+                                                        .cursor_pointer()
+                                                        .hover(|s| s.bg(rgb(0x4a4a4a)))
                                                         .text_color(rgb(0x666666))
+                                                        .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                            this.close_tab(i, _window, cx);
+                                                        }))
                                                         .child(Icon::new(IconName::Close).xsmall()),
                                                 ]
                                             } else {
@@ -1394,6 +1599,11 @@ impl Render for MainView {
                                                         .rounded_sm()
                                                         .px_1()
                                                         .py_px()
+                                                        .cursor_pointer()
+                                                        .hover(|s| s.bg(rgb(0x3a3a3a)))
+                                                        .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                            this.switch_tab(i, _window, cx);
+                                                        }))
                                                         .children([
                                                             div().px_1().py_px().rounded_sm()
                                                                 .bg(rgb(method_clr))
@@ -1500,6 +1710,9 @@ impl Render for MainView {
                                                         .flex_none()
                                                         .on_click(cx.listener(|this, _: &gpui::ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                             let url = this.url_input.read(cx).value().to_string();
+                                                            if url.trim().is_empty() {
+                                                                return;
+                                                            }
                                                             let method = this.method_select.read(cx).selected_value()
                                                                 .unwrap_or(&gpui::SharedString::from("GET")).clone();
                                                             this.url = url;
@@ -1813,23 +2026,30 @@ impl Render for MainView {
                                                             .flex_1()
                                                             .gap_2()
                                                             .children([
-                                                                // Raw 格式选择
+                                                                // Raw 格式选择和工具栏
                                                                 div()
                                                                     .flex()
+                                                                    .flex_row()
                                                                     .items_center()
+                                                                    .justify_between()
+                                                                    .w_full()
                                                                     .gap_2()
+                                                                    .px_1()
+                                                                    .py_1()
+                                                                    .bg(rgb(0x333333))
                                                                     .children([
-                                                                        div().text_sm().text_color(rgb(0x888888)),
+                                                                        // 左侧：格式按钮组
                                                                         div()
                                                                             .flex()
+                                                                            .flex_row()
                                                                             .items_center()
-                                                                            .gap_2()
+                                                                            .gap_1()
                                                                             .children([
                                                                                 div()
                                                                                     .text_sm()
                                                                                     .cursor_pointer()
                                                                                     .px_2()
-                                                                                    .py_1()
+                                                                                    .py_px()
                                                                                     .rounded_sm()
                                                                                     .bg(if body_state.raw_format == RawFormat::Json { rgb(0x3b3b3b) } else { rgb(0x2d2d2d) })
                                                                                     .text_color(if body_state.raw_format == RawFormat::Json { rgb(0xffffff) } else { rgb(0x888888) })
@@ -1841,7 +2061,7 @@ impl Render for MainView {
                                                                                     .text_sm()
                                                                                     .cursor_pointer()
                                                                                     .px_2()
-                                                                                    .py_1()
+                                                                                    .py_px()
                                                                                     .rounded_sm()
                                                                                     .bg(if body_state.raw_format == RawFormat::Xml { rgb(0x3b3b3b) } else { rgb(0x2d2d2d) })
                                                                                     .text_color(if body_state.raw_format == RawFormat::Xml { rgb(0xffffff) } else { rgb(0x888888) })
@@ -1853,7 +2073,7 @@ impl Render for MainView {
                                                                                     .text_sm()
                                                                                     .cursor_pointer()
                                                                                     .px_2()
-                                                                                    .py_1()
+                                                                                    .py_px()
                                                                                     .rounded_sm()
                                                                                     .bg(if body_state.raw_format == RawFormat::Text { rgb(0x3b3b3b) } else { rgb(0x2d2d2d) })
                                                                                     .text_color(if body_state.raw_format == RawFormat::Text { rgb(0xffffff) } else { rgb(0x888888) })
@@ -1865,7 +2085,7 @@ impl Render for MainView {
                                                                                     .text_sm()
                                                                                     .cursor_pointer()
                                                                                     .px_2()
-                                                                                    .py_1()
+                                                                                    .py_px()
                                                                                     .rounded_sm()
                                                                                     .bg(if body_state.raw_format == RawFormat::Html { rgb(0x3b3b3b) } else { rgb(0x2d2d2d) })
                                                                                     .text_color(if body_state.raw_format == RawFormat::Html { rgb(0xffffff) } else { rgb(0x888888) })
@@ -1875,37 +2095,52 @@ impl Render for MainView {
                                                                                     .child("HTML"),
                                                                             ]),
                                                                     ]),
-                                                                // Raw JSON 编辑器
-                                                                if body_state.raw_format == RawFormat::Json {
-                                                                    let theme = Theme::from_str(&self.app_state.theme_name);
-                                                                    div()
-                                                                        .flex_1()
-                                                                        .min_h(px(200.0))
-                                                                        .child(json_editor(
-                                                                            &body_state,
-                                                                            Self::calculate_body_line_count(&body_state, cx),
-                                                                            body_state.json_error.clone(),
-                                                                            &theme,
-                                                                            cx,
-                                                                        ))
-                                                                } else {
-                                                                    // 其他 Raw 格式保持原样
-                                                                    div()
-                                                                        .flex_1()
-                                                                        .bg(rgb(0x2d2d2d))
-                                                                        .border_1()
-                                                                        .border_color(rgb(0x444444))
-                                                                        .rounded_md()
-                                                                        .overflow_y_hidden()
-                                                                        .child(
-                                                                            Input::new(&body_state.raw_content)
-                                                                                .flex_1()
-                                                                                .min_h(px(200.0))
-                                                                                .bg(rgb(0x2d2d2d))
-                                                                                .text_color(rgb(0xe0e0e0))
-                                                                                .font_family("monospace"),
-                                                                        )
-                                                                },
+                                                                // Raw 编辑器
+                                                                div()
+                                                                    .flex_1()
+                                                                    .flex_col()
+                                                                    .overflow_hidden()
+                                                                    .children([
+                                                                        if body_state.raw_format == RawFormat::Json {
+                                                                            let theme = Theme::from_str(&self.app_state.theme_name);
+                                                                            Some(
+                                                                                div()
+                                                                                    .flex_1()
+                                                                                    .child(json_editor(
+                                                                                        &body_state,
+                                                                                        Self::calculate_body_line_count(&body_state, cx),
+                                                                                        body_state.json_error.clone(),
+                                                                                        &theme,
+                                                                                        cx,
+                                                                                    ))
+                                                                            )
+                                                                        } else {
+                                                                            // XML/Text/HTML 格式使用和 JSON 一样的编辑框
+                                                                            let editor_input = match body_state.raw_format {
+                                                                                RawFormat::Xml => body_state.raw_content_xml.clone(),
+                                                                                RawFormat::Text => body_state.raw_content_text.clone(),
+                                                                                RawFormat::Html => body_state.raw_content_html.clone(),
+                                                                                _ => body_state.raw_content.clone(),
+                                                                            };
+                                                                            let theme = Theme::from_str(&self.app_state.theme_name);
+                                                                            Some(
+                                                                                div()
+                                                                                    .flex_1()
+                                                                                    .bg(rgb(0x2d2d2d))
+                                                                                    .border_1()
+                                                                                    .border_color(rgb(0x444444))
+                                                                                    .rounded_md()
+                                                                                    .overflow_hidden()
+                                                                                    .child(
+                                                                                        Input::new(&editor_input)
+                                                                                            .h(px(body_state.raw_editor_height))
+                                                                                            .w_full()
+                                                                                            .bg(theme.background)
+                                                                                            .bordered(true),
+                                                                                    )
+                                                                            )
+                                                                        },
+                                                                    ].into_iter().flatten().collect::<Vec<_>>()),
                                                             ])
                                                     } else if body_state.body_type == BodyType::Binary {
                                                         div()
@@ -2635,6 +2870,7 @@ impl Render for MainView {
                                                                 .children([
                                                                     Button::new("pretty")
                                                                         .label("Pretty")
+                                                                        .small()
                                                                         .px_3()
                                                                         .py_1()
                                                                         .rounded_sm()
@@ -2647,6 +2883,7 @@ impl Render for MainView {
                                                                         })),
                                                                     Button::new("raw")
                                                                         .label("Raw")
+                                                                        .small()
                                                                         .px_3()
                                                                         .py_1()
                                                                         .rounded_sm()
@@ -2659,6 +2896,7 @@ impl Render for MainView {
                                                                         })),
                                                                     Button::new("preview")
                                                                         .label("Preview")
+                                                                        .small()
                                                                         .px_3()
                                                                         .py_1()
                                                                         .rounded_sm()
@@ -2685,7 +2923,7 @@ impl Render for MainView {
                                                     let content: Div = match self.body_view_mode {
                                                         BodyViewMode::Pretty => {
                                                             div()
-                                                                .flex_1()
+                                                                .h(px(self.response_editor_height))
                                                                 .flex_col()
                                                                 .overflow_hidden()
                                                                 .bg(rgb(0x2d2d2d))
@@ -2695,7 +2933,7 @@ impl Render for MainView {
                                                                 .child(
                                                                     Input::new(&self.response_input)
                                                                         .w_full()
-                                                                        .flex_1(),
+                                                                        .h_full(),
                                                                 )
                                                         },
                                                         BodyViewMode::Raw => {
@@ -2707,11 +2945,134 @@ impl Render for MainView {
                                                                 .border_1()
                                                                 .border_color(rgb(0x444444))
                                                                 .rounded_md()
-                                                                .child(
-                                                                    Input::new(&self.response_input)
+                                                                .children([
+                                                                    // 格式选择器
+                                                                    div()
+                                                                        .flex()
+                                                                        .flex_row()
+                                                                        .items_center()
                                                                         .w_full()
-                                                                        .flex_1(),
-                                                                )
+                                                                        .gap_2()
+                                                                        .px_2()
+                                                                        .py_1()
+                                                                        .bg(rgb(0x333333))
+                                                                        .children([
+                                                                            // JSON 按钮
+                                                                            div()
+                                                                                .text_sm()
+                                                                                .cursor_pointer()
+                                                                                .px_2()
+                                                                                .py_px()
+                                                                                .rounded_sm()
+                                                                                .bg(if self.response_raw_format == RawFormat::Json { rgb(0x3b3b3b) } else { rgb(0x2d2d2d) })
+                                                                                .text_color(if self.response_raw_format == RawFormat::Json { rgb(0xffffff) } else { rgb(0x888888) })
+                                                                                .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                                    this.set_response_raw_format(RawFormat::Json.to_index(), _window, cx);
+                                                                                }))
+                                                                                .child("JSON"),
+                                                                            // XML 按钮
+                                                                            div()
+                                                                                .text_sm()
+                                                                                .cursor_pointer()
+                                                                                .px_2()
+                                                                                .py_px()
+                                                                                .rounded_sm()
+                                                                                .bg(if self.response_raw_format == RawFormat::Xml { rgb(0x3b3b3b) } else { rgb(0x2d2d2d) })
+                                                                                .text_color(if self.response_raw_format == RawFormat::Xml { rgb(0xffffff) } else { rgb(0x888888) })
+                                                                                .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                                    this.set_response_raw_format(RawFormat::Xml.to_index(), _window, cx);
+                                                                                }))
+                                                                                .child("XML"),
+                                                                            // Text 按钮
+                                                                            div()
+                                                                                .text_sm()
+                                                                                .cursor_pointer()
+                                                                                .px_2()
+                                                                                .py_px()
+                                                                                .rounded_sm()
+                                                                                .bg(if self.response_raw_format == RawFormat::Text { rgb(0x3b3b3b) } else { rgb(0x2d2d2d) })
+                                                                                .text_color(if self.response_raw_format == RawFormat::Text { rgb(0xffffff) } else { rgb(0x888888) })
+                                                                                .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                                    this.set_response_raw_format(RawFormat::Text.to_index(), _window, cx);
+                                                                                }))
+                                                                                .child("Text"),
+                                                                            // HTML 按钮
+                                                                            div()
+                                                                                .text_sm()
+                                                                                .cursor_pointer()
+                                                                                .px_2()
+                                                                                .py_px()
+                                                                                .rounded_sm()
+                                                                                .bg(if self.response_raw_format == RawFormat::Html { rgb(0x3b3b3b) } else { rgb(0x2d2d2d) })
+                                                                                .text_color(if self.response_raw_format == RawFormat::Html { rgb(0xffffff) } else { rgb(0x888888) })
+                                                                                .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                                    this.set_response_raw_format(RawFormat::Html.to_index(), _window, cx);
+                                                                                }))
+                                                                                .child("HTML"),
+                                                                        ]),
+                                                                    // 响应体内容 - 根据格式显示不同的编辑器
+                                                                    div()
+                                                                        .flex_1()
+                                                                        .overflow_hidden()
+                                                                        .children([
+                                                                            // JSON 编辑器
+                                                                            if self.response_raw_format == RawFormat::Json {
+                                                                                Some(
+                                                                                    div()
+                                                                                        .h(px(self.response_editor_height))
+                                                                                        .child(
+                                                                                            Input::new(&self.response_input)
+                                                                                                .w_full()
+                                                                                                .h_full(),
+                                                                                        ),
+                                                                                )
+                                                                            } else {
+                                                                                None
+                                                                            },
+                                                                            // XML 编辑器
+                                                                            if self.response_raw_format == RawFormat::Xml {
+                                                                                Some(
+                                                                                    div()
+                                                                                        .h(px(self.response_editor_height))
+                                                                                        .child(
+                                                                                            Input::new(&self.response_xml_input)
+                                                                                                .w_full()
+                                                                                                .h_full(),
+                                                                                        ),
+                                                                                )
+                                                                            } else {
+                                                                                None
+                                                                            },
+                                                                            // Text 编辑器
+                                                                            if self.response_raw_format == RawFormat::Text {
+                                                                                Some(
+                                                                                    div()
+                                                                                        .h(px(self.response_editor_height))
+                                                                                        .child(
+                                                                                            Input::new(&self.response_text_input)
+                                                                                                .w_full()
+                                                                                                .h_full(),
+                                                                                        ),
+                                                                                )
+                                                                            } else {
+                                                                                None
+                                                                            },
+                                                                            // HTML 编辑器
+                                                                            if self.response_raw_format == RawFormat::Html {
+                                                                                Some(
+                                                                                    div()
+                                                                                        .h(px(self.response_editor_height))
+                                                                                        .child(
+                                                                                            Input::new(&self.response_html_input)
+                                                                                                .w_full()
+                                                                                                .h_full(),
+                                                                                        ),
+                                                                                )
+                                                                            } else {
+                                                                                None
+                                                                            },
+                                                                        ].into_iter().flatten().collect::<Vec<_>>()),
+                                                                ])
                                                         },
                                                         BodyViewMode::Preview => {
                                                             div()
@@ -2725,12 +3086,34 @@ impl Render for MainView {
                                                     };
 
                                                     div()
-                                                        .flex_col()
-                                                        .gap_2()
                                                         .flex_1()
+                                                        .flex_col()
                                                         .overflow_hidden()
                                                         .children([
                                                             header_row,
+                                                            // 响应编辑器分隔线
+                                                            div()
+                                                                .h(px(8.0))
+                                                                .w_full()
+                                                                .bg(rgb(0x333333))
+                                                                .cursor_row_resize()
+                                                                .hover(|s| s.bg(rgb(0x3b82f6)))
+                                                                .on_mouse_down(MouseButton::Left, cx.listener(|this, event: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                    let y: f32 = event.position.y.into();
+                                                                    this.start_response_editor_drag(y);
+                                                                    cx.notify();
+                                                                }))
+                                                                .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                    if this.response_editor_dragging {
+                                                                        let y: f32 = event.position.y.into();
+                                                                        this.update_response_editor_drag(y);
+                                                                        cx.notify();
+                                                                    }
+                                                                }))
+                                                                .on_mouse_up(MouseButton::Left, cx.listener(|this, _: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                    this.end_response_editor_drag();
+                                                                    cx.notify();
+                                                                })),
                                                             content,
                                                         ])
                                                 } else {

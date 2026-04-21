@@ -133,6 +133,46 @@ impl RawFormat {
             RawFormat::JavaScript => "application/javascript",
         }
     }
+
+    /// 检测响应格式
+    pub fn detect(content_type: Option<&str>, body: &str) -> RawFormat {
+        if let Some(ct) = content_type {
+            let ct_lower = ct.to_lowercase();
+            if ct_lower.contains("json") {
+                return RawFormat::Json;
+            } else if ct_lower.contains("xml") {
+                return RawFormat::Xml;
+            } else if ct_lower.contains("html") {
+                return RawFormat::Html;
+            } else if ct_lower.contains("javascript") {
+                return RawFormat::JavaScript;
+            } else {
+                return RawFormat::Text;
+            }
+        }
+        // 尝试基于内容推断
+        let body_lower = body.trim_start();
+        if body_lower.starts_with('{') || body_lower.starts_with('[') {
+            return RawFormat::Json;
+        } else if body_lower.starts_with('<') {
+            if body_lower.contains("<!DOCTYPE html") || body_lower.contains("<html") {
+                return RawFormat::Html;
+            }
+            return RawFormat::Xml;
+        }
+        RawFormat::Text
+    }
+
+    /// 根据格式格式化内容
+    pub fn format_body(&self, body: &str) -> String {
+        match self {
+            RawFormat::Json => crate::http::format_json_folded(body, 5, 2),
+            RawFormat::Xml => body.to_string(),
+            RawFormat::Text => body.to_string(),
+            RawFormat::Html => body.to_string(),
+            RawFormat::JavaScript => body.to_string(),
+        }
+    }
 }
 
 /// Form Data 参数类型
@@ -226,6 +266,12 @@ pub struct BodyState {
     pub body_type: BodyType,
     pub raw_format: RawFormat,
     pub raw_content: Entity<InputState>,
+    /// XML 格式的 raw_content
+    pub raw_content_xml: Entity<InputState>,
+    /// Text 格式的 raw_content
+    pub raw_content_text: Entity<InputState>,
+    /// HTML 格式的 raw_content
+    pub raw_content_html: Entity<InputState>,
     /// Form-data 条目列表
     pub form_data: Vec<FormDataEntry>,
     /// URL-encoded 条目列表
@@ -242,15 +288,25 @@ pub struct BodyState {
     last_drag_update: Option<std::time::Instant>,
     /// JSON 格式化错误信息
     pub json_error: Option<String>,
+    /// 软换行开关
+    pub soft_wrap: bool,
 }
 
 impl BodyState {
     /// 创建 Body 状态
-    pub fn new(raw_content: Entity<InputState>) -> Self {
+    pub fn new(
+        raw_content: Entity<InputState>,
+        raw_content_xml: Entity<InputState>,
+        raw_content_text: Entity<InputState>,
+        raw_content_html: Entity<InputState>,
+    ) -> Self {
         Self {
             body_type: BodyType::None,
             raw_format: RawFormat::Json,
             raw_content,
+            raw_content_xml,
+            raw_content_text,
+            raw_content_html,
             form_data: Vec::new(),
             urlencoded_data: Vec::new(),
             raw_editor_height: 300.0,
@@ -259,6 +315,7 @@ impl BodyState {
             resize_start_height: 300.0,
             last_drag_update: None,
             json_error: None,
+            soft_wrap: false,
         }
     }
 
@@ -292,7 +349,13 @@ impl BodyState {
         match self.body_type {
             BodyType::None => None,
             BodyType::Raw => {
-                let content = self.raw_content.read(cx).value().to_string();
+                let content = match self.raw_format {
+                    RawFormat::Json => self.raw_content.read(cx).value().to_string(),
+                    RawFormat::Xml => self.raw_content_xml.read(cx).value().to_string(),
+                    RawFormat::Text => self.raw_content_text.read(cx).value().to_string(),
+                    RawFormat::Html => self.raw_content_html.read(cx).value().to_string(),
+                    RawFormat::JavaScript => self.raw_content.read(cx).value().to_string(),
+                };
                 if content.is_empty() { None } else { Some(content) }
             }
             BodyType::FormData | BodyType::UrlEncoded | BodyType::Binary => {
@@ -321,6 +384,11 @@ impl BodyState {
     /// 设置 Raw 编辑器高度
     pub fn set_raw_editor_height(&mut self, height: f32) {
         self.raw_editor_height = height.max(100.0).min(800.0);
+    }
+
+    /// 切换软换行
+    pub fn toggle_soft_wrap(&mut self) {
+        self.soft_wrap = !self.soft_wrap;
     }
 
     /// 格式化 Raw 类型的 JSON 内容
