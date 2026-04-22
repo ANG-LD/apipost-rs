@@ -101,6 +101,30 @@ impl I18nManager {
         map.insert("ui.pretty".to_string(), "格式化".to_string());
         map.insert("ui.raw".to_string(), "原始".to_string());
         map.insert("ui.preview".to_string(), "预览".to_string());
+        map.insert("ui.add_param".to_string(), "添加参数".to_string());
+        map.insert("ui.add_header".to_string(), "添加头部".to_string());
+        map.insert("ui.add_form_data".to_string(), "添加表单数据".to_string());
+        map.insert("ui.add_url_encoded".to_string(), "添加URL编码".to_string());
+        map.insert("ui.none".to_string(), "none".to_string());
+        map.insert("ui.form_data".to_string(), "form-data".to_string());
+        map.insert("ui.url_encoded".to_string(), "x-www-form-urlencoded".to_string());
+        map.insert("ui.binary".to_string(), "binary".to_string());
+        map.insert("ui.no_auth".to_string(), "No Auth".to_string());
+        map.insert("ui.bearer_token".to_string(), "Bearer Token".to_string());
+        map.insert("ui.basic_auth".to_string(), "Basic Auth".to_string());
+        map.insert("ui.api_key".to_string(), "API Key".to_string());
+        map.insert("ui.token".to_string(), "Token".to_string());
+        map.insert("ui.username".to_string(), "Username".to_string());
+        map.insert("ui.password".to_string(), "Password".to_string());
+        map.insert("ui.add_to".to_string(), "Add to".to_string());
+        map.insert("ui.header".to_string(), "Header".to_string());
+        map.insert("ui.query".to_string(), "Query".to_string());
+        map.insert("ui.type".to_string(), "Type".to_string());
+        map.insert("ui.click_send".to_string(), "点击发送按钮发送请求".to_string());
+        map.insert("ui.no_env".to_string(), "无环境".to_string());
+        map.insert("ui.online".to_string(), "在线".to_string());
+        map.insert("ui.console".to_string(), "控制台".to_string());
+        map.insert("ui.ready".to_string(), "就绪".to_string());
 
         // 响应
         map.insert("response.title".to_string(), "响应".to_string());
@@ -229,6 +253,30 @@ impl I18nManager {
         map.insert("ui.pretty".to_string(), "Pretty".to_string());
         map.insert("ui.raw".to_string(), "Raw".to_string());
         map.insert("ui.preview".to_string(), "Preview".to_string());
+        map.insert("ui.add_param".to_string(), "Add parameter".to_string());
+        map.insert("ui.add_header".to_string(), "Add Header".to_string());
+        map.insert("ui.add_form_data".to_string(), "Add form data".to_string());
+        map.insert("ui.add_url_encoded".to_string(), "Add URL-encoded".to_string());
+        map.insert("ui.none".to_string(), "none".to_string());
+        map.insert("ui.form_data".to_string(), "form-data".to_string());
+        map.insert("ui.url_encoded".to_string(), "x-www-form-urlencoded".to_string());
+        map.insert("ui.binary".to_string(), "binary".to_string());
+        map.insert("ui.no_auth".to_string(), "No Auth".to_string());
+        map.insert("ui.bearer_token".to_string(), "Bearer Token".to_string());
+        map.insert("ui.basic_auth".to_string(), "Basic Auth".to_string());
+        map.insert("ui.api_key".to_string(), "API Key".to_string());
+        map.insert("ui.token".to_string(), "Token".to_string());
+        map.insert("ui.username".to_string(), "Username".to_string());
+        map.insert("ui.password".to_string(), "Password".to_string());
+        map.insert("ui.add_to".to_string(), "Add to".to_string());
+        map.insert("ui.header".to_string(), "Header".to_string());
+        map.insert("ui.query".to_string(), "Query".to_string());
+        map.insert("ui.type".to_string(), "Type".to_string());
+        map.insert("ui.click_send".to_string(), "Click Send to request".to_string());
+        map.insert("ui.no_env".to_string(), "No Environment".to_string());
+        map.insert("ui.online".to_string(), "Online".to_string());
+        map.insert("ui.console".to_string(), "Console".to_string());
+        map.insert("ui.ready".to_string(), "Ready".to_string());
 
         // Response
         map.insert("response.title".to_string(), "Response".to_string());

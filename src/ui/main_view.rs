@@ -342,7 +342,7 @@ impl MainView {
             InputState::new(window, cx)
                 .code_editor("json")
                 .multi_line(true)
-                .soft_wrap(false)
+                .soft_wrap(true)
                 .line_number(true)
                 .line_number_align("center")
                 .default_value("")
@@ -478,10 +478,17 @@ impl MainView {
 
         // 6. 构建完整URL（包含参数和 API Key query 参数）
         // 先从URL中提取base部分（不含query string）
-        let base_url = if let Some(query_start) = self.url.find('?') {
-            self.url[..query_start].to_string()
+        // 如果URL没有协议前缀，自动添加 http://
+        let url_with_scheme = if !self.url.starts_with("http://") && !self.url.starts_with("https://") {
+            format!("http://{}", self.url)
         } else {
             self.url.clone()
+        };
+
+        let base_url = if let Some(query_start) = url_with_scheme.find('?') {
+            url_with_scheme[..query_start].to_string()
+        } else {
+            url_with_scheme
         };
 
         let params: Vec<(String, String, bool)> = self.params.iter().map(|p| {
@@ -1247,7 +1254,7 @@ impl Render for MainView {
 
                 div()
                     .h(px(40.0))
-                    .min_w(px(120.0))
+                    .w(px(130.0))
                     .pl_3()
                     .pr_1()
                     .flex()
@@ -1485,6 +1492,64 @@ impl Render for MainView {
                                                                         state.set_selected_index(idx_path, _window, cx);
                                                                     });
                                                                     this.is_importing_curl = false;
+
+                                                                    // 加载请求body
+                                                                    if let Some(ref body_content) = entry_clone.body {
+                                                                        let formatted_body = RawFormat::Json.format_body(body_content);
+                                                                        this.body_state.raw_content.update(cx, |state, cx| {
+                                                                            state.set_value(&formatted_body, _window, cx);
+                                                                        });
+                                                                        this.body_state.raw_content_xml.update(cx, |state, cx| {
+                                                                            state.set_value(body_content, _window, cx);
+                                                                        });
+                                                                        this.body_state.raw_content_text.update(cx, |state, cx| {
+                                                                            state.set_value(body_content, _window, cx);
+                                                                        });
+                                                                        this.body_state.raw_content_html.update(cx, |state, cx| {
+                                                                            state.set_value(body_content, _window, cx);
+                                                                        });
+                                                                    }
+
+                                                                    // 解析并加载请求headers
+                                                                    if let Some(ref headers_text) = entry_clone.headers {
+                                                                        this.headers.clear();
+                                                                        for line in headers_text.lines() {
+                                                                            if let Some(colon_pos) = line.find(':') {
+                                                                                let key = line[..colon_pos].trim().to_string();
+                                                                                let value = line[colon_pos + 1..].trim().to_string();
+                                                                                if !key.is_empty() {
+                                                                                    this.headers.push(HeaderEntry::new(_window, cx));
+                                                                                    let len = this.headers.len();
+                                                                                    let header = &mut this.headers[len - 1];
+                                                                                    header.key.update(cx, |state, cx| {
+                                                                                        state.set_value(&key, _window, cx);
+                                                                                    });
+                                                                                    header.value.update(cx, |state, cx| {
+                                                                                        state.set_value(&value, _window, cx);
+                                                                                    });
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+
+                                                                    // 解析URL参数
+                                                                    if let Some(query_start) = entry_url.find('?') {
+                                                                        let query_string = &entry_url[query_start + 1..];
+                                                                        for param in query_string.split('&') {
+                                                                            if let Some(eq_pos) = param.find('=') {
+                                                                                let key = urlencoding::decode(&param[..eq_pos]).map(|s| s.to_string()).unwrap_or_else(|_| param[..eq_pos].to_string());
+                                                                                let value = urlencoding::decode(&param[eq_pos + 1..]).map(|s| s.to_string()).unwrap_or_else(|_| param[eq_pos + 1..].to_string());
+                                                                                let key_entity = cx.new(|cx| InputState::new(_window, cx).default_value(&key));
+                                                                                let value_entity = cx.new(|cx| InputState::new(_window, cx).default_value(&value));
+                                                                                this.params.push(ParamEntry {
+                                                                                    key: key_entity,
+                                                                                    value: value_entity,
+                                                                                    enabled: true,
+                                                                                });
+                                                                            }
+                                                                        }
+                                                                    }
+
                                                                     if let Some(status) = entry_clone.response_status {
                                                                         let resp_body = entry_response_body.clone().unwrap_or_default();
                                                                         let resp_headers: std::collections::HashMap<String, String> = entry_response_headers.as_ref().and_then(|h| serde_json::from_str(h).ok()).unwrap_or_default();
@@ -1615,6 +1680,7 @@ impl Render for MainView {
 
                                         div()
                                             .h(px(40.0))
+                                            .w(px(130.0))
                                             .pl_3()
                                             .pr_1()
                                             .flex()
@@ -1901,13 +1967,14 @@ impl Render for MainView {
                                                         .py_1()
                                                         .child(
                                                             Button::new("add-param")
+                                                                .min_w(px(100.0))
                                                                 .px_2()
                                                                 .py_1()
                                                                 .text_sm()
                                                                 .icon(IconName::Plus)
                                                                 .text_color(rgb(0x3b82f6))
                                                                 .bg(rgb(0x1e1e1e))
-                                                                .label("Add parameter")
+                                                                .label(self.t("ui.add_param"))
                                                                 .on_click(cx.listener(|this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                                     this.add_param(_window, cx);
                                                                 }))
@@ -2001,13 +2068,14 @@ impl Render for MainView {
                                                         .py_1()
                                                         .child(
                                                             Button::new("add-header")
+                                                                .min_w(px(100.0))
                                                                 .px_2()
                                                                 .py_1()
                                                                 .text_sm()
                                                                 .icon(IconName::Plus)
                                                                 .text_color(rgb(0x3b82f6))
                                                                 .bg(rgb(0x1e1e1e))
-                                                                .label("Add Header")
+                                                                .label(self.t("ui.add_header"))
                                                                 .on_click(cx.listener(|this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                                     this.add_header(_window, cx);
                                                                 }))
@@ -2036,6 +2104,7 @@ impl Render for MainView {
                                                                     div()
                                                                         .text_sm()
                                                                         .cursor_pointer()
+                                                                        .min_w(px(70.0))
                                                                         .px_2()
                                                                         .py_1()
                                                                         .rounded_sm()
@@ -2044,10 +2113,11 @@ impl Render for MainView {
                                                                         .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                                             this.set_body_type(BodyType::None.to_index(), cx);
                                                                         }))
-                                                                        .child("none"),
+                                                                        .child(self.t("ui.none")),
                                                                     div()
                                                                         .text_sm()
                                                                         .cursor_pointer()
+                                                                        .min_w(px(70.0))
                                                                         .px_2()
                                                                         .py_1()
                                                                         .rounded_sm()
@@ -2056,10 +2126,11 @@ impl Render for MainView {
                                                                         .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                                             this.set_body_type(BodyType::FormData.to_index(), cx);
                                                                         }))
-                                                                        .child("form-data"),
+                                                                        .child(self.t("ui.form_data")),
                                                                     div()
                                                                         .text_sm()
                                                                         .cursor_pointer()
+                                                                        .min_w(px(130.0))
                                                                         .px_2()
                                                                         .py_1()
                                                                         .rounded_sm()
@@ -2068,10 +2139,11 @@ impl Render for MainView {
                                                                         .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                                             this.set_body_type(BodyType::UrlEncoded.to_index(), cx);
                                                                         }))
-                                                                        .child("x-www-form-urlencoded"),
+                                                                        .child(self.t("ui.url_encoded")),
                                                                     div()
                                                                         .text_sm()
                                                                         .cursor_pointer()
+                                                                        .min_w(px(70.0))
                                                                         .px_2()
                                                                         .py_1()
                                                                         .rounded_sm()
@@ -2080,10 +2152,11 @@ impl Render for MainView {
                                                                         .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                                             this.set_body_type(BodyType::Raw.to_index(), cx);
                                                                         }))
-                                                                        .child("raw"),
+                                                                        .child(self.t("ui.raw")),
                                                                     div()
                                                                         .text_sm()
                                                                         .cursor_pointer()
+                                                                        .min_w(px(70.0))
                                                                         .px_2()
                                                                         .py_1()
                                                                         .rounded_sm()
@@ -2092,7 +2165,7 @@ impl Render for MainView {
                                                                         .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                                             this.set_body_type(BodyType::Binary.to_index(), cx);
                                                                         }))
-                                                                        .child("binary"),
+                                                                        .child(self.t("ui.binary")),
                                                                 ]),
                                                         ]),
                                                     // Body 内容
@@ -2400,13 +2473,14 @@ impl Render for MainView {
                                                                     .py_1()
                                                                     .child(
                                                                         Button::new("add-formdata")
+                                                                            .min_w(px(120.0))
                                                                             .px_2()
                                                                             .py_1()
                                                                             .text_sm()
                                                                             .icon(IconName::Plus)
                                                                             .text_color(rgb(0x3b82f6))
                                                                             .bg(rgb(0x1e1e1e))
-                                                                            .label("Add form data")
+                                                                            .label(self.t("ui.add_form_data"))
                                                                             .on_click(cx.listener(|this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                                                 this.add_form_data_entry(_window, cx);
                                                                             }))
@@ -2499,13 +2573,14 @@ impl Render for MainView {
                                                                     .py_1()
                                                                     .child(
                                                                         Button::new("add-urlencoded")
+                                                                            .min_w(px(130.0))
                                                                             .px_2()
                                                                             .py_1()
                                                                             .text_sm()
                                                                             .icon(IconName::Plus)
                                                                             .text_color(rgb(0x3b82f6))
                                                                             .bg(rgb(0x1e1e1e))
-                                                                            .label("Add URL-encoded")
+                                                                            .label(self.t("ui.add_url_encoded"))
                                                                             .on_click(cx.listener(|this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                                                 this.add_urlencoded_entry(_window, cx);
                                                                             }))
@@ -2539,6 +2614,7 @@ impl Render for MainView {
                                                                     div()
                                                                         .text_sm()
                                                                         .cursor_pointer()
+                                                                        .min_w(px(80.0))
                                                                         .px_2()
                                                                         .py_1()
                                                                         .rounded_sm()
@@ -2547,10 +2623,11 @@ impl Render for MainView {
                                                                         .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                                             this.set_auth_type(AuthType::NoAuth.to_index(), _window, cx);
                                                                         }))
-                                                                        .child("No Auth"),
+                                                                        .child(self.t("ui.no_auth")),
                                                                     div()
                                                                         .text_sm()
                                                                         .cursor_pointer()
+                                                                        .min_w(px(80.0))
                                                                         .px_2()
                                                                         .py_1()
                                                                         .rounded_sm()
@@ -2559,10 +2636,11 @@ impl Render for MainView {
                                                                         .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                                             this.set_auth_type(AuthType::BearerToken.to_index(), _window, cx);
                                                                         }))
-                                                                        .child("Bearer Token"),
+                                                                        .child(self.t("ui.bearer_token")),
                                                                     div()
                                                                         .text_sm()
                                                                         .cursor_pointer()
+                                                                        .min_w(px(80.0))
                                                                         .px_2()
                                                                         .py_1()
                                                                         .rounded_sm()
@@ -2571,10 +2649,11 @@ impl Render for MainView {
                                                                         .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                                             this.set_auth_type(AuthType::BasicAuth.to_index(), _window, cx);
                                                                         }))
-                                                                        .child("Basic Auth"),
+                                                                        .child(self.t("ui.basic_auth")),
                                                                     div()
                                                                         .text_sm()
                                                                         .cursor_pointer()
+                                                                        .min_w(px(80.0))
                                                                         .px_2()
                                                                         .py_1()
                                                                         .rounded_sm()
@@ -2583,7 +2662,7 @@ impl Render for MainView {
                                                                         .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                                             this.set_auth_type(AuthType::ApiKey.to_index(), _window, cx);
                                                                         }))
-                                                                        .child("API Key"),
+                                                                        .child(self.t("ui.api_key")),
                                                                 ]),
                                                         ]),
                                                     // Auth 内容
@@ -2689,6 +2768,7 @@ impl Render for MainView {
                                                                             div()
                                                                                 .text_sm()
                                                                                 .cursor_pointer()
+                                                                                .min_w(px(70.0))
                                                                                 .px_2()
                                                                                 .py_1()
                                                                                 .rounded_sm()
@@ -2697,10 +2777,11 @@ impl Render for MainView {
                                                                                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                                                     this.toggle_api_key_location(cx);
                                                                                 }))
-                                                                                .child("Header"),
+                                                                                .child(self.t("ui.header")),
                                                                             div()
                                                                                 .text_sm()
                                                                                 .cursor_pointer()
+                                                                                .min_w(px(70.0))
                                                                                 .px_2()
                                                                                 .py_1()
                                                                                 .rounded_sm()
@@ -2709,7 +2790,7 @@ impl Render for MainView {
                                                                                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                                                     this.toggle_api_key_location(cx);
                                                                                 }))
-                                                                                .child("Query"),
+                                                                                .child(self.t("ui.query")),
                                                                         ]),
                                                                 ])
                                                         }
@@ -2949,6 +3030,7 @@ impl Render for MainView {
                                                                 .gap_2()
                                                                 .children([
                                                                     Button::new("pretty")
+                                                                        .min_w(px(70.0))
                                                                         .label(self.t("ui.pretty"))
                                                                         .small()
                                                                         .px_3()
@@ -2962,6 +3044,7 @@ impl Render for MainView {
                                                                             cx.notify();
                                                                         })),
                                                                     Button::new("raw")
+                                                                        .min_w(px(70.0))
                                                                         .label(self.t("ui.raw"))
                                                                         .small()
                                                                         .px_3()
@@ -2975,6 +3058,7 @@ impl Render for MainView {
                                                                             cx.notify();
                                                                         })),
                                                                     Button::new("preview")
+                                                                        .min_w(px(70.0))
                                                                         .label(self.t("ui.preview"))
                                                                         .small()
                                                                         .px_3()
@@ -3107,8 +3191,8 @@ impl Render for MainView {
                                                                                         .child(
                                                                                             Input::new(&self.response_input)
                                                                                                 .w_full()
-                                                                                                .h_full(),
-                                                                                        ),
+                                                                                                .h_full()
+                                                                                                                                                        ),
                                                                                 )
                                                                             } else {
                                                                                 None
@@ -3121,8 +3205,8 @@ impl Render for MainView {
                                                                                         .child(
                                                                                             Input::new(&self.response_xml_input)
                                                                                                 .w_full()
-                                                                                                .h_full(),
-                                                                                        ),
+                                                                                                .h_full()
+                                                                                                                                                        ),
                                                                                 )
                                                                             } else {
                                                                                 None
@@ -3135,8 +3219,8 @@ impl Render for MainView {
                                                                                         .child(
                                                                                             Input::new(&self.response_text_input)
                                                                                                 .w_full()
-                                                                                                .h_full(),
-                                                                                        ),
+                                                                                                .h_full()
+                                                                                                                                                        ),
                                                                                 )
                                                                             } else {
                                                                                 None
@@ -3149,8 +3233,8 @@ impl Render for MainView {
                                                                                         .child(
                                                                                             Input::new(&self.response_html_input)
                                                                                                 .w_full()
-                                                                                                .h_full(),
-                                                                                        ),
+                                                                                                .h_full()
+                                                                                                                                                        ),
                                                                                 )
                                                                             } else {
                                                                                 None
