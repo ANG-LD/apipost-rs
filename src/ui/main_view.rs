@@ -1367,21 +1367,28 @@ impl Render for MainView {
                                 // 侧边栏内容
                                 if !self.sidebar_collapsed {
                                     div()
-                                        .flex_1()
                                         .flex()
-                                        .flex_col()
+                                        .flex_1()
+                                        .h(px(600.0))
                                         .overflow_y_hidden()
                                         .children([
                                             if sidebar_tab == SidebarTab::History {
                                                 if history.is_empty() {
-                                                    div().p_4().text_sm().text_color(rgb(0x666666))
+                                                    div()
+                                                        .id("history-empty")
+                                                        .p_4()
+                                                        .text_sm()
+                                                        .text_color(rgb(0x666666))
                                                         .child("No history yet")
                                                 } else {
                                                     div()
+                                                        .id("history-list")
                                                         .flex_col()
+                                                        .flex_1()
                                                         .gap_1()
+                                                        .overflow_y_scroll()
+                                                        .min_h(px(0.0))
                                                         .p_2()
-                                                        .overflow_y_hidden()
                                                         .children(history.iter().map(|entry| {
                                                             let method_clr = method_color(&entry.method);
                                                             let entry_url = entry.url.clone();
@@ -1399,17 +1406,14 @@ impl Render for MainView {
                                                                 .p_2()
                                                                 .rounded_md()
                                                                 .cursor_pointer()
-                                                                .hover(|s| s.bg(rgb(0x2d2d2d)))
-                                                                .bg(rgb(0x252525))
+                                                                .hover(|s| s.bg(rgb(0x2d2d2d))).bg(rgb(0x252525))
                                                                 .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
-                                                                    // 更新 URL 输入框
                                                                     this.url = entry_url.clone();
                                                                     this.is_importing_curl = true;
                                                                     let url_str = entry_url.clone();
                                                                     this.url_input.update(cx, |state, cx| {
                                                                         state.set_value(&url_str, _window, cx);
                                                                     });
-                                                                    // 更新方法选择器
                                                                     this.method = entry_method.clone();
                                                                     let method_upper = entry_method.to_uppercase();
                                                                     let method_idx = ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]
@@ -1421,7 +1425,6 @@ impl Render for MainView {
                                                                         state.set_selected_index(idx_path, _window, cx);
                                                                     });
                                                                     this.is_importing_curl = false;
-                                                                    // 加载响应数据到 UI 组件
                                                                     if let Some(status) = entry_clone.response_status {
                                                                         let resp_body = entry_response_body.clone().unwrap_or_default();
                                                                         let resp_headers: std::collections::HashMap<String, String> = entry_response_headers.as_ref().and_then(|h| serde_json::from_str(h).ok()).unwrap_or_default();
@@ -1434,9 +1437,7 @@ impl Render for MainView {
                                                                             size_bytes: entry_response_size.unwrap_or(0),
                                                                         };
                                                                         this.response = Some(response);
-                                                                        // 检测响应格式
                                                                         this.response_raw_format = RawFormat::detect(content_type.as_deref(), &resp_body);
-                                                                        // 格式化 JSON
                                                                         let json_body = RawFormat::Json.format_body(&resp_body);
                                                                         this.response_input.update(cx, |state, cx| {
                                                                             state.set_value(&json_body, _window, cx);
@@ -1474,9 +1475,19 @@ impl Render for MainView {
                                                         }))
                                                 }
                                             } else if sidebar_tab == SidebarTab::Collections {
-                                                div().p_2().text_sm().text_color(rgb(0xa0a0a0)).child("Collection 1")
+                                                div()
+                                                    .id("sidebar-collections")
+                                                    .p_2()
+                                                    .text_sm()
+                                                    .text_color(rgb(0xa0a0a0))
+                                                    .child("Collection 1")
                                             } else {
-                                                div().p_2().text_sm().text_color(rgb(0xa0a0a0)).child("Environments")
+                                                div()
+                                                    .id("sidebar-environments")
+                                                    .p_2()
+                                                    .text_sm()
+                                                    .text_color(rgb(0xa0a0a0))
+                                                    .child("Environments")
                                             },
                                         ])
                                 } else {
