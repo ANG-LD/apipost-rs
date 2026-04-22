@@ -86,11 +86,28 @@ impl I18nManager {
         map.insert("request.body".to_string(), "请求体".to_string());
         map.insert("request.params".to_string(), "参数".to_string());
         map.insert("request.auth".to_string(), "认证".to_string());
+        map.insert("request.pre_request".to_string(), "预请求".to_string());
+        map.insert("request.tests".to_string(), "测试".to_string());
+        map.insert("request.settings".to_string(), "设置".to_string());
+        map.insert("ui.key".to_string(), "键".to_string());
+        map.insert("ui.value".to_string(), "值".to_string());
+        map.insert("ui.send".to_string(), "发送".to_string());
+        map.insert("ui.sending".to_string(), "发送中...".to_string());
+        map.insert("ui.no_history".to_string(), "暂无历史记录".to_string());
+        map.insert("ui.json".to_string(), "JSON".to_string());
+        map.insert("ui.xml".to_string(), "XML".to_string());
+        map.insert("ui.text".to_string(), "Text".to_string());
+        map.insert("ui.html".to_string(), "HTML".to_string());
+        map.insert("ui.pretty".to_string(), "格式化".to_string());
+        map.insert("ui.raw".to_string(), "原始".to_string());
+        map.insert("ui.preview".to_string(), "预览".to_string());
 
         // 响应
         map.insert("response.title".to_string(), "响应".to_string());
         map.insert("response.body".to_string(), "响应体".to_string());
         map.insert("response.headers".to_string(), "响应头".to_string());
+        map.insert("response.cookies".to_string(), "Cookies".to_string());
+        map.insert("response.test_results".to_string(), "测试结果".to_string());
         map.insert("response.status".to_string(), "状态码".to_string());
         map.insert("response.time".to_string(), "响应时间".to_string());
         map.insert("response.size".to_string(), "响应大小".to_string());
@@ -154,6 +171,7 @@ impl I18nManager {
         map.insert("sidebar.collections".to_string(), "收藏".to_string());
         map.insert("sidebar.history".to_string(), "历史".to_string());
         map.insert("sidebar.env".to_string(), "环境".to_string());
+        map.insert("sidebar.new_request".to_string(), "新建请求".to_string());
 
         map
     }
@@ -196,11 +214,28 @@ impl I18nManager {
         map.insert("request.body".to_string(), "Body".to_string());
         map.insert("request.params".to_string(), "Params".to_string());
         map.insert("request.auth".to_string(), "Auth".to_string());
+        map.insert("request.pre_request".to_string(), "Pre-request".to_string());
+        map.insert("request.tests".to_string(), "Tests".to_string());
+        map.insert("request.settings".to_string(), "Settings".to_string());
+        map.insert("ui.key".to_string(), "Key".to_string());
+        map.insert("ui.value".to_string(), "Value".to_string());
+        map.insert("ui.send".to_string(), "Send".to_string());
+        map.insert("ui.sending".to_string(), "Sending...".to_string());
+        map.insert("ui.no_history".to_string(), "No history yet".to_string());
+        map.insert("ui.json".to_string(), "JSON".to_string());
+        map.insert("ui.xml".to_string(), "XML".to_string());
+        map.insert("ui.text".to_string(), "Text".to_string());
+        map.insert("ui.html".to_string(), "HTML".to_string());
+        map.insert("ui.pretty".to_string(), "Pretty".to_string());
+        map.insert("ui.raw".to_string(), "Raw".to_string());
+        map.insert("ui.preview".to_string(), "Preview".to_string());
 
         // Response
         map.insert("response.title".to_string(), "Response".to_string());
         map.insert("response.body".to_string(), "Body".to_string());
         map.insert("response.headers".to_string(), "Headers".to_string());
+        map.insert("response.cookies".to_string(), "Cookies".to_string());
+        map.insert("response.test_results".to_string(), "Test Results".to_string());
         map.insert("response.status".to_string(), "Status".to_string());
         map.insert("response.time".to_string(), "Time".to_string());
         map.insert("response.size".to_string(), "Size".to_string());
@@ -264,6 +299,7 @@ impl I18nManager {
         map.insert("sidebar.collections".to_string(), "Collections".to_string());
         map.insert("sidebar.history".to_string(), "History".to_string());
         map.insert("sidebar.env".to_string(), "Environment".to_string());
+        map.insert("sidebar.new_request".to_string(), "New Request".to_string());
 
         map
     }

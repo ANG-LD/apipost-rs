@@ -180,6 +180,46 @@ pub struct MainView {
 }
 
 impl MainView {
+    /// 获取翻译文本
+    fn t(&self, key: &str) -> String {
+        self.app_state.i18n.get(key)
+    }
+
+    /// 创建构建器标签页按钮（带i18n支持）
+    fn builder_tab_button(&self, cx: &Context<Self>, label_key: &str, tab: BuilderTab, current_tab: BuilderTab, id: impl Into<ElementId>) -> impl IntoElement {
+        let is_active = current_tab == tab;
+        div()
+            .id(id)
+            .min_w(px(80.0))
+            .px_4()
+            .py_2()
+            .text_sm()
+            .cursor_pointer()
+            .text_color(if is_active { rgb(0xffffff) } else { rgb(0x888888) })
+            .bg(if is_active { rgb(0x2d2d2d) } else { rgb(0x1e1e1e) })
+            .on_click(cx.listener(move |this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                this.set_builder_tab(tab, cx);
+            }))
+            .child(self.t(label_key))
+    }
+
+    /// 创建响应标签页按钮（带i18n支持）
+    fn response_tab_button(&self, cx: &Context<Self>, label_key: &str, tab: ResponseTab, current_tab: ResponseTab, id: impl Into<ElementId>) -> impl IntoElement {
+        let is_active = current_tab == tab;
+        div()
+            .id(id)
+            .min_w(px(70.0))
+            .px_3()
+            .py_2()
+            .text_sm()
+            .cursor_pointer()
+            .text_color(if is_active { rgb(0xffffff) } else { rgb(0x888888) })
+            .on_click(cx.listener(move |this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                this.set_response_tab(tab, cx);
+            }))
+            .child(self.t(label_key))
+    }
+
     /// 创建新的主视图
     pub fn new(app_state: Arc<crate::app::AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         // 加载历史记录
@@ -341,6 +381,9 @@ impl MainView {
         // 创建响应体Raw格式选择器
         let response_raw_format_select = BodyState::create_raw_format_select(window, cx);
 
+        // 获取默认标签页名称
+        let default_tab_name = app_state.i18n.get("sidebar.new_request");
+
         Self {
             app_state,
             method: "GET".to_string(),
@@ -349,7 +392,7 @@ impl MainView {
                 id: 1,
                 method: "GET".to_string(),
                 url: "https://httpbin.org/get".to_string(),
-                name: "New Request".to_string(),
+                name: default_tab_name,
             }],
             active_tab: 0,
             response: None,
@@ -1043,7 +1086,7 @@ impl MainView {
             id,
             method: "GET".to_string(),
             url: String::new(),
-            name: "New Request".to_string(),
+            name: self.t("sidebar.new_request"),
         });
         let new_idx = self.request_tabs.len() - 1;
         self.active_tab = new_idx;
@@ -1112,7 +1155,7 @@ impl MainView {
             self.request_tabs[self.active_tab].url = url;
             self.request_tabs[self.active_tab].method = method;
             self.request_tabs[self.active_tab].name = if short.is_empty() {
-                "New Request".to_string()
+                self.t("sidebar.new_request")
             } else {
                 short
             };
@@ -1148,31 +1191,15 @@ impl MainView {
     }
 }
 
-// ====== 构建器标签页按钮宏 ======
-macro_rules! builder_tab_button {
-    ($cx:expr, $label:expr, $tab:expr, $builder_tab:expr, $id:expr) => {{
-        let is_active = $builder_tab == $tab;
-        div()
-            .id($id)
-            .px_4()
-            .py_2()
-            .text_sm()
-            .cursor_pointer()
-            .text_color(if is_active { rgb(0xffffff) } else { rgb(0x888888) })
-            .bg(if is_active { rgb(0x2d2d2d) } else { rgb(0x1e1e1e) })
-            .on_click($cx.listener(move |this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
-                this.set_builder_tab($tab, cx);
-            }))
-            .child($label)
-    }};
-}
-
 // ====== 响应标签页按钮宏 ======
 macro_rules! response_tab_button {
     ($cx:expr, $label:expr, $tab:expr, $response_tab:expr, $id:expr) => {{
         let is_active = $response_tab == $tab;
         div()
             .id($id)
+            .min_w(px(70.0))
+            .px_3()
+            .py_2()
             .text_sm()
             .cursor_pointer()
             .text_color(if is_active { rgb(0xffffff) } else { rgb(0x888888) })
@@ -1211,10 +1238,16 @@ impl Render for MainView {
                 let is_active = i == active_tab;
                 let method_clr = method_color(&tab.method);
                 let tab_method = tab.method.clone();
-                let tab_name = tab.name.clone();
+                // 如果是默认标签名称，使用i18n
+                let tab_display_name = if tab.name == "新建请求" || tab.name == "New Request" {
+                    self.t("sidebar.new_request")
+                } else {
+                    tab.name.clone()
+                };
 
                 div()
                     .h(px(40.0))
+                    .min_w(px(120.0))
                     .pl_3()
                     .pr_1()
                     .flex()
@@ -1246,7 +1279,7 @@ impl Render for MainView {
                                         .max_w(px(90.0))
                                         .overflow_hidden()
                                         .text_ellipsis()
-                                        .child(tab_name),
+                                        .child(tab_display_name.clone()),
                                 ]),
                             div()
                                 .w(px(20.0))
@@ -1277,7 +1310,7 @@ impl Render for MainView {
                                         .max_w(px(90.0))
                                         .overflow_hidden()
                                         .text_ellipsis()
-                                        .child(tab_name),
+                                        .child(tab_display_name.clone()),
                                 ]),
                         ]
                     })
@@ -1311,10 +1344,37 @@ impl Render for MainView {
                                     .h(px(48.0))
                                     .flex()
                                     .items_center()
-                                    .justify_center()
+                                    .justify_between()
+                                    .px_3()
                                     .border_b(px(1.0))
                                     .border_color(rgb(0x333333))
-                                    .child(div().text_color(rgb(0xf97316)).font_semibold().child("ApiPost")),
+                                    .children([
+                                        div().text_color(rgb(0xf97316)).font_semibold().child("ApiPost"),
+                                        // 语言切换按钮
+                                        div()
+                                            .h(px(28.0))
+                                            .w(px(40.0))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .rounded_md()
+                                            .cursor_pointer()
+                                            .bg(rgb(0x2a2a2a))
+                                            .text_color(rgb(0xe0e0e0))
+                                            .text_xs()
+                                            .font_semibold()
+                                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                let current_lang = this.app_state.config.general.language.clone();
+                                                let new_lang = if current_lang == "zh-CN" { "en-US" } else { "zh-CN" };
+                                                if let Some(app_state_mut) = Arc::get_mut(&mut this.app_state) {
+                                                    app_state_mut.switch_language(new_lang);
+                                                } else {
+                                                    log::warn!("无法切换语言: AppState被多个引用共享");
+                                                }
+                                                cx.notify();
+                                            }))
+                                            .child(if self.app_state.config.general.language == "zh-CN" { "中文" } else { "EN" }),
+                                    ]),
                                 // 标签页按钮
                                 div()
                                     .flex()
@@ -1379,7 +1439,7 @@ impl Render for MainView {
                                                         .p_4()
                                                         .text_sm()
                                                         .text_color(rgb(0x666666))
-                                                        .child("No history yet")
+                                                        .child(self.t("ui.no_history"))
                                                 } else {
                                                     div()
                                                         .id("history-list")
@@ -1487,7 +1547,7 @@ impl Render for MainView {
                                                     .p_2()
                                                     .text_sm()
                                                     .text_color(rgb(0xa0a0a0))
-                                                    .child("Environments")
+                                                    .child(self.t("sidebar.env"))
                                             },
                                         ])
                                 } else {
@@ -1545,7 +1605,12 @@ impl Render for MainView {
                                         let is_active = i == active_tab;
                                         let method_clr = method_color(&tab.method);
                                         let tab_method = tab.method.clone();
-                                        let tab_name = tab.name.clone();
+                                        // 如果是默认标签名称，使用i18n
+                                        let tab_display_name = if tab.name == "新建请求" || tab.name == "New Request" {
+                                            self.t("sidebar.new_request")
+                                        } else {
+                                            tab.name.clone()
+                                        };
                                         let show_close = show_close;
 
                                         div()
@@ -1584,7 +1649,7 @@ impl Render for MainView {
                                                                 .max_w(px(90.0))
                                                                 .overflow_hidden()
                                                                 .text_ellipsis()
-                                                                .child(tab_name),
+                                                                .child(tab_display_name.clone()),
                                                         ]),
                                                     div()
                                                         .w(px(20.0))
@@ -1625,7 +1690,7 @@ impl Render for MainView {
                                                                 .max_w(px(90.0))
                                                                 .overflow_hidden()
                                                                 .text_ellipsis()
-                                                                .child(tab_name),
+                                                                .child(tab_display_name.clone()),
                                                         ]),
                                                 ]
                                             })
@@ -1717,7 +1782,7 @@ impl Render for MainView {
                                                         } else {
                                                             IconName::Play
                                                         })
-                                                        .label(if is_loading { "Sending" } else { "Send" })
+                                                        .label(if is_loading { self.t("ui.sending") } else { self.t("ui.send") })
                                                         .flex_none()
                                                         .on_click(cx.listener(|this, _: &gpui::ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                             let url = this.url_input.read(cx).value().to_string();
@@ -1739,13 +1804,13 @@ impl Render for MainView {
                                             .border_b(px(1.0))
                                             .border_color(rgb(0x333333))
                                             .children([
-                                                builder_tab_button!(cx, "Params", BuilderTab::Params, builder_tab, "builder-params"),
-                                                builder_tab_button!(cx, "Authorization", BuilderTab::Authorization, builder_tab, "builder-auth"),
-                                                builder_tab_button!(cx, "Headers", BuilderTab::Headers, builder_tab, "builder-headers"),
-                                                builder_tab_button!(cx, "Body", BuilderTab::Body, builder_tab, "builder-body"),
-                                                builder_tab_button!(cx, "Pre-request", BuilderTab::PreRequest, builder_tab, "builder-pre-request"),
-                                                builder_tab_button!(cx, "Tests", BuilderTab::Tests, builder_tab, "builder-tests"),
-                                                builder_tab_button!(cx, "Settings", BuilderTab::Settings, builder_tab, "builder-settings"),
+                                                self.builder_tab_button(cx, "request.params", BuilderTab::Params, builder_tab, "builder-params"),
+                                                self.builder_tab_button(cx, "request.auth", BuilderTab::Authorization, builder_tab, "builder-auth"),
+                                                self.builder_tab_button(cx, "request.headers", BuilderTab::Headers, builder_tab, "builder-headers"),
+                                                self.builder_tab_button(cx, "request.body", BuilderTab::Body, builder_tab, "builder-body"),
+                                                self.builder_tab_button(cx, "request.pre_request", BuilderTab::PreRequest, builder_tab, "builder-pre-request"),
+                                                self.builder_tab_button(cx, "request.tests", BuilderTab::Tests, builder_tab, "builder-tests"),
+                                                self.builder_tab_button(cx, "request.settings", BuilderTab::Settings, builder_tab, "builder-settings"),
                                             ]),
                                         // 各标签页内容
                                         if builder_tab == BuilderTab::Params {
@@ -1764,8 +1829,8 @@ impl Render for MainView {
                                                         .mb_1()
                                                         .children([
                                                             div().w(px(30.0)).text_xs().text_color(rgb(0x888888)).child(""),
-                                                            div().flex_1().text_xs().text_color(rgb(0x888888)).child("Key"),
-                                                            div().flex_1().text_xs().text_color(rgb(0x888888)).child("Value"),
+                                                            div().flex_1().text_xs().text_color(rgb(0x888888)).child(self.t("ui.key")),
+                                                            div().flex_1().text_xs().text_color(rgb(0x888888)).child(self.t("ui.value")),
                                                             div().w(px(30.0)).text_xs().text_color(rgb(0x888888)).child(""),
                                                         ]),
                                                     // 参数行
@@ -1864,8 +1929,8 @@ impl Render for MainView {
                                                         .mb_1()
                                                         .children([
                                                             div().w(px(30.0)).text_xs().text_color(rgb(0x888888)).child(""),
-                                                            div().flex_1().text_xs().text_color(rgb(0x888888)).child("Key"),
-                                                            div().flex_1().text_xs().text_color(rgb(0x888888)).child("Value"),
+                                                            div().flex_1().text_xs().text_color(rgb(0x888888)).child(self.t("ui.key")),
+                                                            div().flex_1().text_xs().text_color(rgb(0x888888)).child(self.t("ui.value")),
                                                             div().w(px(30.0)).text_xs().text_color(rgb(0x888888)).child(""),
                                                         ]),
                                                     // Header 行
@@ -2059,6 +2124,7 @@ impl Render for MainView {
                                                                                 div()
                                                                                     .text_sm()
                                                                                     .cursor_pointer()
+                                                                                    .min_w(px(50.0))
                                                                                     .px_2()
                                                                                     .py_px()
                                                                                     .rounded_sm()
@@ -2067,10 +2133,11 @@ impl Render for MainView {
                                                                                     .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                                                         this.set_raw_format(RawFormat::Json.to_index(), cx);
                                                                                     }))
-                                                                                    .child("JSON"),
+                                                                                    .child(self.t("ui.json")),
                                                                                 div()
                                                                                     .text_sm()
                                                                                     .cursor_pointer()
+                                                                                    .min_w(px(50.0))
                                                                                     .px_2()
                                                                                     .py_px()
                                                                                     .rounded_sm()
@@ -2079,10 +2146,11 @@ impl Render for MainView {
                                                                                     .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                                                         this.set_raw_format(RawFormat::Xml.to_index(), cx);
                                                                                     }))
-                                                                                    .child("XML"),
+                                                                                    .child(self.t("ui.xml")),
                                                                                 div()
                                                                                     .text_sm()
                                                                                     .cursor_pointer()
+                                                                                    .min_w(px(50.0))
                                                                                     .px_2()
                                                                                     .py_px()
                                                                                     .rounded_sm()
@@ -2091,10 +2159,11 @@ impl Render for MainView {
                                                                                     .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                                                         this.set_raw_format(RawFormat::Text.to_index(), cx);
                                                                                     }))
-                                                                                    .child("Text"),
+                                                                                    .child(self.t("ui.text")),
                                                                                 div()
                                                                                     .text_sm()
                                                                                     .cursor_pointer()
+                                                                                    .min_w(px(50.0))
                                                                                     .px_2()
                                                                                     .py_px()
                                                                                     .rounded_sm()
@@ -2103,7 +2172,7 @@ impl Render for MainView {
                                                                                     .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                                                         this.set_raw_format(RawFormat::Html.to_index(), cx);
                                                                                     }))
-                                                                                    .child("HTML"),
+                                                                                    .child(self.t("ui.html")),
                                                                             ]),
                                                                     ]),
                                                                 // Raw 编辑器
@@ -2832,10 +2901,10 @@ impl Render for MainView {
                                             .border_b(px(1.0))
                                             .border_color(rgb(0x333333))
                                             .children([
-                                                response_tab_button!(cx, "Body", ResponseTab::Body, response_tab, "response-body"),
-                                                response_tab_button!(cx, "Cookies", ResponseTab::Cookies, response_tab, "response-cookies"),
-                                                response_tab_button!(cx, "Headers", ResponseTab::Headers, response_tab, "response-headers"),
-                                                response_tab_button!(cx, "Test Results", ResponseTab::TestResults, response_tab, "response-test-results"),
+                                                self.response_tab_button(cx, "response.body", ResponseTab::Body, response_tab, "response-body"),
+                                                self.response_tab_button(cx, "response.cookies", ResponseTab::Cookies, response_tab, "response-cookies"),
+                                                self.response_tab_button(cx, "response.headers", ResponseTab::Headers, response_tab, "response-headers"),
+                                                self.response_tab_button(cx, "response.test_results", ResponseTab::TestResults, response_tab, "response-test-results"),
                                             ]),
                                         // 响应内容区
                                         div()
@@ -2880,7 +2949,7 @@ impl Render for MainView {
                                                                 .gap_2()
                                                                 .children([
                                                                     Button::new("pretty")
-                                                                        .label("Pretty")
+                                                                        .label(self.t("ui.pretty"))
                                                                         .small()
                                                                         .px_3()
                                                                         .py_1()
@@ -2893,7 +2962,7 @@ impl Render for MainView {
                                                                             cx.notify();
                                                                         })),
                                                                     Button::new("raw")
-                                                                        .label("Raw")
+                                                                        .label(self.t("ui.raw"))
                                                                         .small()
                                                                         .px_3()
                                                                         .py_1()
@@ -2906,7 +2975,7 @@ impl Render for MainView {
                                                                             cx.notify();
                                                                         })),
                                                                     Button::new("preview")
-                                                                        .label("Preview")
+                                                                        .label(self.t("ui.preview"))
                                                                         .small()
                                                                         .px_3()
                                                                         .py_1()
@@ -2972,6 +3041,7 @@ impl Render for MainView {
                                                                             div()
                                                                                 .text_sm()
                                                                                 .cursor_pointer()
+                                                                                .min_w(px(50.0))
                                                                                 .px_2()
                                                                                 .py_px()
                                                                                 .rounded_sm()
@@ -2980,11 +3050,12 @@ impl Render for MainView {
                                                                                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                                                     this.set_response_raw_format(RawFormat::Json.to_index(), _window, cx);
                                                                                 }))
-                                                                                .child("JSON"),
+                                                                                .child(self.t("ui.json")),
                                                                             // XML 按钮
                                                                             div()
                                                                                 .text_sm()
                                                                                 .cursor_pointer()
+                                                                                .min_w(px(50.0))
                                                                                 .px_2()
                                                                                 .py_px()
                                                                                 .rounded_sm()
@@ -2993,11 +3064,12 @@ impl Render for MainView {
                                                                                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                                                     this.set_response_raw_format(RawFormat::Xml.to_index(), _window, cx);
                                                                                 }))
-                                                                                .child("XML"),
+                                                                                .child(self.t("ui.xml")),
                                                                             // Text 按钮
                                                                             div()
                                                                                 .text_sm()
                                                                                 .cursor_pointer()
+                                                                                .min_w(px(50.0))
                                                                                 .px_2()
                                                                                 .py_px()
                                                                                 .rounded_sm()
@@ -3006,11 +3078,12 @@ impl Render for MainView {
                                                                                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                                                     this.set_response_raw_format(RawFormat::Text.to_index(), _window, cx);
                                                                                 }))
-                                                                                .child("Text"),
+                                                                                .child(self.t("ui.text")),
                                                                             // HTML 按钮
                                                                             div()
                                                                                 .text_sm()
                                                                                 .cursor_pointer()
+                                                                                .min_w(px(50.0))
                                                                                 .px_2()
                                                                                 .py_px()
                                                                                 .rounded_sm()
@@ -3019,7 +3092,7 @@ impl Render for MainView {
                                                                                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                                                     this.set_response_raw_format(RawFormat::Html.to_index(), _window, cx);
                                                                                 }))
-                                                                                .child("HTML"),
+                                                                                .child(self.t("ui.html")),
                                                                         ]),
                                                                     // 响应体内容 - 根据格式显示不同的编辑器
                                                                     div()
