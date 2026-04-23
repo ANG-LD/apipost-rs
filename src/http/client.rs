@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use reqwest::multipart;
 
 /// HTTP客户端管理器
+#[derive(Clone)]
 pub struct HttpClient {
     /// reqwest客户端
     client: Client,

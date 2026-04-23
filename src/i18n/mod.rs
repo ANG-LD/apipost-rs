@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 
 /// 国际化管理器
+#[derive(Clone)]
 pub struct I18nManager {
     /// 当前语言
     language: String,

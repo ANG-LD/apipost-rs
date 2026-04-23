@@ -19,6 +19,7 @@ use gpui::SharedString;
 use std::sync::Arc;
 
 /// 应用状态
+#[derive(Clone)]
 pub struct AppState {
     /// 应用配置
     pub config: AppConfig,
@@ -141,6 +142,17 @@ impl AppState {
             _ => "dark".to_string(),
         };
 
+        self.theme_name = self.config.general.theme.clone().into();
+
+        // 保存配置
+        if let Err(e) = self.config.save() {
+            log::error!("保存配置失败: {}", e);
+        }
+    }
+
+    /// 设置主题
+    pub fn set_theme(&mut self, theme: &str) {
+        self.config.general.theme = theme.to_string();
         self.theme_name = self.config.general.theme.clone().into();
 
         // 保存配置

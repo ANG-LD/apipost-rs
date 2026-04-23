@@ -19,8 +19,9 @@ use gpui_component::select::{Select, SelectState};
 use gpui_component::button::Button;
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::scroll::Scrollable;
-use gpui_component::{Disableable, Icon, IconName, IndexPath, Sizable, StyledExt};
-use std::sync::Arc;
+use gpui_component::{Disableable, Icon, IconName, IndexPath, Sizable, StyledExt, WindowExt};
+use gpui_component::dialog::{Dialog, DialogHeader, DialogTitle};
+use std::sync::{Arc, Mutex};
 use tokio;
 
 /// HTTP方法颜色
@@ -1357,7 +1358,7 @@ impl Render for MainView {
                                     .border_color(rgb(0x333333))
                                     .children([
                                         div().text_color(rgb(0xf97316)).font_semibold().child("ApiPost"),
-                                        // 语言切换按钮
+                                        // 设置按钮
                                         div()
                                             .h(px(28.0))
                                             .w(px(40.0))
@@ -1367,20 +1368,176 @@ impl Render for MainView {
                                             .rounded_md()
                                             .cursor_pointer()
                                             .bg(rgb(0x2a2a2a))
-                                            .text_color(rgb(0xe0e0e0))
-                                            .text_xs()
-                                            .font_semibold()
-                                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
-                                                let current_lang = this.app_state.config.general.language.clone();
-                                                let new_lang = if current_lang == "zh-CN" { "en-US" } else { "zh-CN" };
-                                                if let Some(app_state_mut) = Arc::get_mut(&mut this.app_state) {
-                                                    app_state_mut.switch_language(new_lang);
-                                                } else {
-                                                    log::warn!("无法切换语言: AppState被多个引用共享");
-                                                }
-                                                cx.notify();
-                                            }))
-                                            .child(if self.app_state.config.general.language == "zh-CN" { "中文" } else { "EN" }),
+                                            .child(
+                                                Button::new("open-settings")
+                                                    .icon(IconName::Settings2)
+                                                    .xsmall()
+                                                    .on_click({
+                                                        let app_state = self.app_state.clone();
+                                                        move |_, window, cx| {
+                                                            let current_theme = app_state.config.general.theme.clone();
+                                                            let current_lang = app_state.config.general.language.clone();
+                                                            let dialog_app_state = Arc::new(Mutex::new((*app_state).clone()));
+                                                            let lang_for_ui = current_lang.clone();
+                                                            let theme_for_ui = current_theme.clone();
+                                                            window.open_dialog(cx, move |dialog, _, _| {
+                                                                dialog
+                                                                    .w(px(400.0))
+                                                                    .title("设置 / Settings")
+                                                                    .content({
+                                                                        let lang_for_ui = lang_for_ui.clone();
+                                                                        let theme_for_ui = theme_for_ui.clone();
+                                                                        let app_state_for_click = dialog_app_state.clone();
+                                                                        move |content, _, _| {
+                                                                            content
+                                                                                .child(DialogHeader::new().child(DialogTitle::new().child("设置 / Settings")))
+                                                                                .child(
+                                                                                    gpui::div()
+                                                                                        .p_4()
+                                                                                        .flex_col()
+                                                                                        .gap_4()
+                                                                                        .child(
+                                                                                            gpui::div()
+                                                                                                .flex_col()
+                                                                                                .gap_2()
+                                                                                                .child(gpui::div().text_sm().font_semibold().text_color(rgb(0x666666)).child("语言 / Language"))
+                                                                                                .child(
+                                                                                                    gpui::div()
+                                                                                                        .flex()
+                                                                                                        .gap_2()
+                                                                                                        .child(
+                                                                                                            Button::new("lang-zh")
+                                                                                                                .label("中文")
+                                                                                                                .flex_1()
+                                                                                                                .h(px(36.0))
+                                                                                                                .bg(if lang_for_ui == "zh-CN" { rgb(0x3b82f6) } else { rgb(0x2a2a2a) })
+                                                                                                                .text_color(rgb(0xffffff))
+                                                                                                                .on_click({
+                                                                                                                    let app_state = app_state_for_click.clone();
+                                                                                                                    move |_, _, _| {
+                                                                                                                        if let Ok(mut s) = app_state.lock() {
+                                                                                                                            s.switch_language("zh-CN");
+                                                                                                                        }
+                                                                                                                    }
+                                                                                                                }),
+                                                                                                        )
+                                                                                                        .child(
+                                                                                                            Button::new("lang-en")
+                                                                                                                .label("English")
+                                                                                                                .flex_1()
+                                                                                                                .h(px(36.0))
+                                                                                                                .bg(if lang_for_ui == "en-US" { rgb(0x3b82f6) } else { rgb(0x2a2a2a) })
+                                                                                                                .text_color(rgb(0xffffff))
+                                                                                                                .on_click({
+                                                                                                                    let app_state = app_state_for_click.clone();
+                                                                                                                    move |_, _, _| {
+                                                                                                                        if let Ok(mut s) = app_state.lock() {
+                                                                                                                            s.switch_language("en-US");
+                                                                                                                        }
+                                                                                                                    }
+                                                                                                                }),
+                                                                                                        ),
+                                                                                                ),
+                                                                                        )
+                                                                                        .child(
+                                                                                            gpui::div()
+                                                                                                .flex_col()
+                                                                                                .gap_2()
+                                                                                                .child(gpui::div().text_sm().font_semibold().text_color(rgb(0x666666)).child("主题 / Theme"))
+                                                                                                .child(
+                                                                                                    gpui::div()
+                                                                                                        .flex()
+                                                                                                        .flex_wrap()
+                                                                                                        .gap_2()
+                                                                                                        .child(
+                                                                                                            Button::new("theme-dark")
+                                                                                                                .label("暗色")
+                                                                                                                .min_w(px(80.0))
+                                                                                                                .h(px(36.0))
+                                                                                                                .px_3()
+                                                                                                                .bg(if theme_for_ui == "dark" { rgb(0x3b82f6) } else { rgb(0x2a2a2a) })
+                                                                                                                .text_color(rgb(0xffffff))
+                                                                                                                .on_click({
+                                                                                                                    let app_state = app_state_for_click.clone();
+                                                                                                                    move |_, _, _| {
+                                                                                                                        if let Ok(mut s) = app_state.lock() {
+                                                                                                                            s.set_theme("dark");
+                                                                                                                        }
+                                                                                                                    }
+                                                                                                                }),
+                                                                                                        )
+                                                                                                        .child(
+                                                                                                            Button::new("theme-light")
+                                                                                                                .label("浅色")
+                                                                                                                .min_w(px(80.0))
+                                                                                                                .h(px(36.0))
+                                                                                                                .px_3()
+                                                                                                                .bg(if theme_for_ui == "light" { rgb(0x3b82f6) } else { rgb(0x2a2a2a) })
+                                                                                                                .text_color(rgb(0xffffff))
+                                                                                                                .on_click({
+                                                                                                                    let app_state = app_state_for_click.clone();
+                                                                                                                    move |_, _, _| {
+                                                                                                                        if let Ok(mut s) = app_state.lock() {
+                                                                                                                            s.set_theme("light");
+                                                                                                                        }
+                                                                                                                    }
+                                                                                                                }),
+                                                                                                        )
+                                                                                                        .child(
+                                                                                                            Button::new("theme-sepia")
+                                                                                                                .label("淡黄色")
+                                                                                                                .min_w(px(80.0))
+                                                                                                                .h(px(36.0))
+                                                                                                                .px_3()
+                                                                                                                .bg(if theme_for_ui == "sepia" { rgb(0x3b82f6) } else { rgb(0x2a2a2a) })
+                                                                                                                .text_color(rgb(0xffffff))
+                                                                                                                .on_click({
+                                                                                                                    let app_state = app_state_for_click.clone();
+                                                                                                                    move |_, _, _| {
+                                                                                                                        if let Ok(mut s) = app_state.lock() {
+                                                                                                                            s.set_theme("sepia");
+                                                                                                                        }
+                                                                                                                    }
+                                                                                                                }),
+                                                                                                        )
+                                                                                                        .child(
+                                                                                                            Button::new("theme-system")
+                                                                                                                .label("跟随系统")
+                                                                                                                .min_w(px(80.0))
+                                                                                                                .h(px(36.0))
+                                                                                                                .px_3()
+                                                                                                                .bg(if theme_for_ui == "system" { rgb(0x3b82f6) } else { rgb(0x2a2a2a) })
+                                                                                                                .text_color(rgb(0xffffff))
+                                                                                                                .on_click({
+                                                                                                                    let app_state = app_state_for_click.clone();
+                                                                                                                    move |_, _, _| {
+                                                                                                                        if let Ok(mut s) = app_state.lock() {
+                                                                                                                            s.set_theme("system");
+                                                                                                                        }
+                                                                                                                    }
+                                                                                                                }),
+                                                                                                        ),
+                                                                                                ),
+                                                                                        ),
+                                                                                )
+                                                                        }
+                                                                    })
+                                                                    .footer(
+                                                                        gpui::div()
+                                                                            .flex()
+                                                                            .justify_end()
+                                                                            .child(
+                                                                                Button::new("close-settings")
+                                                                                    .label("关闭 / Close")
+                                                                                    .on_click(|_, window, cx| {
+                                                                                        window.close_dialog(cx);
+                                                                                    }),
+                                                                            )
+                                                                    )
+                                                            });
+                                                        }
+                                                    }),
+                                            ),
                                     ]),
                                 // 标签页按钮
                                 div()
@@ -1389,7 +1546,7 @@ impl Render for MainView {
                                     .h(px(40.0))
                                     .children([
                                         div()
-                                            .id("sidebar-collections")
+                                            .id("sidebar-collections") // 收藏夹
                                             .w(px(48.0))
                                             .h(px(40.0))
                                             .flex()
@@ -1403,7 +1560,7 @@ impl Render for MainView {
                                             }))
                                             .child(Icon::new(IconName::FolderClosed).small()),
                                         div()
-                                            .id("sidebar-history")
+                                            .id("sidebar-history") // 历史记录
                                             .w(px(48.0))
                                             .h(px(40.0))
                                             .flex()
@@ -1417,7 +1574,7 @@ impl Render for MainView {
                                             }))
                                             .child(Icon::new(IconName::GalleryVerticalEnd).small()),
                                         div()
-                                            .id("sidebar-environments")
+                                            .id("sidebar-environments") // 环境变量
                                             .w(px(48.0))
                                             .h(px(40.0))
                                             .flex()
@@ -1439,7 +1596,7 @@ impl Render for MainView {
                                         .h(px(600.0))
                                         .overflow_y_hidden()
                                         .children([
-                                            if sidebar_tab == SidebarTab::History {
+                                            if sidebar_tab == SidebarTab::History { // 历史记录
                                                 if history.is_empty() {
                                                     div()
                                                         .id("history-empty")
@@ -1451,10 +1608,8 @@ impl Render for MainView {
                                                     div()
                                                         .id("history-list")
                                                         .flex_col()
-                                                        .flex_1()
                                                         .gap_1()
                                                         .overflow_y_scroll()
-                                                        .min_h(px(0.0))
                                                         .p_2()
                                                         .children(history.iter().map(|entry| {
                                                             let method_clr = method_color(&entry.method);
@@ -1599,7 +1754,7 @@ impl Render for MainView {
                                                                 ])
                                                         }))
                                                 }
-                                            } else if sidebar_tab == SidebarTab::Collections {
+                                            } else if sidebar_tab == SidebarTab::Collections { // 收藏夹
                                                 div()
                                                     .id("sidebar-collections")
                                                     .p_2()
@@ -1618,7 +1773,7 @@ impl Render for MainView {
                                 } else {
                                     div().flex_1()
                                 },
-                                // 折叠/展开按钮
+                                // 侧边栏抽屉 折叠/展开按钮
                                 div()
                                     .h(px(32.0))
                                     .flex()
