@@ -5,12 +5,14 @@
 
 use crate::app::environment::EnvironmentManager;
 use anyhow::{Context, Result};
+use flate2::read::GzDecoder;
 use reqwest::{
-    header::{HeaderMap, HeaderName, HeaderValue},
+    header::{HeaderMap, HeaderName, HeaderValue, ACCEPT_ENCODING},
     Client, Method, Proxy,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::Read;
 use std::time::{Duration, Instant};
 use reqwest::multipart;
 
@@ -51,6 +53,9 @@ impl HttpClient {
     /// 创建新的HTTP客户端
     pub fn new(env_manager: EnvironmentManager) -> Result<Self> {
         let client = Client::builder()
+            .no_brotli()
+            .no_gzip()
+            .no_deflate()
             .timeout(Duration::from_secs(30))
             .build()
             .context("创建HTTP客户端失败")?;
@@ -64,6 +69,9 @@ impl HttpClient {
     /// 创建带有自定义超时的HTTP客户端
     pub fn with_timeout(timeout_secs: u64, env_manager: EnvironmentManager) -> Result<Self> {
         let client = Client::builder()
+            .no_brotli()
+            .no_gzip()
+            .no_deflate()
             .timeout(Duration::from_secs(timeout_secs))
             .build()
             .context("创建HTTP客户端失败")?;
@@ -78,6 +86,9 @@ impl HttpClient {
     pub fn with_proxy(proxy_url: &str, env_manager: EnvironmentManager) -> Result<Self> {
         let proxy = Proxy::all(proxy_url).context("代理URL无效")?;
         let client = Client::builder()
+            .no_brotli()
+            .no_gzip()
+            .no_deflate()
             .proxy(proxy)
             .timeout(Duration::from_secs(30))
             .build()
@@ -118,11 +129,18 @@ impl HttpClient {
 
         log::debug!("开始发送请求，使用自定义客户端: {}", use_custom_client);
 
-        let response = if use_custom_client {
+let response = if use_custom_client {
             // 构建自定义客户端
             let mut builder = Client::builder()
+                .no_brotli()
+                .no_gzip()
+                .no_deflate()
                 .timeout(Duration::from_secs(options.timeout_secs))
-                .redirect(if options.follow_redirects { reqwest::redirect::Policy::default() } else { reqwest::redirect::Policy::none() });
+                .redirect(if options.follow_redirects {
+                    reqwest::redirect::Policy::default()
+                } else {
+                    reqwest::redirect::Policy::none()
+                });
 
             if !options.verify_ssl {
                 builder = builder.danger_accept_invalid_certs(true);
@@ -165,30 +183,67 @@ impl HttpClient {
 
         let elapsed = start_time.elapsed();
         let status = response.status().as_u16();
-        let response_headers = response
+        let response_headers: HashMap<String, String> = response
             .headers()
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
             .collect();
 
+        // 解析Set-Cookie头
+        let mut cookies = Vec::new();
+        for (name, value) in &response_headers {
+            if name.to_lowercase() == "set-cookie" {
+                if let Some(cookie) = Cookie::from_set_cookie_header(value) {
+                    cookies.push(cookie);
+                }
+            }
+        }
+
         let body_bytes = response
             .bytes()
             .await
             .context("读取响应体失败")?;
-        let body_text = String::from_utf8_lossy(&body_bytes).to_string();
+
+        // 记录压缩后的大小
+        let compressed_size = body_bytes.len() as i64;
+
+        // 如果是 gzip 压缩数据，先解压用于渲染
+        let is_gzip = body_bytes.len() >= 2 && body_bytes[0] == 0x1f && body_bytes[1] == 0x8b;
+        let (body_text, size_bytes) = if is_gzip {
+            let mut decoder = GzDecoder::new(&body_bytes[..]);
+            let mut decompressed = Vec::new();
+            match decoder.read_to_end(&mut decompressed) {
+                Ok(_) => {
+                    let text = String::from_utf8_lossy(&decompressed).to_string();
+                    (text, compressed_size)  // size_bytes 报告压缩后的大小
+                },
+                Err(_) => {
+                    // 解压失败，返回原始内容
+                    (String::from_utf8_lossy(&body_bytes).to_string(), compressed_size)
+                }
+            }
+        } else {
+            (String::from_utf8_lossy(&body_bytes).to_string(), compressed_size)
+        };
 
         Ok(HttpResponse {
             status,
             headers: response_headers,
             body: body_text,
             time_ms: elapsed.as_millis() as i64,
-            size_bytes: body_bytes.len() as i64,
+            size_bytes,
+            cookies,
         })
     }
 
     /// 构建HTTP请求头
     fn build_headers(&self, headers: &[(String, String)]) -> Result<HeaderMap> {
         let mut header_map = HeaderMap::new();
+
+        // 添加 Accept-Encoding 以接收 gzip 压缩数据（如果用户没有自定义）
+        if !headers.iter().any(|(k, _)| k.to_lowercase() == "accept-encoding") {
+            header_map.insert(ACCEPT_ENCODING, HeaderValue::from_static("gzip, deflate, br"));
+        }
 
         for (name, value) in headers {
             // 替换头部值中的环境变量
@@ -330,6 +385,72 @@ impl HttpRequest {
     }
 }
 
+/// Cookie结构
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Cookie {
+    /// Cookie名称
+    pub name: String,
+    /// Cookie值
+    pub value: String,
+    /// 域名
+    pub domain: Option<String>,
+    /// 路径
+    pub path: Option<String>,
+    /// 过期时间
+    pub expires: Option<String>,
+    /// 是否仅HTTP
+    pub http_only: bool,
+    /// 是否安全
+    pub secure: bool,
+}
+
+impl Cookie {
+    /// 从Set-Cookie头解析Cookie
+    pub fn from_set_cookie_header(header_value: &str) -> Option<Self> {
+        let parts: Vec<&str> = header_value.split(';').collect();
+        if parts.is_empty() {
+            return None;
+        }
+
+        // 第一个部分是 name=value
+        let name_value = parts[0].trim();
+        let eq_pos = name_value.find('=')?;
+        let name = name_value[..eq_pos].trim().to_string();
+        let value = name_value[eq_pos + 1..].trim().to_string();
+
+        let mut domain = None;
+        let mut path = None;
+        let mut expires = None;
+        let mut http_only = false;
+        let mut secure = false;
+
+        for part in parts.iter().skip(1) {
+            let part = part.trim().to_lowercase();
+            if part.starts_with("domain=") {
+                domain = Some(part[7..].to_string());
+            } else if part.starts_with("path=") {
+                path = Some(part[5..].to_string());
+            } else if part.starts_with("expires=") {
+                expires = Some(part[8..].to_string());
+            } else if part == "httponly" {
+                http_only = true;
+            } else if part == "secure" {
+                secure = true;
+            }
+        }
+
+        Some(Cookie {
+            name,
+            value,
+            domain,
+            path,
+            expires,
+            http_only,
+            secure,
+        })
+    }
+}
+
 /// HTTP响应结构
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpResponse {
@@ -343,6 +464,8 @@ pub struct HttpResponse {
     pub time_ms: i64,
     /// 响应大小（字节）
     pub size_bytes: i64,
+    /// Cookie列表
+    pub cookies: Vec<Cookie>,
 }
 
 impl HttpResponse {
@@ -514,6 +637,7 @@ mod tests {
             body: String::new(),
             time_ms: 100,
             size_bytes: 0,
+            cookies: Vec::new(),
         };
         assert_eq!(response.status_text(), "OK");
         assert!(response.is_success());
@@ -524,6 +648,7 @@ mod tests {
             body: String::new(),
             time_ms: 100,
             size_bytes: 0,
+            cookies: Vec::new(),
         };
         assert_eq!(response.status_text(), "Not Found");
         assert!(!response.is_success());
@@ -537,6 +662,7 @@ mod tests {
             body: r#"{"name":"test","value":123}"#.to_string(),
             time_ms: 100,
             size_bytes: 0,
+            cookies: Vec::new(),
         };
 
         let formatted = response.format_body();

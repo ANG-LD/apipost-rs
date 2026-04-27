@@ -38,6 +38,17 @@ fn method_color(method: &str) -> u32 {
     }
 }
 
+/// 格式化字节大小为可读字符串
+fn format_size(bytes: i64) -> String {
+    if bytes < 1024 {
+        format!("{} B", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.2} MB", bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
 /// 请求标签
 #[derive(Clone)]
 pub struct RequestTab {
@@ -1715,6 +1726,7 @@ impl Render for MainView {
                                                                             body: resp_body.clone(),
                                                                             time_ms: entry_response_time_ms.unwrap_or(0),
                                                                             size_bytes: entry_response_size.unwrap_or(0),
+                                                                            cookies: Vec::new(),
                                                                         };
                                                                         this.response = Some(response);
                                                                         this.response_raw_format = RawFormat::detect(content_type.as_deref(), &resp_body);
@@ -3234,12 +3246,101 @@ impl Render for MainView {
                                                                 .gap_4()
                                                                 .children([
                                                                     div().text_color(rgb(0x888888)).child(format!("Time: {}ms", resp.time_ms)),
-                                                                    div().text_color(rgb(0x888888)).child(format!("Size: {} bytes", resp.size_bytes)),
+                                                                    div().text_color(rgb(0x888888)).child(format!("Size: {}", format_size(resp.size_bytes))),
                                                                 ]),
                                                         ]);
 
                                                     // 根据视图模式显示内容
-                                                    let content: Div = match self.body_view_mode {
+                                                    let content: Div = if response_tab == ResponseTab::Headers {
+                                                        // 响应头列表 - 使用只读 Input
+                                                        let headers_text = resp.headers.iter()
+                                                            .map(|(k, v)| format!("{}: {}", k, v))
+                                                            .collect::<Vec<_>>()
+                                                            .join("\n");
+                                                        let headers_input = cx.new(|cx| InputState::new(_window, cx)
+                                                            .default_value(&headers_text)
+                                                            .multi_line(true)
+                                                        );
+                                                        div()
+                                                            .h(px(self.response_editor_height))
+                                                            .flex_col()
+                                                            .overflow_hidden()
+                                                            .bg(rgb(0x2d2d2d))
+                                                            .border_1()
+                                                            .border_color(rgb(0x444444))
+                                                            .rounded_md()
+                                                            .child(
+                                                                Input::new(&headers_input)
+                                                                    .w_full()
+                                                                    .h_full()
+                                                            )
+                                                    } else if response_tab == ResponseTab::Cookies {
+                                                        // Cookies列表
+                                                        if resp.cookies.is_empty() {
+                                                            div()
+                                                                .flex_1()
+                                                                .flex()
+                                                                .items_center()
+                                                                .justify_center()
+                                                                .text_color(rgb(0x666666))
+                                                                .child("No cookies")
+                                                        } else {
+                                                            div()
+                                                                .flex_1()
+                                                                .flex_col()
+                                                                .overflow_hidden()
+                                                                .bg(rgb(0x2d2d2d))
+                                                                .border_1()
+                                                                .border_color(rgb(0x444444))
+                                                                .rounded_md()
+                                                                .p_2()
+                                                                .children([
+                                                                    // 表头
+                                                                    div()
+                                                                        .flex()
+                                                                        .flex_row()
+                                                                        .gap_2()
+                                                                        .mb_2()
+                                                                        .children([
+                                                                            div().w(px(100.0)).text_color(rgb(0x88c0d0)).font_bold().text_sm().child("Name"),
+                                                                            div().w(px(150.0)).text_color(rgb(0x88c0d0)).font_bold().text_sm().child("Value"),
+                                                                            div().w(px(80.0)).text_color(rgb(0x88c0d0)).font_bold().text_sm().child("Domain"),
+                                                                            div().w(px(80.0)).text_color(rgb(0x88c0d0)).font_bold().text_sm().child("Path"),
+                                                                        ]),
+                                                                    // Cookie行
+                                                                    div()
+                                                                        .flex_col()
+                                                                        .gap_1()
+                                                                        .children(
+                                                                            resp.cookies.iter().map(|cookie| {
+                                                                                div()
+                                                                                    .flex()
+                                                                                    .flex_row()
+                                                                                    .gap_2()
+                                                                                    .p_1()
+                                                                                    .bg(rgb(0x333333))
+                                                                                    .rounded_sm()
+                                                                                    .children([
+                                                                                        div().w(px(100.0)).text_color(rgb(0xe0e0e0)).text_sm().child(cookie.name.clone()),
+                                                                                        div().w(px(150.0)).text_color(rgb(0xe0e0e0)).text_sm().overflow_x_hidden().child(cookie.value.clone()),
+                                                                                        div().w(px(80.0)).text_color(rgb(0x888888)).text_sm().child(cookie.domain.clone().unwrap_or_default()),
+                                                                                        div().w(px(80.0)).text_color(rgb(0x888888)).text_sm().child(cookie.path.clone().unwrap_or_default()),
+                                                                                    ])
+                                                                            }).collect::<Vec<_>>()
+                                                                        )
+                                                                ])
+                                                        }
+                                                    } else if response_tab == ResponseTab::TestResults {
+                                                        // 测试结果（暂未实现）
+                                                        div()
+                                                            .flex_1()
+                                                            .flex()
+                                                            .items_center()
+                                                            .justify_center()
+                                                            .text_color(rgb(0x666666))
+                                                            .child("Test results not implemented")
+                                                    } else {
+                                                        match self.body_view_mode {
                                                         BodyViewMode::Pretty => {
                                                             div()
                                                                 .h(px(self.response_editor_height))
@@ -3406,6 +3507,7 @@ impl Render for MainView {
                                                                 .text_color(rgb(0x666666))
                                                                 .child("Preview mode not implemented")
                                                         },
+                                                        }
                                                     };
 
                                                     div()
