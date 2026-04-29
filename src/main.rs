@@ -51,9 +51,9 @@ fn main() {
         app_state.init();
 
         // 启动主窗口
-        let app_state = Arc::new(app_state);
+        let app_state = Arc::new(std::sync::Mutex::new(app_state));
         let bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);
-        cx.open_window(
+        let _ = cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 titlebar: Some(

@@ -183,7 +183,7 @@ impl AuthState {
     }
 
     /// 创建认证类型选择器状态
-    pub fn create_auth_type_select(app_state: Arc<crate::app::AppState>, window: &mut Window, cx: &mut Context<crate::ui::MainView>) -> Entity<SelectState<Vec<gpui::SharedString>>> {
+    pub fn create_auth_type_select(_app_state: Arc<std::sync::Mutex<crate::app::AppState>>, window: &mut Window, cx: &mut Context<crate::ui::MainView>) -> Entity<SelectState<Vec<gpui::SharedString>>> {
         let auth_types = AuthType::all();
         cx.new(|cx| {
             SelectState::new(auth_types, Some(IndexPath::default()), window, cx)

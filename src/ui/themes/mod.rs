@@ -59,6 +59,7 @@ pub fn dark_theme() -> Theme {
 }
 
 /// 扩展Theme结构以包含更多颜色
+#[derive(Clone)]
 pub struct Theme {
     pub name: String,
     pub background: gpui::Rgba,
@@ -83,12 +84,39 @@ pub struct Theme {
     pub json_bracket: gpui::Rgba,
 }
 
+/// 暖色主题
+pub fn sepia_theme() -> Theme {
+    Theme {
+        name: "sepia".to_string(),
+        background: rgb(0x2d2420),
+        foreground: rgb(0xe8d5c4),
+        muted_foreground: rgb(0xa09080),
+        accent: rgb(0xd4854a),
+        accent_foreground: rgb(0xffffff),
+        input_background: rgb(0x3d3228),
+        border: rgb(0x5a4a38),
+        muted_background: rgb(0x3d3228),
+        sidebar_background: rgb(0x2d2420),
+        code_background: rgb(0x3d3228),
+        success: rgb(0x8b9a6b),
+        warning: rgb(0xcc9a44),
+        error: rgb(0xc4554d),
+        json_key: rgb(0xd4a560),
+        json_string: rgb(0xc49b6c),
+        json_number: rgb(0x8b9a6b),
+        json_boolean: rgb(0x9bb8cf),
+        json_null: rgb(0x908070),
+        json_bracket: rgb(0xe8d5c4),
+    }
+}
+
 impl Theme {
     /// 从字符串获取主题
     pub fn from_str(s: &str) -> Self {
         match s {
             "light" => light_theme(),
-            "dark" | _ => dark_theme(),
+            "sepia" => sepia_theme(),
+            _ => dark_theme(),
         }
     }
 }

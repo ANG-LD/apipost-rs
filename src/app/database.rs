@@ -389,6 +389,49 @@ impl Database {
         conn.execute("DELETE FROM saved_requests WHERE id = ?1", params![id])?;
         Ok(())
     }
+
+    // ==================== 文件夹操作 ====================
+
+    pub fn get_folders(&self) -> Result<Vec<Folder>> {
+        let conn = self.conn.lock()
+            .map_err(|_| anyhow::anyhow!("数据库锁中毒"))?;
+        let mut stmt = conn.prepare(
+            "SELECT id, name, parent_id, created_at FROM folders ORDER BY name"
+        )?;
+        let folders = stmt.query_map([], |row| {
+            Ok(Folder {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                parent_id: row.get(2)?,
+                created_at: row.get::<_, String>(3).ok(),
+            })
+        })?.collect::<Result<Vec<_>, _>>()?;
+        Ok(folders)
+    }
+
+    pub fn save_folder(&self, folder: &Folder) -> Result<()> {
+        let conn = self.conn.lock()
+            .map_err(|_| anyhow::anyhow!("数据库锁中毒"))?;
+        conn.execute(
+            "INSERT INTO folders (id, name, parent_id, created_at) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(id) DO UPDATE SET name = excluded.name, parent_id = excluded.parent_id",
+            params![
+                folder.id,
+                folder.name,
+                folder.parent_id,
+                folder.created_at.clone().unwrap_or_default(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_folder(&self, id: &str) -> Result<()> {
+        let conn = self.conn.lock()
+            .map_err(|_| anyhow::anyhow!("数据库锁中毒"))?;
+        conn.execute("UPDATE saved_requests SET folder_id = NULL WHERE folder_id = ?1", params![id])?;
+        conn.execute("DELETE FROM folders WHERE id = ?1", params![id])?;
+        Ok(())
+    }
 }
 
 // ==================== 数据结构定义 ====================
@@ -406,6 +449,15 @@ pub struct HistoryEntry {
     pub response_body: Option<String>,
     pub response_time_ms: Option<i64>,
     pub created_at: DateTime<Utc>,
+}
+
+/// 文件夹
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Folder {
+    pub id: String,
+    pub name: String,
+    pub parent_id: Option<String>,
+    pub created_at: Option<String>,
 }
 
 /// 环境变量

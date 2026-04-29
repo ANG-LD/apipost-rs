@@ -194,6 +194,7 @@ impl I18nManager {
 
         // 侧边栏
         map.insert("sidebar.collections".to_string(), "收藏".to_string());
+        map.insert("sidebar.collections_empty".to_string(), "暂无收藏请求，点击书签按钮保存请求".to_string());
         map.insert("sidebar.history".to_string(), "历史".to_string());
         map.insert("sidebar.env".to_string(), "环境".to_string());
         map.insert("sidebar.new_request".to_string(), "新建请求".to_string());
@@ -346,6 +347,7 @@ impl I18nManager {
 
         // Sidebar
         map.insert("sidebar.collections".to_string(), "Collections".to_string());
+        map.insert("sidebar.collections_empty".to_string(), "No saved requests. Click the bookmark button to save.".to_string());
         map.insert("sidebar.history".to_string(), "History".to_string());
         map.insert("sidebar.env".to_string(), "Environment".to_string());
         map.insert("sidebar.new_request".to_string(), "New Request".to_string());

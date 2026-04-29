@@ -12,6 +12,11 @@ mod scripts;
 mod settings;
 mod themes;
 
+pub mod sidebar;
+pub mod request;
+pub mod response;
+pub mod dialogs;
+
 pub use authorization::*;
 pub use body::*;
 pub use components::*;
