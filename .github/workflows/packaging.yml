@@ -21,6 +21,7 @@ jobs:
             libx11-dev \
             libwayland-dev \
             libxkbcommon-dev \
+            libxkbcommon-x11-dev \
             libgraphene-1.0-dev \
             libpng-dev \
             libjpeg-dev
