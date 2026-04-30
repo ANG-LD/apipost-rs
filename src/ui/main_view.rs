@@ -267,8 +267,7 @@ impl MainView {
                 .multi_line(true)
                 .code_editor("json")
                 .line_number(true)
-                .line_number_align("center")
-        });
+                        });
         // XML 格式的 raw_content - 复制JSON编辑框
         let raw_content_xml = cx.new(|cx| {
             InputState::new(window, cx)
@@ -276,8 +275,7 @@ impl MainView {
                 .multi_line(true)
                 .code_editor("json")
                 .line_number(true)
-                .line_number_align("center")
-        });
+                        });
         // Text 格式的 raw_content - 复制JSON编辑框
         let raw_content_text = cx.new(|cx| {
             InputState::new(window, cx)
@@ -285,8 +283,7 @@ impl MainView {
                 .multi_line(true)
                 .code_editor("json")
                 .line_number(true)
-                .line_number_align("center")
-        });
+                        });
         // HTML 格式的 raw_content - 复制JSON编辑框
         let raw_content_html = cx.new(|cx| {
             InputState::new(window, cx)
@@ -294,8 +291,7 @@ impl MainView {
                 .multi_line(true)
                 .code_editor("json")
                 .line_number(true)
-                .line_number_align("center")
-        });
+                        });
         let body_state = BodyState::new(raw_content, raw_content_xml, raw_content_text, raw_content_html);
 
         // 创建 Body 类型选择器
@@ -324,8 +320,7 @@ impl MainView {
                 .multi_line(true)
                 .soft_wrap(true)
                 .line_number(true)
-                .line_number_align("center")
-                .default_value("")
+                                .default_value("")
         });
 
         // 创建响应体 XML 输入状态（使用 code_editor）
@@ -334,8 +329,7 @@ impl MainView {
                 .multi_line(true)
                 .code_editor("json")
                 .line_number(true)
-                .line_number_align("center")
-                .default_value("")
+                                .default_value("")
         });
 
         // 创建响应体 Text 输入状态（使用 code_editor）
@@ -344,8 +338,7 @@ impl MainView {
                 .multi_line(true)
                 .code_editor("json")
                 .line_number(true)
-                .line_number_align("center")
-                .default_value("")
+                                .default_value("")
         });
 
         // 创建响应体 Html 输入状态（使用 code_editor）
@@ -354,8 +347,7 @@ impl MainView {
                 .multi_line(true)
                 .code_editor("json")
                 .line_number(true)
-                .line_number_align("center")
-                .default_value("")
+                                .default_value("")
         });
 
         // 响应头输入状态（动态创建，每个头一个键值对）
