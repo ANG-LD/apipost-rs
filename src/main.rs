@@ -3,6 +3,8 @@
 //! 一个使用Rust和gpui框架构建的PostMan替代工具
 //! 提供API测试、环境变量管理、历史记录等功能
 
+#![windows_subsystem = "windows"]
+
 mod app;
 mod config;
 mod http;
