@@ -2171,74 +2171,53 @@ impl Render for MainView {
                                             .border_b(if is_active { px(2.0) } else { px(0.0) })
                                             .border_color(if is_active { theme.accent } else { theme.muted_background })
                                             .text_xs()
-                                            .children(if show_close {
-                                                vec![
+                                            .relative()
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_2()
+                                                    .rounded_sm()
+                                                    .px_1()
+                                                    .py_px()
+                                                    .cursor_pointer()
+                                                    .hover(|s| s.bg(theme.muted_background))
+                                                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                        this.switch_tab(i, _window, cx);
+                                                    }))
+                                                    .children([
+                                                        div().px_1().py_px().rounded_sm()
+                                                            .bg(rgb(method_clr))
+                                                            .text_xs().text_color(theme.accent_foreground)
+                                                            .child(tab_method),
+                                                        div()
+                                                            .text_color(if is_active { theme.accent_foreground } else { theme.muted_foreground })
+                                                            .max_w(px(90.0))
+                                                            .overflow_hidden()
+                                                            .text_ellipsis()
+                                                            .child(tab_display_name.clone()),
+                                                    ]),
+                                            )
+                                            .when(show_close, |this| {
+                                                this.child(
                                                     div()
-                                                        .flex()
-                                                        .items_center()
-                                                        .gap_2()
-                                                        .rounded_sm()
-                                                        .px_1()
-                                                        .py_px()
-                                                        .cursor_pointer()
-                                                        .hover(|s| s.bg(theme.muted_background))
-                                                        .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
-                                                            this.switch_tab(i, _window, cx);
-                                                        }))
-                                                        .children([
-                                                            div().px_1().py_px().rounded_sm()
-                                                                .bg(rgb(method_clr))
-                                                                .text_xs().text_color(theme.accent_foreground)
-                                                                .child(tab_method),
-                                                            div()
-                                                                .text_color(if is_active { theme.accent_foreground } else { theme.muted_foreground })
-                                                                .max_w(px(90.0))
-                                                                .overflow_hidden()
-                                                                .text_ellipsis()
-                                                                .child(tab_display_name.clone()),
-                                                        ]),
-                                                    div()
-                                                        .w(px(20.0))
-                                                        .h(px(20.0))
+                                                        .absolute()
+                                                        .top(px(2.0))
+                                                        .right(px(2.0))
+                                                        .w(px(16.0))
+                                                        .h(px(16.0))
                                                         .flex()
                                                         .items_center()
                                                         .justify_center()
                                                         .rounded_sm()
                                                         .cursor_pointer()
-                                                        .hover(|s| s.bg(theme.code_background))
+                                                        .hover(|s| s.bg(theme.muted_background))
                                                         .text_color(theme.muted_foreground)
                                                         .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                             this.close_tab(i, _window, cx);
                                                         }))
                                                         .child(Icon::new(IconName::Close).xsmall()),
-                                                ]
-                                            } else {
-                                                vec![
-                                                    div()
-                                                        .flex()
-                                                        .items_center()
-                                                        .gap_2()
-                                                        .rounded_sm()
-                                                        .px_1()
-                                                        .py_px()
-                                                        .cursor_pointer()
-                                                        .hover(|s| s.bg(theme.muted_background))
-                                                        .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
-                                                            this.switch_tab(i, _window, cx);
-                                                        }))
-                                                        .children([
-                                                            div().px_1().py_px().rounded_sm()
-                                                                .bg(rgb(method_clr))
-                                                                .text_xs().text_color(theme.accent_foreground)
-                                                                .child(tab_method),
-                                                            div()
-                                                                .text_color(if is_active { theme.accent_foreground } else { theme.muted_foreground })
-                                                                .max_w(px(90.0))
-                                                                .overflow_hidden()
-                                                                .text_ellipsis()
-                                                                .child(tab_display_name.clone()),
-                                                        ]),
-                                                ]
+                                                )
                                             })
                                     }))
                                     // 新增标签按钮
