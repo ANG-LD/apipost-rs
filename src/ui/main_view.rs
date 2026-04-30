@@ -125,6 +125,8 @@ pub struct MainView {
     pub(crate) environments: Vec<crate::app::database::Environment>,
     pub(crate) url_input: Entity<InputState>,
     pub(crate) _url_change_sub: gpui::Subscription,
+    pub(crate) _param_input_subs: Vec<gpui::Subscription>,
+    pub(crate) _header_subs: Vec<gpui::Subscription>,
     pub(crate) method_select: Entity<SelectState<Vec<gpui::SharedString>>>,
     pub(crate) builder_tab: BuilderTab,
     pub(crate) params: Vec<ParamEntry>,
@@ -138,10 +140,12 @@ pub struct MainView {
     pub(crate) settings: RequestSettings,
     pub(crate) settings_inputs: SettingsInputs,
     pub(crate) is_importing_curl: bool,
+    pub(crate) last_synced_url: String,
     pub(crate) response_input: Entity<InputState>,
     pub(crate) response_xml_input: Entity<InputState>,
     pub(crate) response_text_input: Entity<InputState>,
     pub(crate) response_html_input: Entity<InputState>,
+    pub(crate) response_header_inputs: Vec<(Entity<InputState>, Entity<InputState>)>,
     pub(crate) response_raw_format: RawFormat,
     pub(crate) response_raw_format_select: Entity<SelectState<Vec<gpui::SharedString>>>,
     pub(crate) response_soft_wrap: bool,
@@ -220,6 +224,9 @@ impl MainView {
                         return;
                     }
                     let url = url_input_clone.read(cx).value().to_string();
+                    if url == this.last_synced_url {
+                        return;
+                    }
                     // 检测cURL命令
                     if url.trim().starts_with("curl ") || url.trim().starts_with("curl\n") {
                         if let Err(e) = this.import_curl(&url, _window, cx) {
@@ -227,10 +234,6 @@ impl MainView {
                         }
                     } else if url.contains('?') {
                         this.parse_url_to_params_internal(&url, _window, cx);
-                    } else {
-                        // 清空params
-                        this.params.clear();
-                        cx.notify();
                     }
                 }
                 _ => {}
@@ -355,6 +358,9 @@ impl MainView {
                 .default_value("")
         });
 
+        // 响应头输入状态（动态创建，每个头一个键值对）
+        let response_header_inputs: Vec<(Entity<InputState>, Entity<InputState>)> = Vec::new();
+
         // 创建响应体Raw格式选择器
         let response_raw_format_select = BodyState::create_raw_format_select(window, cx);
 
@@ -389,6 +395,8 @@ impl MainView {
             environments,
             url_input,
             _url_change_sub,
+            _param_input_subs: Vec::new(),
+            _header_subs: Vec::new(),
             method_select,
             builder_tab: BuilderTab::Params,
             params,
@@ -402,17 +410,19 @@ impl MainView {
             settings,
             settings_inputs,
             is_importing_curl: false,
+            last_synced_url: String::new(),
             response_input,
             response_xml_input,
             response_text_input,
             response_html_input,
+            response_header_inputs,
             response_raw_format: RawFormat::Json,
             response_raw_format_select,
             response_soft_wrap: false,
             next_tab_id: 2,
             splitter_dragging: false,
             splitter_start_y: 0.0,
-            request_builder_height: 400.0,
+            request_builder_height: 300.0,
             response_editor_height: 400.0,
             response_editor_dragging: false,
             response_editor_start_y: 0.0,
@@ -427,6 +437,9 @@ impl MainView {
 
         self.is_loading = true;
         self.error_message = None;
+
+        // 0. 同步 params 到 URL（确保最新修改反映到 URL bar）
+        self.sync_params_to_url(window, cx);
 
         // 1. 获取认证头
         let auth_headers = self.auth_state.to_headers(cx);
@@ -555,6 +568,7 @@ impl MainView {
                                 response_headers: Some(serde_json::to_string(&response.headers).unwrap_or_default()),
                                 response_body: Some(response.body.clone()),
                                 response_time_ms: Some(response.time_ms),
+                                response_size: Some(response.size_bytes),
                             };
 
                             if let Err(e) = this.app_state.lock().unwrap().db.add_history(&history_entry.into_history_entry()) {
@@ -577,6 +591,7 @@ impl MainView {
                             this.response_html_input.update(cx, |state, cx| {
                                 state.set_value(&response.body, window, cx);
                             });
+                            this.rebuild_response_header_inputs(&response.headers, window, cx);
                             if let Ok(hist) = this.app_state.lock().unwrap().db.get_history(50, 0) {
                                 this.history = hist;
                             }
@@ -692,23 +707,26 @@ impl MainView {
         let key = cx.new(|cx| InputState::new(window, cx).default_value(""));
         let value = cx.new(|cx| InputState::new(window, cx).default_value(""));
         self.params.push(ParamEntry { key, value, enabled: true });
+        self.rebuild_param_subscriptions(window, cx);
+        self.sync_params_to_url(window, cx);
         cx.notify();
     }
 
     /// 删除指定索引的参数行
-    pub fn remove_param(&mut self, index: usize, cx: &mut Context<Self>) {
+    pub fn remove_param(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         if index < self.params.len() {
             self.params.remove(index);
-            self.sync_params_to_url(cx);
+            self.rebuild_param_subscriptions(window, cx);
+            self.sync_params_to_url(window, cx);
             cx.notify();
         }
     }
 
     /// 切换参数启用状态
-    pub fn toggle_param(&mut self, index: usize, cx: &mut Context<Self>) {
+    pub fn toggle_param(&mut self, index: usize, _window: &mut Window, cx: &mut Context<Self>) {
         if index < self.params.len() {
             self.params[index].enabled = !self.params[index].enabled;
-            self.sync_params_to_url(cx);
+            self.sync_params_to_url(_window, cx);
             cx.notify();
         }
     }
@@ -718,13 +736,31 @@ impl MainView {
     /// 添加新的 Header 行
     pub fn add_header(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.headers.push(HeaderEntry::new(window, cx));
+        self.rebuild_header_subscriptions(window, cx);
         cx.notify();
     }
 
     /// 删除指定索引的 Header 行
-    pub fn remove_header(&mut self, index: usize, cx: &mut Context<Self>) {
+    /// 根据响应头重建响应头输入状态（用于显示键值对）
+    fn rebuild_response_header_inputs(&mut self, headers: &std::collections::HashMap<String, String>, window: &mut Window, cx: &mut Context<Self>) {
+        self.response_header_inputs.clear();
+        for (k, v) in headers.iter() {
+            let key_input = cx.new(|cx| {
+                InputState::new(window, cx)
+                    .default_value(k)
+            });
+            let val_input = cx.new(|cx| {
+                InputState::new(window, cx)
+                    .default_value(v)
+            });
+            self.response_header_inputs.push((key_input, val_input));
+        }
+    }
+
+    pub fn remove_header(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         if index < self.headers.len() {
             self.headers.remove(index);
+            self.rebuild_header_subscriptions(window, cx);
             cx.notify();
         }
     }
@@ -937,11 +973,12 @@ impl MainView {
             }
         }
 
+        self.rebuild_param_subscriptions(window, cx);
         cx.notify();
     }
 
     /// 更新URL以反映当前的params
-    pub fn sync_params_to_url(&mut self, cx: &mut Context<Self>) {
+    pub fn sync_params_to_url(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // 从URL输入框获取当前base URL
         let current_url = self.url_input.read(cx).value().to_string();
         let base_url = if let Some(query_start) = current_url.find('?') {
@@ -949,6 +986,7 @@ impl MainView {
         } else {
             current_url
         };
+
 
         // 构建新的query string
         let params: Vec<(String, String, bool)> = self.params.iter().map(|p| {
@@ -959,19 +997,113 @@ impl MainView {
 
         let enabled_params: Vec<&(String, String, bool)> = params.iter().filter(|p| p.2 && !p.0.is_empty()).collect();
 
-        if enabled_params.is_empty() {
-            // 没有参数，使用base URL
-            self.url = base_url;
+        let new_url = if enabled_params.is_empty() {
+            base_url
         } else {
             let query_string: String = enabled_params
                 .iter()
                 .map(|(key, value, _)| format!("{}={}", urlencoding::encode(key), urlencoding::encode(value)))
                 .collect::<Vec<_>>()
                 .join("&");
-            self.url = format!("{}?{}", base_url, query_string);
-        }
+            format!("{}?{}", base_url, query_string)
+        };
+
+        // 同步到 url 字段（send_request 使用）
+        self.url = new_url.clone();
+        // 记录将要写入的 URL，避免后续异步 change 事件触发 parse_url_to_params_internal
+        self.last_synced_url = new_url.clone();
+        // 同步到 url_input（URL 栏显示）
+        self.url_input.update(cx, |state, cx| {
+            state.set_value(&new_url, window, cx);
+        });
 
         cx.notify();
+    }
+
+    /// 重建所有 param key/value 的输入变化订阅，实现实时 URL 同步
+    pub(crate) fn rebuild_param_subscriptions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self._param_input_subs.clear();
+        for param in &self.params {
+            let key = param.key.clone();
+            let value = param.value.clone();
+            let key_sub = cx.subscribe_in(&key, window, move |this, _state, event, _window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    this.sync_params_to_url(_window, cx);
+                }
+            });
+            let value_sub = cx.subscribe_in(&value, window, move |this, _state, event, _window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    this.sync_params_to_url(_window, cx);
+                }
+            });
+            self._param_input_subs.push(key_sub);
+            self._param_input_subs.push(value_sub);
+        }
+    }
+
+    /// 重建所有 header key/value 的输入变化订阅，检测 Content-Type 自动切换 Body 类型
+    pub(crate) fn rebuild_header_subscriptions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self._header_subs.clear();
+        for header in &self.headers {
+            let key = header.key.clone();
+            let value = header.value.clone();
+            let key_sub = cx.subscribe_in(&key, window, move |this, _state, event, _window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    this.auto_detect_body_type_from_headers(_window, cx);
+                }
+            });
+            let value_sub = cx.subscribe_in(&value, window, move |this, _state, event, _window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    this.auto_detect_body_type_from_headers(_window, cx);
+                }
+            });
+            self._header_subs.push(key_sub);
+            self._header_subs.push(value_sub);
+        }
+    }
+
+    /// 根据 Content-Type header 自动切换 Body 类型
+    pub(crate) fn auto_detect_body_type_from_headers(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let content_type = self.headers.iter().find_map(|h| {
+            let key = h.key.read(cx).value();
+            if key.trim().eq_ignore_ascii_case("content-type") {
+                let val = h.value.read(cx).value().to_string();
+                if !val.is_empty() {
+                    Some(val)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        });
+
+        if let Some(ct) = content_type {
+            let ct_lower = ct.to_lowercase();
+            if ct_lower.contains("json") || ct_lower.contains("xml")
+                || ct_lower.contains("html") || ct_lower.contains("text")
+                || ct_lower.contains("javascript")
+            {
+                // 切换到 Raw
+                if self.body_state.body_type != BodyType::Raw {
+                    self.body_state.body_type = BodyType::Raw;
+                    let bt_idx = BodyType::Raw.to_index();
+                    self.body_type_select.update(cx, |state, cx| {
+                        state.set_selected_index(Some(IndexPath::new(bt_idx)), window, cx);
+                    });
+                }
+                // 检测格式
+                let detected = RawFormat::detect(Some(&ct), "");
+                if self.body_state.raw_format != detected {
+                    self.body_state.raw_format = detected;
+                    let rf_idx = detected.to_index();
+                    self.raw_format_select.update(cx, |state, cx| {
+                        state.set_selected_index(Some(IndexPath::new(rf_idx)), window, cx);
+                    });
+                }
+                cx.notify();
+            }
+        }
     }
 
     /// 导入cURL命令并解析为请求参数
@@ -1232,10 +1364,85 @@ impl MainView {
             }
         }
 
-        self.body_state.raw_content.update(cx, |state, cx| {
-            state.set_value(&body_owned, window, cx);
-        });
+        // 恢复请求体
+        if !body_owned.is_empty() {
+            // 从 Content-Type header 检测格式
+            let content_type = headers.and_then(|h| {
+                h.lines().find_map(|line| {
+                    let (k, v) = line.split_once(':')?;
+                    if k.trim().eq_ignore_ascii_case("content-type") {
+                        Some(v.trim().to_string())
+                    } else {
+                        None
+                    }
+                })
+            });
+            self.body_state.body_type = BodyType::Raw;
+            self.body_state.raw_format =
+                RawFormat::detect(content_type.as_deref(), &body_owned);
+            // 同步 body_type_select
+            let bt_idx = BodyType::Raw.to_index();
+            self.body_type_select.update(cx, |state, cx| {
+                state.set_selected_index(Some(IndexPath::new(bt_idx)), window, cx);
+            });
+            // 同步 raw_format_select
+            let rf_idx = self.body_state.raw_format.to_index();
+            self.raw_format_select.update(cx, |state, cx| {
+                state.set_selected_index(Some(IndexPath::new(rf_idx)), window, cx);
+            });
+            // JSON 格式化写入
+            let formatted = RawFormat::Json.format_body(&body_owned);
+            self.body_state.raw_content.update(cx, |state, cx| {
+                state.set_value(&formatted, window, cx);
+            });
+            // 原始内容写入其他格式编辑器
+            self.body_state.raw_content_xml.update(cx, |state, cx| {
+                state.set_value(&body_owned, window, cx);
+            });
+            self.body_state.raw_content_text.update(cx, |state, cx| {
+                state.set_value(&body_owned, window, cx);
+            });
+            self.body_state.raw_content_html.update(cx, |state, cx| {
+                state.set_value(&body_owned, window, cx);
+            });
+        } else {
+            self.body_state.body_type = BodyType::None;
+            let bt_idx = BodyType::None.to_index();
+            self.body_type_select.update(cx, |state, cx| {
+                state.set_selected_index(Some(IndexPath::new(bt_idx)), window, cx);
+            });
+            self.body_state.raw_content.update(cx, |state, cx| {
+                state.set_value("", window, cx);
+            });
+        }
 
+        // 从 URL 解析 query params
+        self.params.clear();
+        if let Some(query_start) = url_owned.find('?') {
+            let query_string = &url_owned[query_start + 1..];
+            for param in query_string.split('&') {
+                if let Some(eq_pos) = param.find('=') {
+                    let key = urlencoding::decode(&param[..eq_pos])
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|_| param[..eq_pos].to_string());
+                    let value = urlencoding::decode(&param[eq_pos + 1..])
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|_| param[eq_pos + 1..].to_string());
+                    let key_entity = cx.new(|cx| InputState::new(window, cx).default_value(&key));
+                    let value_entity = cx.new(|cx| InputState::new(window, cx).default_value(&value));
+                    self.params.push(ParamEntry {
+                        key: key_entity,
+                        value: value_entity,
+                        enabled: true,
+                    });
+                }
+            }
+        }
+        self.rebuild_param_subscriptions(window, cx);
+        self.rebuild_header_subscriptions(window, cx);
+        self.auto_detect_body_type_from_headers(window, cx);
+
+        self.last_synced_url = self.url_input.read(cx).value().to_string();
         self.is_importing_curl = false;
         cx.notify();
     }
@@ -1679,7 +1886,7 @@ impl Render for MainView {
                                                             let entry_response_body = entry.response_body.clone();
                                                             let entry_response_headers = entry.response_headers.clone();
                                                             let entry_response_time_ms = entry.response_time_ms;
-                                                            let entry_response_size = entry.response_body.as_ref().map(|b| b.len() as i64);
+                                                            let entry_response_size = entry.response_size.or_else(|| entry.response_body.as_ref().map(|b| b.len() as i64));
                                                             let display_method = entry.method.clone();
                                                             let display_url = entry.url.clone();
                                                             div()
@@ -1690,85 +1897,23 @@ impl Render for MainView {
                                                                 .cursor_pointer()
                                                                 .hover(|s| s.bg(theme.code_background)).bg(theme.muted_background)
                                                                 .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
-                                                                    this.url = entry_url.clone();
-                                                                    this.is_importing_curl = true;
-                                                                    let url_str = entry_url.clone();
-                                                                    this.url_input.update(cx, |state, cx| {
-                                                                        state.set_value(&url_str, _window, cx);
-                                                                    });
-                                                                    this.method = entry_method.clone();
-                                                                    let method_upper = entry_method.to_uppercase();
-                                                                    let method_idx = ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]
-                                                                        .iter()
-                                                                        .position(|&m| m == method_upper)
-                                                                        .unwrap_or(0);
-                                                                    let idx_path = Some(IndexPath::new(method_idx));
-                                                                    this.method_select.update(cx, |state, cx| {
-                                                                        state.set_selected_index(idx_path, _window, cx);
-                                                                    });
-                                                                    this.is_importing_curl = false;
-
-                                                                    // 加载请求body
-                                                                    if let Some(ref body_content) = entry_clone.body {
-                                                                        let formatted_body = RawFormat::Json.format_body(body_content);
-                                                                        this.body_state.raw_content.update(cx, |state, cx| {
-                                                                            state.set_value(&formatted_body, _window, cx);
-                                                                        });
-                                                                        this.body_state.raw_content_xml.update(cx, |state, cx| {
-                                                                            state.set_value(body_content, _window, cx);
-                                                                        });
-                                                                        this.body_state.raw_content_text.update(cx, |state, cx| {
-                                                                            state.set_value(body_content, _window, cx);
-                                                                        });
-                                                                        this.body_state.raw_content_html.update(cx, |state, cx| {
-                                                                            state.set_value(body_content, _window, cx);
-                                                                        });
-                                                                    }
-
-                                                                    // 解析并加载请求headers
-                                                                    if let Some(ref headers_text) = entry_clone.headers {
-                                                                        this.headers.clear();
-                                                                        for line in headers_text.lines() {
-                                                                            if let Some(colon_pos) = line.find(':') {
-                                                                                let key = line[..colon_pos].trim().to_string();
-                                                                                let value = line[colon_pos + 1..].trim().to_string();
-                                                                                if !key.is_empty() {
-                                                                                    this.headers.push(HeaderEntry::new(_window, cx));
-                                                                                    let len = this.headers.len();
-                                                                                    let header = &mut this.headers[len - 1];
-                                                                                    header.key.update(cx, |state, cx| {
-                                                                                        state.set_value(&key, _window, cx);
-                                                                                    });
-                                                                                    header.value.update(cx, |state, cx| {
-                                                                                        state.set_value(&value, _window, cx);
-                                                                                    });
-                                                                                }
-                                                                            }
-                                                                        }
-                                                                    }
-
-                                                                    // 解析URL参数
-                                                                    if let Some(query_start) = entry_url.find('?') {
-                                                                        let query_string = &entry_url[query_start + 1..];
-                                                                        for param in query_string.split('&') {
-                                                                            if let Some(eq_pos) = param.find('=') {
-                                                                                let key = urlencoding::decode(&param[..eq_pos]).map(|s| s.to_string()).unwrap_or_else(|_| param[..eq_pos].to_string());
-                                                                                let value = urlencoding::decode(&param[eq_pos + 1..]).map(|s| s.to_string()).unwrap_or_else(|_| param[eq_pos + 1..].to_string());
-                                                                                let key_entity = cx.new(|cx| InputState::new(_window, cx).default_value(&key));
-                                                                                let value_entity = cx.new(|cx| InputState::new(_window, cx).default_value(&value));
-                                                                                this.params.push(ParamEntry {
-                                                                                    key: key_entity,
-                                                                                    value: value_entity,
-                                                                                    enabled: true,
-                                                                                });
-                                                                            }
-                                                                        }
-                                                                    }
+                                                                    this.load_saved_request(
+                                                                        &entry_clone.id,
+                                                                        &entry_clone.method,
+                                                                        &entry_clone.url,
+                                                                        "",
+                                                                        entry_clone.headers.as_deref(),
+                                                                        entry_clone.body.as_deref(),
+                                                                        _window,
+                                                                        cx,
+                                                                    );
 
                                                                     if let Some(status) = entry_clone.response_status {
                                                                         let resp_body = entry_response_body.clone().unwrap_or_default();
                                                                         let resp_headers: std::collections::HashMap<String, String> = entry_response_headers.as_ref().and_then(|h| serde_json::from_str(h).ok()).unwrap_or_default();
                                                                         let content_type = resp_headers.get("content-type").cloned();
+                                                                        // 在 resp_headers 被移动前重建 header inputs
+                                                                        this.rebuild_response_header_inputs(&resp_headers, _window, cx);
                                                                         let response = HttpResponse {
                                                                             status: status as u16,
                                                                             headers: resp_headers,
@@ -1794,8 +1939,20 @@ impl Render for MainView {
                                                                         });
                                                                     } else {
                                                                         this.response = None;
+                                                                        this.response_input.update(cx, |state, cx| {
+                                                                            state.set_value("", _window, cx);
+                                                                        });
+                                                                        this.response_xml_input.update(cx, |state, cx| {
+                                                                            state.set_value("", _window, cx);
+                                                                        });
+                                                                        this.response_text_input.update(cx, |state, cx| {
+                                                                            state.set_value("", _window, cx);
+                                                                        });
+                                                                        this.response_html_input.update(cx, |state, cx| {
+                                                                            state.set_value("", _window, cx);
+                                                                        });
+                                                                        this.response_header_inputs.clear();
                                                                     }
-                                                                    cx.notify();
                                                                 }))
                                                                 .children([
                                                                     div().flex().items_center().gap_2().children([
@@ -2148,7 +2305,7 @@ impl Render for MainView {
                                     ]),
                                 // Splitter（可拖拽调整上下区域大小）
                                 div()
-                                    .h(px(12.0))
+                                    .h(px(5.0))
                                     .w_full()
                                     .bg(theme.muted_background)
                                     .cursor_row_resize()
@@ -2228,55 +2385,59 @@ impl Render for MainView {
                                                                 .bg(if (200..300).contains(&resp.status) { theme.success } else { theme.error })
                                                                 .text_color(theme.accent_foreground)
                                                                 .child(format!("{} {}", resp.status, resp.status_text())),
-                                                            // 模式选择按钮
-                                                            div()
-                                                                .flex()
-                                                                .flex_row()
-                                                                .gap_2()
-                                                                .children([
-                                                                    Button::new("pretty")
-                                                                        .min_w(px(70.0))
-                                                                        .label(self.t("ui.pretty"))
-                                                                        .small()
-                                                                        .px_3()
-                                                                        .py_1()
-                                                                        .rounded_sm()
-                                                                        .text_sm()
-                                                                        .bg(if self.body_view_mode == BodyViewMode::Pretty { theme.accent } else { theme.input_background })
-                                                                        .text_color(if self.body_view_mode == BodyViewMode::Pretty { theme.accent_foreground } else { theme.muted_foreground })
-                                                                        .on_click(cx.listener(|this, _: &gpui::ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
-                                                                            this.body_view_mode = BodyViewMode::Pretty;
-                                                                            cx.notify();
-                                                                        })),
-                                                                    Button::new("raw")
-                                                                        .min_w(px(70.0))
-                                                                        .label(self.t("ui.raw"))
-                                                                        .small()
-                                                                        .px_3()
-                                                                        .py_1()
-                                                                        .rounded_sm()
-                                                                        .text_sm()
-                                                                        .bg(if self.body_view_mode == BodyViewMode::Raw { theme.accent } else { theme.input_background })
-                                                                        .text_color(if self.body_view_mode == BodyViewMode::Raw { theme.accent_foreground } else { theme.muted_foreground })
-                                                                        .on_click(cx.listener(|this, _: &gpui::ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
-                                                                            this.body_view_mode = BodyViewMode::Raw;
-                                                                            cx.notify();
-                                                                        })),
-                                                                    Button::new("preview")
-                                                                        .min_w(px(70.0))
-                                                                        .label(self.t("ui.preview"))
-                                                                        .small()
-                                                                        .px_3()
-                                                                        .py_1()
-                                                                        .rounded_sm()
-                                                                        .text_sm()
-                                                                        .bg(if self.body_view_mode == BodyViewMode::Preview { theme.accent } else { theme.input_background })
-                                                                        .text_color(if self.body_view_mode == BodyViewMode::Preview { theme.accent_foreground } else { theme.muted_foreground })
-                                                                        .on_click(cx.listener(|this, _: &gpui::ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
-                                                                            this.body_view_mode = BodyViewMode::Preview;
-                                                                            cx.notify();
-                                                                        })),
-                                                                ]),
+                                                            // 模式选择按钮（仅 Body tab 显示）
+                                                            if response_tab == ResponseTab::Body {
+                                                                div()
+                                                                    .flex()
+                                                                    .flex_row()
+                                                                    .gap_2()
+                                                                    .children([
+                                                                        Button::new("pretty")
+                                                                            .min_w(px(70.0))
+                                                                            .label(self.t("ui.pretty"))
+                                                                            .small()
+                                                                            .px_3()
+                                                                            .py_1()
+                                                                            .rounded_sm()
+                                                                            .text_sm()
+                                                                            .bg(if self.body_view_mode == BodyViewMode::Pretty { theme.accent } else { theme.input_background })
+                                                                            .text_color(if self.body_view_mode == BodyViewMode::Pretty { theme.accent_foreground } else { theme.muted_foreground })
+                                                                            .on_click(cx.listener(|this, _: &gpui::ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                                this.body_view_mode = BodyViewMode::Pretty;
+                                                                                cx.notify();
+                                                                            })),
+                                                                        Button::new("raw")
+                                                                            .min_w(px(70.0))
+                                                                            .label(self.t("ui.raw"))
+                                                                            .small()
+                                                                            .px_3()
+                                                                            .py_1()
+                                                                            .rounded_sm()
+                                                                            .text_sm()
+                                                                            .bg(if self.body_view_mode == BodyViewMode::Raw { theme.accent } else { theme.input_background })
+                                                                            .text_color(if self.body_view_mode == BodyViewMode::Raw { theme.accent_foreground } else { theme.muted_foreground })
+                                                                            .on_click(cx.listener(|this, _: &gpui::ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                                this.body_view_mode = BodyViewMode::Raw;
+                                                                                cx.notify();
+                                                                            })),
+                                                                        Button::new("preview")
+                                                                            .min_w(px(70.0))
+                                                                            .label(self.t("ui.preview"))
+                                                                            .small()
+                                                                            .px_3()
+                                                                            .py_1()
+                                                                            .rounded_sm()
+                                                                            .text_sm()
+                                                                            .bg(if self.body_view_mode == BodyViewMode::Preview { theme.accent } else { theme.input_background })
+                                                                            .text_color(if self.body_view_mode == BodyViewMode::Preview { theme.accent_foreground } else { theme.muted_foreground })
+                                                                            .on_click(cx.listener(|this, _: &gpui::ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                                this.body_view_mode = BodyViewMode::Preview;
+                                                                                cx.notify();
+                                                                            })),
+                                                                    ])
+                                                            } else {
+                                                                div()
+                                                            },
                                                             // Time 和 Size 在右边
                                                             div()
                                                                 .flex()
@@ -2285,32 +2446,47 @@ impl Render for MainView {
                                                                 .children([
                                                                     div().text_color(theme.muted_foreground).child(format!("Time: {}ms", resp.time_ms)),
                                                                     div().text_color(theme.muted_foreground).child(format!("Size: {}", format_size(resp.size_bytes))),
-                                                                ]),
+                                                        ])
                                                         ]);
 
                                                     // 根据视图模式显示内容
                                                     let content: Div = if response_tab == ResponseTab::Headers {
-                                                        // 响应头列表 - 使用只读 Input
-                                                        let headers_text = resp.headers.iter()
-                                                            .map(|(k, v)| format!("{}: {}", k, v))
-                                                            .collect::<Vec<_>>()
-                                                            .join("\n");
-                                                        let headers_input = cx.new(|cx| InputState::new(_window, cx)
-                                                            .default_value(&headers_text)
-                                                            .multi_line(true)
-                                                        );
                                                         div()
-                                                            .h(px(self.response_editor_height))
+                                                            .h_full()
                                                             .flex_col()
                                                             .overflow_hidden()
                                                             .bg(theme.code_background)
                                                             .border_1()
                                                             .border_color(theme.border)
                                                             .rounded_md()
+                                                            .p_2()
                                                             .child(
-                                                                Input::new(&headers_input)
-                                                                    .w_full()
-                                                                    .h_full()
+                                                                div()
+                                                                    .flex()
+                                                                    .flex_row()
+                                                                    .gap_2()
+                                                                    .mb_1()
+                                                                    .children([
+                                                                        div().flex_1().text_xs().text_color(theme.muted_foreground).child("Key"),
+                                                                        div().flex_1().text_xs().text_color(theme.muted_foreground).child("Value"),
+                                                                    ])
+                                                            )
+                                                            .child(
+                                                                div()
+                                                                    .flex_col()
+                                                                    .gap_1()
+                                                                    .overflow_y_scrollbar()
+                                                                    .flex_1()
+                                                                    .children(self.response_header_inputs.iter().map(|(key_input, val_input)| {
+                                                                        div()
+                                                                            .flex()
+                                                                            .flex_row()
+                                                                            .gap_2()
+                                                                            .children([
+                                                                                div().flex_1().child(Input::new(key_input).small().h(px(28.0)).disabled(true).bg(theme.input_background).text_color(theme.foreground)),
+                                                                                div().flex_1().child(Input::new(val_input).small().h(px(28.0)).disabled(true).bg(theme.input_background).text_color(theme.foreground)),
+                                                                            ])
+                                                                    }))
                                                             )
                                                     } else if response_tab == ResponseTab::Cookies {
                                                         div().flex_1().child(crate::ui::response::response_cookies_viewer(&resp.cookies, &theme))
@@ -2327,7 +2503,7 @@ impl Render for MainView {
                                                         match self.body_view_mode {
                                                         BodyViewMode::Pretty => {
                                                             div()
-                                                                .h(px(self.response_editor_height))
+                                                                .h_full()
                                                                 .flex_col()
                                                                 .overflow_hidden()
                                                                 .bg(theme.code_background)
@@ -2342,145 +2518,18 @@ impl Render for MainView {
                                                         },
                                                         BodyViewMode::Raw => {
                                                             div()
-                                                                .flex_1()
+                                                                .h_full()
                                                                 .flex_col()
                                                                 .overflow_hidden()
                                                                 .bg(theme.code_background)
                                                                 .border_1()
                                                                 .border_color(theme.border)
                                                                 .rounded_md()
-                                                                .children([
-                                                                    // 格式选择器
-                                                                    div()
-                                                                        .flex()
-                                                                        .flex_row()
-                                                                        .items_center()
+                                                                .child(
+                                                                    Input::new(&self.response_input)
                                                                         .w_full()
-                                                                        .gap_2()
-                                                                        .px_2()
-                                                                        .py_1()
-                                                                        .bg(theme.muted_background)
-                                                                        .children([
-                                                                            // JSON 按钮
-                                                                            div()
-                                                                                .text_sm()
-                                                                                .cursor_pointer()
-                                                                                .min_w(px(50.0))
-                                                                                .px_2()
-                                                                                .py_px()
-                                                                                .rounded_sm()
-                                                                                .bg(if self.response_raw_format == RawFormat::Json { theme.muted_background } else { theme.code_background })
-                                                                                .text_color(if self.response_raw_format == RawFormat::Json { theme.accent_foreground } else { theme.muted_foreground })
-                                                                                .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
-                                                                                    this.set_response_raw_format(RawFormat::Json.to_index(), _window, cx);
-                                                                                }))
-                                                                                .child(self.t("ui.json")),
-                                                                            // XML 按钮
-                                                                            div()
-                                                                                .text_sm()
-                                                                                .cursor_pointer()
-                                                                                .min_w(px(50.0))
-                                                                                .px_2()
-                                                                                .py_px()
-                                                                                .rounded_sm()
-                                                                                .bg(if self.response_raw_format == RawFormat::Xml { theme.muted_background } else { theme.code_background })
-                                                                                .text_color(if self.response_raw_format == RawFormat::Xml { theme.accent_foreground } else { theme.muted_foreground })
-                                                                                .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
-                                                                                    this.set_response_raw_format(RawFormat::Xml.to_index(), _window, cx);
-                                                                                }))
-                                                                                .child(self.t("ui.xml")),
-                                                                            // Text 按钮
-                                                                            div()
-                                                                                .text_sm()
-                                                                                .cursor_pointer()
-                                                                                .min_w(px(50.0))
-                                                                                .px_2()
-                                                                                .py_px()
-                                                                                .rounded_sm()
-                                                                                .bg(if self.response_raw_format == RawFormat::Text { theme.muted_background } else { theme.code_background })
-                                                                                .text_color(if self.response_raw_format == RawFormat::Text { theme.accent_foreground } else { theme.muted_foreground })
-                                                                                .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
-                                                                                    this.set_response_raw_format(RawFormat::Text.to_index(), _window, cx);
-                                                                                }))
-                                                                                .child(self.t("ui.text")),
-                                                                            // HTML 按钮
-                                                                            div()
-                                                                                .text_sm()
-                                                                                .cursor_pointer()
-                                                                                .min_w(px(50.0))
-                                                                                .px_2()
-                                                                                .py_px()
-                                                                                .rounded_sm()
-                                                                                .bg(if self.response_raw_format == RawFormat::Html { theme.muted_background } else { theme.code_background })
-                                                                                .text_color(if self.response_raw_format == RawFormat::Html { theme.accent_foreground } else { theme.muted_foreground })
-                                                                                .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
-                                                                                    this.set_response_raw_format(RawFormat::Html.to_index(), _window, cx);
-                                                                                }))
-                                                                                .child(self.t("ui.html")),
-                                                                        ]),
-                                                                    // 响应体内容 - 根据格式显示不同的编辑器
-                                                                    div()
-                                                                        .flex_1()
-                                                                        .overflow_hidden()
-                                                                        .children([
-                                                                            // JSON 编辑器
-                                                                            if self.response_raw_format == RawFormat::Json {
-                                                                                Some(
-                                                                                    div()
-                                                                                        .h(px(self.response_editor_height))
-                                                                                        .child(
-                                                                                            Input::new(&self.response_input)
-                                                                                                .w_full()
-                                                                                                .h_full()
-                                                                                                                                                        ),
-                                                                                )
-                                                                            } else {
-                                                                                None
-                                                                            },
-                                                                            // XML 编辑器
-                                                                            if self.response_raw_format == RawFormat::Xml {
-                                                                                Some(
-                                                                                    div()
-                                                                                        .h(px(self.response_editor_height))
-                                                                                        .child(
-                                                                                            Input::new(&self.response_xml_input)
-                                                                                                .w_full()
-                                                                                                .h_full()
-                                                                                                                                                        ),
-                                                                                )
-                                                                            } else {
-                                                                                None
-                                                                            },
-                                                                            // Text 编辑器
-                                                                            if self.response_raw_format == RawFormat::Text {
-                                                                                Some(
-                                                                                    div()
-                                                                                        .h(px(self.response_editor_height))
-                                                                                        .child(
-                                                                                            Input::new(&self.response_text_input)
-                                                                                                .w_full()
-                                                                                                .h_full()
-                                                                                                                                                        ),
-                                                                                )
-                                                                            } else {
-                                                                                None
-                                                                            },
-                                                                            // HTML 编辑器
-                                                                            if self.response_raw_format == RawFormat::Html {
-                                                                                Some(
-                                                                                    div()
-                                                                                        .h(px(self.response_editor_height))
-                                                                                        .child(
-                                                                                            Input::new(&self.response_html_input)
-                                                                                                .w_full()
-                                                                                                .h_full()
-                                                                                                                                                        ),
-                                                                                )
-                                                                            } else {
-                                                                                None
-                                                                            },
-                                                                        ].into_iter().flatten().collect::<Vec<_>>()),
-                                                                ])
+                                                                        .h_full(),
+                                                                )
                                                         },
                                                         BodyViewMode::Preview => {
                                                             div()
@@ -2494,37 +2543,56 @@ impl Render for MainView {
                                                         }
                                                     };
 
-                                                    div()
-                                                        .flex_1()
-                                                        .flex_col()
-                                                        .overflow_hidden()
-                                                        .children([
-                                                            header_row,
-                                                            // 响应编辑器分隔线
-                                                            div()
-                                                                .h(px(8.0))
-                                                                .w_full()
-                                                                .bg(theme.muted_background)
-                                                                .cursor_row_resize()
-                                                                .hover(|s| s.bg(theme.accent))
-                                                                .on_mouse_down(MouseButton::Left, cx.listener(|this, event: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
-                                                                    let y: f32 = event.position.y.into();
-                                                                    this.start_response_editor_drag(y);
-                                                                    cx.notify();
-                                                                }))
-                                                                .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window: &mut Window, cx: &mut Context<Self>| {
-                                                                    if this.response_editor_dragging {
-                                                                        let y: f32 = event.position.y.into();
-                                                                        this.update_response_editor_drag(y);
-                                                                        cx.notify();
-                                                                    }
-                                                                }))
-                                                                .on_mouse_up(MouseButton::Left, cx.listener(|this, _: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>| {
-                                                                    this.end_response_editor_drag();
-                                                                    cx.notify();
-                                                                })),
-                                                            content,
-                                                        ])
+                                                    {
+                                                        let area = div()
+                                                            .flex_1()
+                                                            .flex_col()
+                                                            .overflow_hidden()
+                                                            .child(header_row);
+                                                        if self.body_view_mode == BodyViewMode::Raw {
+                                                            let is_json = self.response_raw_format == RawFormat::Json;
+                                                            let is_xml = self.response_raw_format == RawFormat::Xml;
+                                                            let is_text = self.response_raw_format == RawFormat::Text;
+                                                            let is_html = self.response_raw_format == RawFormat::Html;
+                                                            area.child(
+                                                                div()
+                                                                    .flex()
+                                                                    .flex_row()
+                                                                    .items_center()
+                                                                    .gap_1()
+                                                                    .px_2()
+                                                                    .py_px()
+                                                                    .children([
+                                                                        div()
+                                                                            .text_xs().cursor_pointer().px_2().py_px().rounded_sm()
+                                                                            .bg(if is_json { theme.muted_background } else { theme.input_background })
+                                                                            .text_color(if is_json { theme.foreground } else { theme.muted_foreground })
+                                                                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| { this.set_response_raw_format(0, _window, cx); }))
+                                                                            .child("JSON"),
+                                                                        div()
+                                                                            .text_xs().cursor_pointer().px_2().py_px().rounded_sm()
+                                                                            .bg(if is_xml { theme.muted_background } else { theme.input_background })
+                                                                            .text_color(if is_xml { theme.foreground } else { theme.muted_foreground })
+                                                                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| { this.set_response_raw_format(1, _window, cx); }))
+                                                                            .child("XML"),
+                                                                        div()
+                                                                            .text_xs().cursor_pointer().px_2().py_px().rounded_sm()
+                                                                            .bg(if is_text { theme.muted_background } else { theme.input_background })
+                                                                            .text_color(if is_text { theme.foreground } else { theme.muted_foreground })
+                                                                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| { this.set_response_raw_format(2, _window, cx); }))
+                                                                            .child("Text"),
+                                                                        div()
+                                                                            .text_xs().cursor_pointer().px_2().py_px().rounded_sm()
+                                                                            .bg(if is_html { theme.muted_background } else { theme.input_background })
+                                                                            .text_color(if is_html { theme.foreground } else { theme.muted_foreground })
+                                                                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| { this.set_response_raw_format(3, _window, cx); }))
+                                                                            .child("HTML"),
+                                                                    ]),
+                                                            ).child(content)
+                                                        } else {
+                                                            area.child(content)
+                                                        }
+                                                    }
                                                 } else {
                                                     div()
                                                         .flex_1()

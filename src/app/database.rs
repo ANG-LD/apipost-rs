@@ -10,6 +10,9 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+/// 历史记录最大保留条数，超出后自动清理最旧的记录
+const MAX_HISTORY_ENTRIES: usize = 1000;
+
 /// 数据库管理器
 pub struct Database {
     /// 数据库连接
@@ -20,6 +23,10 @@ impl Database {
     /// 创建新的数据库连接
     pub fn new(path: &str) -> Result<Self> {
         let path = Self::expand_path(path);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("无法创建数据库目录: {}", parent.display()))?;
+        }
         let conn = Connection::open(&path)
             .with_context(|| format!("无法打开数据库: {}", path.display()))?;
 
@@ -31,10 +38,19 @@ impl Database {
         Ok(db)
     }
 
-    /// 展开路径中的~符号
+    /// 展开路径中的~符号（跨平台）
     fn expand_path(path: &str) -> PathBuf {
         if let Some(stripped) = path.strip_prefix("~/") {
-            if let Some(home) = std::env::var_os("HOME") {
+            let home = std::env::var_os("HOME")
+                .or_else(|| std::env::var_os("USERPROFILE"))
+                .or_else(|| {
+                    std::env::var_os("HOMEDRIVE")
+                        .and_then(|d| {
+                            std::env::var_os("HOMEPATH")
+                                .map(|p| format!("{}{}", d.to_string_lossy(), p.to_string_lossy()).into())
+                        })
+                });
+            if let Some(home) = home {
                 return PathBuf::from(home).join(stripped);
             }
         }
@@ -58,10 +74,13 @@ impl Database {
                 response_headers TEXT,
                 response_body TEXT,
                 response_time_ms INTEGER,
+                response_size INTEGER,
                 created_at TEXT NOT NULL
             )",
             [],
         )?;
+        // 兼容旧数据库：尝试添加 response_size 列
+        let _ = conn.execute("ALTER TABLE history ADD COLUMN response_size INTEGER", []);
 
         // 创建环境变量表
         conn.execute(
@@ -124,8 +143,8 @@ impl Database {
         let conn = self.conn.lock()
             .map_err(|_| anyhow::anyhow!("数据库锁中毒"))?;
         conn.execute(
-            "INSERT INTO history (id, method, url, headers, body, response_status, response_headers, response_body, response_time_ms, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT INTO history (id, method, url, headers, body, response_status, response_headers, response_body, response_time_ms, response_size, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 entry.id,
                 entry.method,
@@ -136,9 +155,31 @@ impl Database {
                 entry.response_headers,
                 entry.response_body,
                 entry.response_time_ms,
+                entry.response_size,
                 entry.created_at.to_rfc3339(),
             ],
         )?;
+        // 超出上限时删除最旧记录
+        drop(conn);
+        self.prune_history(MAX_HISTORY_ENTRIES)?;
+        Ok(())
+    }
+
+    /// 删除超出上限的历史记录，仅保留最新的 `keep` 条
+    fn prune_history(&self, keep: usize) -> Result<()> {
+        let conn = self.conn.lock()
+            .map_err(|_| anyhow::anyhow!("数据库锁中毒"))?;
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM history", [], |r| r.get(0))?;
+        if count as usize > keep {
+            let delete_count = count as usize - keep;
+            conn.execute(
+                "DELETE FROM history WHERE id IN (
+                    SELECT id FROM history ORDER BY created_at ASC LIMIT ?1
+                )",
+                params![delete_count],
+            )?;
+        }
         Ok(())
     }
 
@@ -147,7 +188,7 @@ impl Database {
         let conn = self.conn.lock()
             .map_err(|_| anyhow::anyhow!("数据库锁中毒"))?;
         let mut stmt = conn.prepare(
-            "SELECT id, method, url, headers, body, response_status, response_headers, response_body, response_time_ms, created_at
+            "SELECT id, method, url, headers, body, response_status, response_headers, response_body, response_time_ms, response_size, created_at
              FROM history ORDER BY created_at DESC LIMIT ?1 OFFSET ?2"
         )?;
 
@@ -162,7 +203,8 @@ impl Database {
                 response_headers: row.get(6)?,
                 response_body: row.get(7)?,
                 response_time_ms: row.get(8)?,
-                created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(9)?)
+                response_size: row.get(9)?,
+                created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(10)?)
                     .unwrap_or_else(|_| Utc::now().into())
                     .with_timezone(&Utc),
             })
@@ -176,7 +218,7 @@ impl Database {
         let conn = self.conn.lock()
             .map_err(|_| anyhow::anyhow!("数据库锁中毒"))?;
         let mut stmt = conn.prepare(
-            "SELECT id, method, url, headers, body, response_status, response_headers, response_body, response_time_ms, created_at
+            "SELECT id, method, url, headers, body, response_status, response_headers, response_body, response_time_ms, response_size, created_at
              FROM history
              WHERE url LIKE ?1 OR method LIKE ?1
              ORDER BY created_at DESC LIMIT ?2"
@@ -194,7 +236,8 @@ impl Database {
                 response_headers: row.get(6)?,
                 response_body: row.get(7)?,
                 response_time_ms: row.get(8)?,
-                created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(9)?)
+                response_size: row.get(9)?,
+                created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(10)?)
                     .unwrap_or_else(|_| Utc::now().into())
                     .with_timezone(&Utc),
             })
@@ -448,6 +491,7 @@ pub struct HistoryEntry {
     pub response_headers: Option<String>,
     pub response_body: Option<String>,
     pub response_time_ms: Option<i64>,
+    pub response_size: Option<i64>,
     pub created_at: DateTime<Utc>,
 }
 

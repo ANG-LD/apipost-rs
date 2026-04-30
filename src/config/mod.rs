@@ -82,8 +82,11 @@ pub struct DatabaseConfig {
 
 impl Default for DatabaseConfig {
     fn default() -> Self {
+        let path = ProjectDirs::from("com", "apipost-rs", "apipost-rs")
+            .map(|dirs| dirs.data_local_dir().join("database.db"))
+            .unwrap_or_else(|| PathBuf::from("apipost-rs.db"));
         Self {
-            path: "~/.local/share/apipost-rs/database.db".to_string(),
+            path: path.to_string_lossy().to_string(),
             backup_interval: 3600,
         }
     }

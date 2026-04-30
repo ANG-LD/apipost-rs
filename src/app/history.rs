@@ -97,6 +97,8 @@ pub struct CreateHistoryEntry {
     pub response_body: Option<String>,
     /// 响应时间（毫秒）
     pub response_time_ms: Option<i64>,
+    /// 响应体大小（字节，压缩后）
+    pub response_size: Option<i64>,
 }
 
 impl CreateHistoryEntry {
@@ -112,6 +114,7 @@ impl CreateHistoryEntry {
             response_headers: self.response_headers,
             response_body: self.response_body,
             response_time_ms: self.response_time_ms,
+            response_size: self.response_size,
             created_at: Utc::now(),
         }
     }

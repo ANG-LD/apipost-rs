@@ -59,30 +59,8 @@ pub fn render_url_bar(
             div()
                 .flex()
                 .h(px(34.0))
-                .w(px(36.0))
-                .mr_1()
-                .child(
-                    Button::new("save-request")
-                        .h(px(34.0))
-                        .w(px(34.0))
-                        .icon(IconName::Plus)
-                        .rounded_sm()
-                        .bg(theme.input_background)
-                        .text_color(theme.muted_foreground)
-                        .on_click(cx.listener(
-                            |this: &mut MainView,
-                             _: &gpui::ClickEvent,
-                             window: &mut Window,
-                             cx: &mut Context<MainView>| {
-                                this.save_current_request(window, cx);
-                            },
-                        )),
-                ),
-            div()
-                .flex()
-                .h(px(34.0))
                 .w(px(95.0))
-                .mr_2()
+                .mr_1()
                 .child(
                     Button::new("send")
                         .px_4()
@@ -131,6 +109,27 @@ pub fn render_url_bar(
                                 },
                             ),
                         ),
+                ),
+            div()
+                .flex()
+                .h(px(34.0))
+                .mr_2()
+                .child(
+                    Button::new("save-request")
+                        .h(px(34.0))
+                        .px_3()
+                        .rounded_sm()
+                        .bg(theme.input_background)
+                        .text_color(theme.foreground)
+                        .label(this.t("button.save"))
+                        .on_click(cx.listener(
+                            |this: &mut MainView,
+                             _: &gpui::ClickEvent,
+                             window: &mut Window,
+                             cx: &mut Context<MainView>| {
+                                this.save_current_request(window, cx);
+                            },
+                        )),
                 ),
         ])
 }

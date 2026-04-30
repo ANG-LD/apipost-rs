@@ -1,6 +1,6 @@
 use crate::app::database::HistoryEntry;
 use crate::app::HttpResponse;
-use crate::ui::body::RawFormat;
+use crate::ui::body::{BodyType, RawFormat};
 use crate::ui::components::method_color;
 use crate::ui::headers::HeaderEntry;
 use crate::ui::main_view::{MainView, ParamEntry};
@@ -76,11 +76,34 @@ pub fn render_history_panel(
                                 this.method_select.update(cx, |state, cx| {
                                     state.set_selected_index(idx_path, _window, cx);
                                 });
-                                this.is_importing_curl = false;
 
                                 if let Some(ref body_content) = entry_clone.body {
+                                    // 从 Content-Type header 检测格式
+                                    let content_type = entry_clone.headers.as_ref().and_then(|h| {
+                                        h.lines().find_map(|line| {
+                                            let (k, v) = line.split_once(':')?;
+                                            if k.trim().eq_ignore_ascii_case("content-type") {
+                                                Some(v.trim().to_string())
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                    });
+                                    let detected_format =
+                                        RawFormat::detect(content_type.as_deref(), body_content);
                                     let formatted_body =
                                         RawFormat::Json.format_body(body_content);
+                                    // 设置 body 类型和格式
+                                    this.body_state.body_type = BodyType::Raw;
+                                    this.body_state.raw_format = detected_format;
+                                    let rf_idx = detected_format.to_index();
+                                    this.raw_format_select.update(cx, |state, cx| {
+                                        state.set_selected_index(Some(IndexPath::new(rf_idx)), _window, cx);
+                                    });
+                                    let bt_idx = BodyType::Raw.to_index();
+                                    this.body_type_select.update(cx, |state, cx| {
+                                        state.set_selected_index(Some(gpui_component::IndexPath::new(bt_idx)), _window, cx);
+                                    });
                                     this.body_state.raw_content.update(
                                         cx,
                                         |state, cx| {
@@ -121,6 +144,25 @@ pub fn render_history_panel(
                                             );
                                         },
                                     );
+                                } else {
+                                    // 无 body 时重置为 None
+                                    this.body_state.body_type = BodyType::None;
+                                    this.body_state.raw_content.update(cx, |state, cx| {
+                                        state.set_value("", _window, cx);
+                                    });
+                                    this.body_state.raw_content_xml.update(cx, |state, cx| {
+                                        state.set_value("", _window, cx);
+                                    });
+                                    this.body_state.raw_content_text.update(cx, |state, cx| {
+                                        state.set_value("", _window, cx);
+                                    });
+                                    this.body_state.raw_content_html.update(cx, |state, cx| {
+                                        state.set_value("", _window, cx);
+                                    });
+                                    let bt_idx = BodyType::None.to_index();
+                                    this.body_type_select.update(cx, |state, cx| {
+                                        state.set_selected_index(Some(IndexPath::new(bt_idx)), _window, cx);
+                                    });
                                 }
 
                                 if let Some(ref headers_text) = entry_clone.headers {
@@ -165,8 +207,11 @@ pub fn render_history_panel(
                                             }
                                         }
                                     }
+                                } else {
+                                    this.headers.clear();
                                 }
 
+                                this.params.clear();
                                 if let Some(query_start) = entry_url.find('?') {
                                     let query_string =
                                         &entry_url[query_start + 1..];
@@ -205,6 +250,7 @@ pub fn render_history_panel(
                                         }
                                     }
                                 }
+                                this.rebuild_param_subscriptions(_window, cx);
 
                                 if let Some(status) = entry_clone.response_status {
                                     let resp_body = entry_response_body
@@ -279,7 +325,24 @@ pub fn render_history_panel(
                                     );
                                 } else {
                                     this.response = None;
+                                    this.response_input.update(cx, |state, cx| {
+                                        state.set_value("", _window, cx);
+                                    });
+                                    this.response_xml_input.update(cx, |state, cx| {
+                                        state.set_value("", _window, cx);
+                                    });
+                                    this.response_text_input.update(cx, |state, cx| {
+                                        state.set_value("", _window, cx);
+                                    });
+                                    this.response_html_input.update(cx, |state, cx| {
+                                        state.set_value("", _window, cx);
+                                    });
                                 }
+                                this.rebuild_header_subscriptions(_window, cx);
+                                this.auto_detect_body_type_from_headers(_window, cx);
+                                this.last_synced_url = entry_url.clone();
+                                this.is_importing_curl = false;
+
                                 cx.notify();
                             },
                         ),

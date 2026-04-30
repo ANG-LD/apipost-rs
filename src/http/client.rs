@@ -204,26 +204,20 @@ let response = if use_custom_client {
             .await
             .context("读取响应体失败")?;
 
-        // 记录压缩后的大小
+        // 记录网络传输的压缩大小
         let compressed_size = body_bytes.len() as i64;
 
         // 如果是 gzip 压缩数据，先解压用于渲染
         let is_gzip = body_bytes.len() >= 2 && body_bytes[0] == 0x1f && body_bytes[1] == 0x8b;
-        let (body_text, size_bytes) = if is_gzip {
+        let body_text = if is_gzip {
             let mut decoder = GzDecoder::new(&body_bytes[..]);
             let mut decompressed = Vec::new();
             match decoder.read_to_end(&mut decompressed) {
-                Ok(_) => {
-                    let text = String::from_utf8_lossy(&decompressed).to_string();
-                    (text, compressed_size)  // size_bytes 报告压缩后的大小
-                },
-                Err(_) => {
-                    // 解压失败，返回原始内容
-                    (String::from_utf8_lossy(&body_bytes).to_string(), compressed_size)
-                }
+                Ok(_) => String::from_utf8_lossy(&decompressed).to_string(),
+                Err(_) => String::from_utf8_lossy(&body_bytes).to_string(),
             }
         } else {
-            (String::from_utf8_lossy(&body_bytes).to_string(), compressed_size)
+            String::from_utf8_lossy(&body_bytes).to_string()
         };
 
         Ok(HttpResponse {
@@ -231,7 +225,7 @@ let response = if use_custom_client {
             headers: response_headers,
             body: body_text,
             time_ms: elapsed.as_millis() as i64,
-            size_bytes,
+            size_bytes: compressed_size,
             cookies,
         })
     }

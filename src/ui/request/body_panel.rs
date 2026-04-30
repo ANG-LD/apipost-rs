@@ -56,7 +56,7 @@ fn body_type_tab(
         BodyType::None => this.t("ui.none"),
         BodyType::FormData => this.t("ui.form_data"),
         BodyType::UrlEncoded => this.t("ui.url_encoded"),
-        BodyType::Raw => this.t("ui.raw"),
+        BodyType::Raw => "Raw".to_string(),
         BodyType::Binary => this.t("ui.binary"),
     };
     let min_w = match body_type {

@@ -108,7 +108,7 @@ pub fn render_params_panel(
                                                   _: &ClickEvent,
                                                   _window: &mut Window,
                                                   cx: &mut Context<MainView>| {
-                                                this.remove_param(idx, cx);
+                                                this.remove_param(idx, _window, cx);
                                             },
                                         )),
                                 ),

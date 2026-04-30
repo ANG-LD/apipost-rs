@@ -62,6 +62,7 @@ fn main() {
                         ..Default::default()
                     }
                 ),
+                app_id: Some("apipost-rs".into()),
                 ..Default::default()
             },
             |window, cx| {

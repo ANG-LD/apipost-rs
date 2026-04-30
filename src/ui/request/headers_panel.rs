@@ -108,7 +108,7 @@ pub fn render_headers_panel(
                                                   _: &ClickEvent,
                                                   _window: &mut Window,
                                                   cx: &mut Context<MainView>| {
-                                                this.remove_header(idx, cx);
+                                                this.remove_header(idx, _window, cx);
                                             },
                                         )),
                                 ),
