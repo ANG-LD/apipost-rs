@@ -9,15 +9,13 @@ license-file = "LICENSE"
 copyright = "Copyright 2025 apipost-rs team"
 category = "Development"
 
-before-packaging-command = "cargo build --release"
-binaries = [{ path = "target/release/apipost-rs", main = true }]
-
 icons = [
     "assets/icon.png",
 ]
 
 out-dir = "./dist"
-binaries-dir = "."
+binaries = [{ path = "apipost-rs", main = true }]
+binaries-dir = "target/release"
 
 [linux]
 generate-desktop-entry = true

@@ -33,6 +33,9 @@ jobs:
       - name: Install cargo-packager
         run: cargo install cargo-packager --locked
 
+      - name: Build release
+        run: cargo build --release
+
       - name: Package deb
         run: cargo packager -c packager.toml -f deb --release
 
@@ -52,6 +55,17 @@ jobs:
 
       - name: Install cargo-packager
         run: cargo install cargo-packager --locked
+
+      - name: Build release
+        run: cargo build --release
+
+      - name: Debug binary path
+        shell: pwsh
+        run: |
+          Write-Host "=== Checking target/release ==="
+          ls target/release/apipost-rs* 2>$null
+          Write-Host "=== Checking target/release recursively ==="
+          Get-ChildItem -Path target/release -Filter "*apipost*" -Recurse 2>$null
 
       - name: Package nsis
         run: cargo packager -c packager.toml -f nsis --release
