@@ -1,0 +1,61 @@
+name: Packaging
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  linux-deb:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libglib2.0-dev \
+            libx11-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
+            libgraphene-1.0-dev \
+            libpng-dev \
+            libjpeg-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-packager
+        run: cargo install cargo-packager --locked
+
+      - name: Package deb
+        run: cargo packager -c packager.toml -f deb --release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apipost-rs-deb
+          path: dist/*.deb
+
+  windows-nsis:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-packager
+        run: cargo install cargo-packager --locked
+
+      - name: Package nsis
+        run: cargo packager -c packager.toml -f nsis --release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apipost-rs-nsis
+          path: dist/*.exe

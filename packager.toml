@@ -1,0 +1,31 @@
+name = "apipost-rs"
+product-name = "ApiPost-Rs"
+version = "0.1.0"
+identifier = "com.apipost-rs.apipost-rs"
+description = "A Postman alternative built with Rust and gpui"
+homepage = "https://github.com/apipost-rs/apipost-rs"
+publisher = "apipost-rs team"
+license-file = "LICENSE"
+copyright = "Copyright 2025 apipost-rs team"
+category = "Development"
+
+before-packaging-command = "cargo build --release"
+binaries = [{ path = "target/release/apipost-rs", main = true }]
+
+icons = [
+    "assets/icon.png",
+]
+
+out-dir = "./dist"
+binaries-dir = "."
+
+[linux]
+generate-desktop-entry = true
+
+[deb]
+depends = ["libwebkit2gtk-4.1-0", "libgtk-3-0", "libglib2.0-0", "libc6", "libx11-6", "libwayland-client0"]
+section = "utils"
+priority = "optional"
+
+[nsis]
+installer-mode = "currentUser"

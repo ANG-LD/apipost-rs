@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=ApiPost-Rs
+Comment=A Postman alternative built with Rust and gpui
+Exec=apipost-rs
+Icon=apipost-rs
+Type=Application
+Categories=Development;Utility;Network;
+Keywords=API;HTTP;REST;Postman;Testing;
+Terminal=false
+StartupWMClass=apipost-rs
