@@ -11,6 +11,7 @@ use crate::ui::{
     HeaderEntry, RawFormat, RequestSettings, ScriptState,
     SettingsInputs, Theme,
 };
+use crate::ui::dialogs::{EnvDialogState, render_env_dialog_overlay};
 use gpui::prelude::*;
 use gpui::*;
 use gpui::InteractiveElement;
@@ -123,6 +124,8 @@ pub struct MainView {
     pub(crate) saved_requests: Vec<crate::app::database::SavedRequest>,
     pub(crate) folders: Vec<crate::app::database::Folder>,
     pub(crate) environments: Vec<crate::app::database::Environment>,
+    pub(crate) active_environment_name: Option<String>,
+    pub(crate) env_dialog_state: Arc<Mutex<EnvDialogState>>,
     pub(crate) url_input: Entity<InputState>,
     pub(crate) _url_change_sub: gpui::Subscription,
     pub(crate) _param_input_subs: Vec<gpui::Subscription>,
@@ -361,6 +364,10 @@ impl MainView {
         let saved_requests = app_state.lock().unwrap().db.get_saved_requests().unwrap_or_default();
         let folders = app_state.lock().unwrap().db.get_folders().unwrap_or_default();
         let environments = app_state.lock().unwrap().db.get_environments().unwrap_or_default();
+        let active_environment_name = environments.iter()
+            .find(|e| e.is_active)
+            .map(|e| e.name.clone());
+        let env_dialog_state = Arc::new(Mutex::new(EnvDialogState::new(window, cx)));
 
         Self {
             app_state,
@@ -385,6 +392,8 @@ impl MainView {
             saved_requests,
             folders,
             environments,
+            active_environment_name,
+            env_dialog_state,
             url_input,
             _url_change_sub,
             _param_input_subs: Vec::new(),
@@ -464,11 +473,12 @@ impl MainView {
             }
         }
 
-        // 6. 构建完整URL
-        let url_with_scheme = if !self.url.starts_with("http://") && !self.url.starts_with("https://") {
-            format!("http://{}", self.url)
+        // 6. 构建完整URL（先替换环境变量再检查scheme，避免变量值含http导致重复添加）
+        let resolved_url = self.app_state.lock().unwrap().env_manager.replace_variables(&self.url);
+        let url_with_scheme = if !resolved_url.starts_with("http://") && !resolved_url.starts_with("https://") {
+            format!("http://{}", resolved_url)
         } else {
-            self.url.clone()
+            resolved_url
         };
 
         let base_url = if let Some(query_start) = url_with_scheme.find('?') {
@@ -1441,16 +1451,72 @@ impl MainView {
 
     /// 激活指定环境
     fn activate_environment(&mut self, env_id: &str, _window: &mut Window, cx: &mut Context<Self>) {
-        if let Err(e) = self.app_state.lock().unwrap().db.set_active_environment(env_id) {
-            log::error!("设置活跃环境失败: {}", e);
+        // Single lock acquisition to avoid re-entrant deadlock
+        {
+            let mut app = self.app_state.lock().unwrap();
+            if let Err(e) = app.db.set_active_environment(env_id) {
+                log::error!("设置活跃环境失败: {}", e);
+                return;
+            }
+            if let Ok(Some(env)) = app.db.get_active_environment() {
+                if let Err(e) = app.env_manager.load_from_json(&env.variables) {
+                    log::warn!("加载环境变量失败: {}", e);
+                }
+            }
+            // Sync the HTTP client's env_manager so variable replacement uses current env
+            let updated_env = app.env_manager.clone();
+            app.http_client.set_env_manager(updated_env);
+            self.environments = app.db.get_environments().unwrap_or_default();
+            self.active_environment_name = self.environments.iter()
+                .find(|e| e.is_active)
+                .map(|e| e.name.clone());
+        }
+        cx.notify();
+    }
+
+    /// 从数据库刷新环境列表
+    fn load_environments(&mut self) {
+        self.environments = self.app_state.lock().unwrap().db.get_environments().unwrap_or_default();
+        self.active_environment_name = self.environments.iter()
+            .find(|e| e.is_active)
+            .map(|e| e.name.clone());
+    }
+
+    /// 打开创建/编辑环境对话框
+    fn open_environment_dialog(
+        &mut self,
+        env_id: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let env_data = if let Some(ref id) = env_id {
+            self.environments.iter().find(|e| e.id == *id).cloned()
+        } else {
+            None
+        };
+        let globals = self.app_state.lock().unwrap().env_manager.get_all_globals();
+
+        self.env_dialog_state.lock().unwrap().load_from(
+            env_data.as_ref(),
+            &globals,
+            window,
+            cx,
+        );
+        cx.notify();
+    }
+
+    /// 获取当前活跃环境ID
+    pub(crate) fn active_env_id(&self) -> Option<String> {
+        self.environments.iter().find(|e| e.is_active).map(|e| e.id.clone())
+    }
+
+    /// 删除环境
+    fn delete_environment(&mut self, env_id: &str, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Err(e) = self.app_state.lock().unwrap().db.delete_environment(env_id) {
+            log::error!("删除环境失败: {}", e);
             return;
         }
-        if let Ok(Some(env)) = self.app_state.lock().unwrap().db.get_active_environment() {
-            if let Err(e) = self.app_state.lock().unwrap().env_manager.load_from_json(&env.variables) {
-                log::warn!("加载环境变量失败: {}", e);
-            }
-        }
-        self.environments = self.app_state.lock().unwrap().db.get_environments().unwrap_or_default();
+        self.load_environments();
         cx.notify();
     }
 
@@ -1713,6 +1779,13 @@ impl Render for MainView {
         let settings = self.settings.clone();
         let request_tabs = self.request_tabs.clone();
         let active_tab = self.active_tab;
+        // 检查环境保存后是否需要刷新
+        if self.env_dialog_state.lock().unwrap().needs_refresh {
+            self.load_environments();
+            self.saved_requests = self.app_state.lock().unwrap().db.get_saved_requests().unwrap_or_default();
+            self.folders = self.app_state.lock().unwrap().db.get_folders().unwrap_or_default();
+            self.env_dialog_state.lock().unwrap().needs_refresh = false;
+        }
         let saved_requests = self.saved_requests.clone();
         let folders = self.folders.clone();
         let environments = self.environments.clone();
@@ -1724,6 +1797,7 @@ impl Render for MainView {
             .flex()
             .flex_col()
             .bg(theme.background)
+            .relative()
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>| {
                 if event.keystroke.modifiers.control {
                     match event.keystroke.key.as_str() {
@@ -1833,7 +1907,7 @@ impl Render for MainView {
                                             }))
                                             .child(Icon::new(IconName::GalleryVerticalEnd).small()),
                                         div()
-                                            .id("sidebar-environments") // 环境变量
+                                            .id("sidebar-env-tab")
                                             .w(px(48.0))
                                             .h(px(40.0))
                                             .flex()
@@ -1845,7 +1919,7 @@ impl Render for MainView {
                                             .on_click(cx.listener(|this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                 this.set_sidebar_tab(SidebarTab::Environments, cx);
                                             }))
-                                            .child(Icon::new(IconName::Settings2).small()),
+                                            .child(Icon::new(IconName::Globe).small()),
                                     ]),
                                 // 侧边栏内容
                                 if !self.sidebar_collapsed {
@@ -2029,59 +2103,118 @@ impl Render for MainView {
                                                         }))
                                                 }
                                             } else {
-                                                if environments.is_empty() {
-                                                    div()
-                                                        .id("sidebar-environments")
-                                                        .p_2()
-                                                        .text_sm()
-                                                        .text_color(theme.muted_foreground)
-                                                        .child(self.t("env.no_env"))
-                                                } else {
-                                                    div()
-                                                        .id("sidebar-environments")
-                                                        .flex_col()
-                                                        .gap_1()
-                                                        .overflow_y_scroll()
-                                                        .p_2()
-                                                        .children(environments.iter().map(|env| {
-                                                            let env_id = env.id.clone();
-                                                            let env_name = env.name.clone();
-                                                            let is_active = env.is_active;
+                                                div()
+                                                    .id("sidebar-environments")
+                                                    .flex_col()
+                                                    .child(
+                                                        div()
+                                                            .flex()
+                                                            .flex_row()
+                                                            .items_center()
+                                                            .justify_between()
+                                                            .px_2()
+                                                            .py_2()
+                                                            .child(
+                                                                div()
+                                                                    .flex()
+                                                                    .items_center()
+                                                                    .gap_1()
+                                                                    .child(Icon::new(IconName::Globe).xsmall().text_color(theme.accent))
+                                                                    .child(
+                                                                        div()
+                                                                            .text_sm()
+                                                                            .text_color(theme.muted_foreground)
+                                                                            .child("环境变量"),
+                                                                    ),
+                                                            )
+                                                            .child({
+                                                                Button::new("add-env-btn")
+                                                                    .icon(IconName::Plus)
+                                                                    .xsmall()
+                                                                    .on_click(cx.listener(|this, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>| {
+                                                                        this.open_environment_dialog(None, window, cx);
+                                                                    }))
+                                                            }),
+                                                    )
+                                                    .child(
+                                                        if environments.is_empty() {
                                                             div()
+                                                                .id("sidebar-env-empty")
+                                                                .px_2()
+                                                                .py_4()
                                                                 .flex()
-                                                                .flex_row()
-                                                                .items_center()
-                                                                .gap_2()
+                                                                .justify_center()
+                                                                .text_xs()
+                                                                .text_color(theme.muted_foreground)
+                                                                .child(self.t("env.no_env"))
+                                                        } else {
+                                                            div()
+                                                                .id("sidebar-env-list")
+                                                                .flex_col()
+                                                                .gap_1()
+                                                                .overflow_y_scroll()
                                                                 .p_2()
-                                                                .rounded_md()
-                                                                .cursor_pointer()
-                                                                .hover(|s| s.bg(theme.code_background))
-                                                                .bg(if is_active { theme.muted_background } else { theme.background })
-                                                                .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>| {
-                                                                    this.activate_environment(&env_id, window, cx);
+                                                                .children(environments.iter().map(|env| {
+                                                                    let env_id = env.id.clone();
+                                                                    let env_name = env.name.clone();
+                                                                    let env_id_edit = env.id.clone();
+                                                                    let env_id_del = env.id.clone();
+                                                                    let is_active = env.is_active;
+                                                                    div()
+                                                                        .flex()
+                                                                        .flex_row()
+                                                                        .items_center()
+                                                                        .gap_2()
+                                                                        .p_2()
+                                                                        .rounded_md()
+                                                                        .cursor_pointer()
+                                                                        .hover(|s| s.bg(theme.code_background))
+                                                                        .bg(if is_active { theme.muted_background } else { theme.background })
+                                                                        .children([
+                                                                            div()
+                                                                                .w(px(7.0))
+                                                                                .h(px(7.0))
+                                                                                .rounded_full()
+                                                                                .flex_shrink_0()
+                                                                                .bg(if is_active { theme.success } else { theme.muted_foreground }),
+                                                                            div()
+                                                                                .flex_1()
+                                                                                .text_sm()
+                                                                                .text_ellipsis()
+                                                                                .text_color(if is_active { theme.foreground } else { theme.muted_foreground })
+                                                                                .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>| {
+                                                                                    this.activate_environment(&env_id, window, cx);
+                                                                                }))
+                                                                                .child(env_name.clone()),
+                                                                            div()
+                                                                                .cursor_pointer()
+                                                                                .p_1()
+                                                                                .rounded_sm()
+                                                                                .hover(|s| s.bg(theme.muted_background))
+                                                                                .on_mouse_down(MouseButton::Left, cx.listener({
+                                                                                    let id = env_id_edit.clone();
+                                                                                    move |this, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>| {
+                                                                                        this.open_environment_dialog(Some(id.clone()), window, cx);
+                                                                                    }
+                                                                                }))
+                                                                                .child(
+                                                                                    Icon::new(IconName::Replace).xsmall().text_color(theme.accent),
+                                                                                ),
+                                                                            div()
+                                                                                .cursor_pointer()
+                                                                                .p_1()
+                                                                                .rounded_sm()
+                                                                                .hover(|s| s.bg(theme.error))
+                                                                                .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>| {
+                                                                                    this.delete_environment(&env_id_del, window, cx);
+                                                                                }))
+                                                                                .child(
+                                                                                    Icon::new(IconName::Delete).xsmall().text_color(theme.muted_foreground),
+                                                                                ),
+                                                                        ])
                                                                 }))
-                                                                .children([
-                                                                    div()
-                                                                        .w(px(8.0))
-                                                                        .h(px(8.0))
-                                                                        .rounded_full()
-                                                                        .bg(if is_active { theme.success } else { theme.muted_foreground }),
-                                                                    div()
-                                                                        .flex_1()
-                                                                        .text_sm()
-                                                                        .text_color(if is_active { theme.foreground } else { theme.muted_foreground })
-                                                                        .child(env_name),
-                                                                    if is_active {
-                                                                        div()
-                                                                            .text_xs()
-                                                                            .text_color(theme.success)
-                                                                            .child("●")
-                                                                    } else {
-                                                                        div()
-                                                                    },
-                                                                ])
-                                                        }))
-                                                }
+                                                        }
+                                                    )
                                             },
                                         ])
                                 } else {
@@ -2592,7 +2725,11 @@ impl Render for MainView {
                     .text_color(theme.muted_foreground)
                     .children([
                         div().flex().items_center().gap_4().children([
-                            div().child("No Environment"),
+                            div().child(
+                                self.active_environment_name
+                                    .clone()
+                                    .unwrap_or_else(|| self.t("env.no_env"))
+                            ),
                             div().child("*"),
                             div().child("Bearer Token"),
                         ]),
@@ -2603,5 +2740,18 @@ impl Render for MainView {
                         ]),
                     ]),
             ])
+            .when(
+                self.env_dialog_state.lock().map(|s| s.visible).unwrap_or(false),
+                |d| d.child(
+                    render_env_dialog_overlay(
+                        &self.env_dialog_state,
+                        &self.app_state,
+                        &self.active_env_id(),
+                        &theme,
+                        cx.entity_id(),
+                        cx,
+                    )
+                )
+            )
     }
 }

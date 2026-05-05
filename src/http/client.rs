@@ -100,6 +100,11 @@ impl HttpClient {
         })
     }
 
+    /// Update the environment manager (called when active environment changes)
+    pub fn set_env_manager(&mut self, env_manager: EnvironmentManager) {
+        self.env_manager = env_manager;
+    }
+
     /// 发送HTTP请求
     pub async fn send_request(&self, request: &HttpRequest) -> Result<HttpResponse> {
         self.send_request_with_settings(request, RequestOptions::default()).await
@@ -111,14 +116,43 @@ impl HttpClient {
 
         // 替换URL中的环境变量
         let url = self.env_manager.replace_variables(&request.url);
+        log::info!("=== HTTP请求详情 ===");
+        log::info!("方法: {}", request.method);
+        log::info!("原始URL: {}", request.url);
+        if request.url != url {
+            log::info!("替换后URL: {}", url);
+        }
 
         // 构建请求头
         let headers = self.build_headers(&request.headers)?;
 
         // 替换请求体中的环境变量
         let body = request.body.as_ref().map(|b| {
-            self.env_manager.replace_variables(b)
+            let replaced = self.env_manager.replace_variables(b);
+            if b != &replaced {
+                log::info!("请求体已替换环境变量 (原始长度: {}, 替换后长度: {})", b.len(), replaced.len());
+            }
+            replaced
         });
+
+        log::info!("请求头 ({} 项):", request.headers.len());
+        for (name, value) in &request.headers {
+            let resolved = self.env_manager.replace_variables(value);
+            if *value != resolved {
+                log::info!("  {}: {} -> {}", name, value, resolved);
+            } else {
+                log::info!("  {}: {}", name, value);
+            }
+        }
+        if let Some(ref body_content) = body {
+            let preview = if body_content.len() > 500 {
+                format!("{}...(截断, 总长度: {})", &body_content[..500], body_content.len())
+            } else {
+                body_content.clone()
+            };
+            log::info!("请求体: {}", preview);
+        }
+        log::info!("===================");
 
         // 解析HTTP方法
         let method = Method::try_from(request.method.to_uppercase().as_str())

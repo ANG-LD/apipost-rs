@@ -130,7 +130,7 @@ impl AuthState {
         match self {
             AuthState::NoAuth => vec![],
             AuthState::Bearer(auth) => {
-                let token = auth.token.read(cx).value().to_string();
+                let token = auth.token.read(cx).value().trim().to_string();
                 if token.is_empty() {
                     vec![]
                 } else {

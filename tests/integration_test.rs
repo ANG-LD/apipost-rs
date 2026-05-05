@@ -14,7 +14,7 @@ use std::collections::HashMap;
 fn test_build_get_request() {
     let request = HttpRequest::new(Method::GET, "https://api.example.com/users".to_string());
 
-    assert_eq!(request.method, Method::GET);
+    assert_eq!(request.method, "GET");
     assert_eq!(request.url, "https://api.example.com/users");
     assert!(request.headers.is_empty());
     assert!(request.body.is_none());
@@ -28,7 +28,7 @@ fn test_build_post_request_with_headers() {
         .with_header("Authorization".to_string(), "Bearer token123".to_string())
         .with_body(r#"{"name":"test"}"#.to_string());
 
-    assert_eq!(request.method, Method::POST);
+    assert_eq!(request.method, "POST");
     assert_eq!(request.headers.len(), 2);
     assert!(request.body.is_some());
 }
@@ -39,7 +39,7 @@ fn test_parse_curl_get() {
     let curl = "curl https://api.example.com/users";
     let request = parse_curl(curl).unwrap();
 
-    assert_eq!(request.method, Method::GET);
+    assert_eq!(request.method, "GET");
     assert_eq!(request.url, "https://api.example.com/users");
 }
 
@@ -49,7 +49,7 @@ fn test_parse_curl_with_headers() {
     let curl = "curl -H 'Content-Type: application/json' -H 'Authorization: Bearer token' https://api.example.com/users";
     let request = parse_curl(curl).unwrap();
 
-    assert_eq!(request.method, Method::GET);
+    assert_eq!(request.method, "GET");
     assert_eq!(request.headers.len(), 2);
     assert_eq!(request.headers[0].0, "Content-Type");
 }
@@ -60,7 +60,7 @@ fn test_parse_curl_post() {
     let curl = "curl -X POST -d '{\"name\":\"test\"}' https://api.example.com/users";
     let request = parse_curl(curl).unwrap();
 
-    assert_eq!(request.method, Method::POST);
+    assert_eq!(request.method, "POST");
     assert!(request.body.is_some());
 }
 
@@ -190,6 +190,7 @@ fn test_response_status() {
         body: String::new(),
         time_ms: 100,
         size_bytes: 0,
+        cookies: Vec::new(),
     };
     assert!(success_response.is_success());
     assert_eq!(success_response.status_text(), "OK");
@@ -200,6 +201,7 @@ fn test_response_status() {
         body: String::new(),
         time_ms: 50,
         size_bytes: 0,
+        cookies: Vec::new(),
     };
     assert!(!error_response.is_success());
     assert_eq!(error_response.status_text(), "Not Found");
@@ -214,6 +216,7 @@ fn test_response_format_body() {
         body: r#"{"name":"test","value":123}"#.to_string(),
         time_ms: 100,
         size_bytes: 0,
+        cookies: Vec::new(),
     };
 
     let formatted = response.format_body();
@@ -229,6 +232,7 @@ fn test_response_format_non_json() {
         body: "plain text response".to_string(),
         time_ms: 100,
         size_bytes: 0,
+        cookies: Vec::new(),
     };
 
     let formatted = response.format_body();
@@ -277,6 +281,7 @@ fn create_test_history(id: &str, method: &str, url: &str, status: i32) -> apipos
         response_headers: None,
         response_body: None,
         response_time_ms: Some(100),
+        response_size: None,
         created_at: Utc::now(),
     }
 }

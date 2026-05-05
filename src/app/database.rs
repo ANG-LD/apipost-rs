@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -91,6 +92,15 @@ impl Database {
                 is_active INTEGER DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
+            )",
+            [],
+        )?;
+
+        // 创建全局变量表
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS global_variables (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
             )",
             [],
         )?;
@@ -360,6 +370,31 @@ impl Database {
         Ok(())
     }
 
+    /// 保存全局变量（原子替换）
+    pub fn save_global_variables(&self, vars: &HashMap<String, String>) -> Result<()> {
+        let conn = self.conn.lock()
+            .map_err(|_| anyhow::anyhow!("数据库锁中毒"))?;
+        conn.execute("DELETE FROM global_variables", [])?;
+        let mut stmt = conn.prepare(
+            "INSERT INTO global_variables (key, value) VALUES (?1, ?2)"
+        )?;
+        for (k, v) in vars {
+            stmt.execute(params![k, v])?;
+        }
+        Ok(())
+    }
+
+    /// 加载所有全局变量
+    pub fn get_global_variables(&self) -> Result<HashMap<String, String>> {
+        let conn = self.conn.lock()
+            .map_err(|_| anyhow::anyhow!("数据库锁中毒"))?;
+        let mut stmt = conn.prepare("SELECT key, value FROM global_variables")?;
+        let map = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?.collect::<Result<HashMap<_, _>, _>>()?;
+        Ok(map)
+    }
+
     // ==================== 收藏请求操作 ====================
 
     /// 保存请求到收藏
@@ -564,6 +599,7 @@ mod tests {
             response_headers: Some("{}".to_string()),
             response_body: Some(r#"{"users":[]}"#.to_string()),
             response_time_ms: Some(150),
+            response_size: None,
             created_at: Utc::now(),
         };
 
@@ -615,6 +651,7 @@ mod tests {
             response_headers: None,
             response_body: None,
             response_time_ms: Some(100),
+            response_size: None,
             created_at: Utc::now(),
         };
 

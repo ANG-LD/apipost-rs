@@ -21,7 +21,22 @@ impl CurlParser {
     pub fn new(input: String) -> Self {
         // 处理 shell 换行续行符（\\\n 或 \\\r\n）
         let input = input.replace("\\\r\n", " ").replace("\\\n", " ");
-        Self { input, pos: 0 }
+        // 处理 Windows CMD 续行符 ^\n 和 ^\r\n
+        let input = input.replace("^\r\n", " ").replace("^\n", " ");
+        // 处理 Windows CMD 转义符 ^X → X（非换行的任意字符）
+        let mut processed = String::with_capacity(input.len());
+        let chars: Vec<char> = input.chars().collect();
+        let mut i = 0;
+        while i < chars.len() {
+            if chars[i] == '^' && i + 1 < chars.len() {
+                processed.push(chars[i + 1]);
+                i += 2;
+            } else {
+                processed.push(chars[i]);
+                i += 1;
+            }
+        }
+        Self { input: processed, pos: 0 }
     }
 
     /// 解析cURL命令
@@ -583,5 +598,17 @@ mod tests {
         let code = generate_code(&request, "rust");
         assert!(code.contains("reqwest"));
         assert!(code.contains("https://api.example.com"));
+    }
+
+    #[test]
+    fn test_parse_windows_cmd_curl() {
+        let curl = "curl -X POST \"https://api.example.com/save\" ^
+  -H \"Content-Type: application/json\" ^
+  --data-raw ^\"{^\\^\"ids^\\^\":^[2^],^\\^\"name^\\^\":^\\^\"test^\\^\"}^\"";
+        let request = parse_curl(curl).unwrap();
+        assert_eq!(request.method, "POST");
+        assert_eq!(request.url, "https://api.example.com/save");
+        assert!(request.body.is_some());
+        assert_eq!(request.body.unwrap(), "{\"ids\":[2],\"name\":\"test\"}");
     }
 }

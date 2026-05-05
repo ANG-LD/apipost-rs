@@ -236,6 +236,7 @@ mod tests {
             response_headers: None,
             response_body: Some("{}".to_string()),
             response_time_ms: Some(100),
+            response_size: Some(2),
         };
 
         let history = entry.into_history_entry();
@@ -260,6 +261,7 @@ mod tests {
                 response_headers: None,
                 response_body: None,
                 response_time_ms: None,
+                response_size: None,
                 created_at: Utc::now(),
             },
             HistoryEntry {
@@ -272,6 +274,7 @@ mod tests {
                 response_headers: None,
                 response_body: None,
                 response_time_ms: None,
+                response_size: None,
                 created_at: Utc::now(),
             },
         ];
@@ -296,6 +299,7 @@ mod tests {
                 response_headers: None,
                 response_body: None,
                 response_time_ms: None,
+                response_size: None,
                 created_at: Utc::now(),
             },
             HistoryEntry {
@@ -308,6 +312,7 @@ mod tests {
                 response_headers: None,
                 response_body: None,
                 response_time_ms: None,
+                response_size: None,
                 created_at: Utc::now(),
             },
         ];

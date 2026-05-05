@@ -55,6 +55,13 @@ impl AppState {
             }
         }
 
+        // 从数据库加载全局变量
+        if let Ok(globals) = db.get_global_variables() {
+            if !globals.is_empty() {
+                env_manager.set_globals(globals);
+            }
+        }
+
         // 初始化HTTP客户端
         let http_client = match &config.proxy.enabled {
             true => {

@@ -155,6 +155,16 @@ impl I18nManager {
         map.insert("env.name".to_string(), "变量名".to_string());
         map.insert("env.value".to_string(), "变量值".to_string());
         map.insert("env.no_env".to_string(), "未选择环境".to_string());
+        map.insert("env.edit".to_string(), "编辑环境".to_string());
+        map.insert("env.create".to_string(), "新建环境".to_string());
+        map.insert("env.delete".to_string(), "删除".to_string());
+        map.insert("env.save".to_string(), "保存".to_string());
+        map.insert("env.save_env".to_string(), "保存环境".to_string());
+        map.insert("env.cancel".to_string(), "取消".to_string());
+        map.insert("env.name_label".to_string(), "环境名称".to_string());
+        map.insert("env.current_vars".to_string(), "当前环境变量".to_string());
+        map.insert("env.global_vars".to_string(), "全局变量".to_string());
+        map.insert("env.empty_hint".to_string(), "暂无变量，点击右上角「添加变量」按钮添加".to_string());
 
         // 代码生成
         map.insert("code.title".to_string(), "生成代码".to_string());
@@ -305,9 +315,19 @@ impl I18nManager {
         map.insert("env.global".to_string(), "Global".to_string());
         map.insert("env.current".to_string(), "Current".to_string());
         map.insert("env.add".to_string(), "Add Variable".to_string());
-        map.insert("env.name".to_string(), "Variable Name".to_string());
-        map.insert("env.value".to_string(), "Variable Value".to_string());
+        map.insert("env.name".to_string(), "Variable".to_string());
+        map.insert("env.value".to_string(), "Current Value".to_string());
         map.insert("env.no_env".to_string(), "No environment selected".to_string());
+        map.insert("env.edit".to_string(), "Edit Environment".to_string());
+        map.insert("env.create".to_string(), "New Environment".to_string());
+        map.insert("env.delete".to_string(), "Delete".to_string());
+        map.insert("env.save".to_string(), "Save".to_string());
+        map.insert("env.save_env".to_string(), "Save Environment".to_string());
+        map.insert("env.cancel".to_string(), "Cancel".to_string());
+        map.insert("env.name_label".to_string(), "Environment Name".to_string());
+        map.insert("env.current_vars".to_string(), "Current Variables".to_string());
+        map.insert("env.global_vars".to_string(), "Global Variables".to_string());
+        map.insert("env.empty_hint".to_string(), "No variables. Click 'Add Variable' to add".to_string());
 
         // Code Generation
         map.insert("code.title".to_string(), "Generate Code".to_string());
