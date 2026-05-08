@@ -429,6 +429,35 @@ impl Database {
         Ok(())
     }
 
+    /// 按 ID 查询单个收藏请求
+    pub fn get_saved_request_by_id(&self, id: &str) -> Result<Option<SavedRequest>> {
+        let conn = self.conn.lock()
+            .map_err(|_| anyhow::anyhow!("数据库锁中毒"))?;
+        let mut stmt = conn.prepare(
+            "SELECT id, name, method, url, headers, body, description, folder_id, created_at, updated_at
+             FROM saved_requests WHERE id = ?1"
+        )?;
+        let mut rows = stmt.query_map(params![id], |row| {
+            Ok(SavedRequest {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                method: row.get(2)?,
+                url: row.get(3)?,
+                headers: row.get(4)?,
+                body: row.get(5)?,
+                description: row.get(6)?,
+                folder_id: row.get(7)?,
+                created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(8)?)
+                    .unwrap_or_else(|_| Utc::now().into())
+                    .with_timezone(&Utc),
+                updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(9)?)
+                    .unwrap_or_else(|_| Utc::now().into())
+                    .with_timezone(&Utc),
+            })
+        })?;
+        Ok(rows.next().transpose()?)
+    }
+
     /// 获取所有收藏请求
     pub fn get_saved_requests(&self) -> Result<Vec<SavedRequest>> {
         let conn = self.conn.lock()
@@ -509,6 +538,114 @@ impl Database {
         conn.execute("UPDATE saved_requests SET folder_id = NULL WHERE folder_id = ?1", params![id])?;
         conn.execute("DELETE FROM folders WHERE id = ?1", params![id])?;
         Ok(())
+    }
+
+    /// 创建文件夹
+    pub fn create_folder(&self, name: &str, parent_id: Option<&str>) -> Result<Folder> {
+        let conn = self.conn.lock()
+            .map_err(|_| anyhow::anyhow!("数据库锁中毒"))?;
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO folders (id, name, parent_id, created_at) VALUES (?1, ?2, ?3, ?4)",
+            params![id, name, parent_id, now],
+        )?;
+        Ok(Folder { id, name: name.to_string(), parent_id: parent_id.map(String::from), created_at: Some(now) })
+    }
+
+    /// 按文件夹查询请求（None 表示查询未分类的请求）
+    pub fn get_requests_by_folder(&self, folder_id: Option<&str>) -> Result<Vec<SavedRequest>> {
+        let conn = self.conn.lock()
+            .map_err(|_| anyhow::anyhow!("数据库锁中毒"))?;
+        let query = match folder_id {
+            Some(_) => "SELECT id, name, method, url, headers, body, description, folder_id, created_at, updated_at FROM saved_requests WHERE folder_id = ?1 ORDER BY updated_at DESC",
+            None => "SELECT id, name, method, url, headers, body, description, folder_id, created_at, updated_at FROM saved_requests WHERE folder_id IS NULL ORDER BY updated_at DESC",
+        };
+        let mut stmt = conn.prepare(query)?;
+        let requests = stmt.query_map(params![folder_id], |row| {
+            Ok(SavedRequest {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                method: row.get(2)?,
+                url: row.get(3)?,
+                headers: row.get(4)?,
+                body: row.get(5)?,
+                description: row.get(6)?,
+                folder_id: row.get(7)?,
+                created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(8)?)
+                    .unwrap_or_else(|_| Utc::now().into())
+                    .with_timezone(&Utc),
+                updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(9)?)
+                    .unwrap_or_else(|_| Utc::now().into())
+                    .with_timezone(&Utc),
+            })
+        })?.collect::<Result<Vec<_>, _>>()?;
+        Ok(requests)
+    }
+
+    /// 移动请求到指定文件夹
+    pub fn move_request(&self, request_id: &str, folder_id: Option<&str>) -> Result<()> {
+        let conn = self.conn.lock()
+            .map_err(|_| anyhow::anyhow!("数据库锁中毒"))?;
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "UPDATE saved_requests SET folder_id = ?1, updated_at = ?2 WHERE id = ?3",
+            params![folder_id, now, request_id],
+        )?;
+        Ok(())
+    }
+
+    /// 移动文件夹到指定父文件夹
+    pub fn move_folder(&self, folder_id: &str, parent_id: Option<&str>) -> Result<()> {
+        let conn = self.conn.lock()
+            .map_err(|_| anyhow::anyhow!("数据库锁中毒"))?;
+        conn.execute(
+            "UPDATE folders SET parent_id = ?1 WHERE id = ?2",
+            params![parent_id, folder_id],
+        )?;
+        Ok(())
+    }
+
+    /// 级联删除文件夹（删除所有子文件夹，子请求移回根目录）
+    pub fn delete_folder_cascade(&self, id: &str) -> Result<()> {
+        let conn = self.conn.lock()
+            .map_err(|_| anyhow::anyhow!("数据库锁中毒"))?;
+        // 递归收集所有子孙文件夹 ID
+        let all_ids = self.collect_descendant_folder_ids(id)?;
+        // 将所有这些文件夹下的请求移回根目录
+        for fid in &all_ids {
+            conn.execute("UPDATE saved_requests SET folder_id = NULL WHERE folder_id = ?1", params![fid])?;
+        }
+        // 删除所有子孙文件夹
+        for fid in &all_ids {
+            conn.execute("DELETE FROM folders WHERE id = ?1", params![fid])?;
+        }
+        Ok(())
+    }
+
+    /// 递归收集文件夹的所有子孙 ID（内部方法，调用方需持有锁）
+    fn collect_descendant_ids_impl(
+        conn: &Connection,
+        parent_id: &str,
+        result: &mut Vec<String>,
+    ) -> Result<()> {
+        let mut stmt = conn.prepare("SELECT id FROM folders WHERE parent_id = ?1")?;
+        let child_ids: Vec<String> = stmt.query_map(params![parent_id], |row| row.get(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        for child_id in child_ids {
+            result.push(child_id.clone());
+            Self::collect_descendant_ids_impl(conn, &child_id, result)?;
+        }
+        Ok(())
+    }
+
+    /// 递归收集文件夹的所有子孙 ID
+    pub fn collect_descendant_folder_ids(&self, id: &str) -> Result<Vec<String>> {
+        let conn = self.conn.lock()
+            .map_err(|_| anyhow::anyhow!("数据库锁中毒"))?;
+        let mut result = vec![id.to_string()];
+        Self::collect_descendant_ids_impl(&conn, id, &mut result)?;
+        Ok(result)
     }
 }
 

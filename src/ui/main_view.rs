@@ -11,7 +11,11 @@ use crate::ui::{
     HeaderEntry, RawFormat, RequestSettings, ScriptState,
     SettingsInputs, Theme,
 };
-use crate::ui::dialogs::{EnvDialogState, render_env_dialog_overlay};
+use crate::ui::dialogs::{EnvDialogState, FolderDialogState, MoveDialogState, render_env_dialog_overlay, render_folder_dialog_overlay, render_move_dialog_overlay};
+use crate::ui::sidebar::CollectionItem;
+use crate::ui::sidebar::{build_collection_tree, render_collection_panel};
+use crate::ui::components::{tooltip_popup, popup_panel};
+use crate::ui::sidebar::{render_folder_context_menu, render_request_context_menu};
 use gpui::prelude::*;
 use gpui::*;
 use gpui::InteractiveElement;
@@ -22,6 +26,7 @@ use gpui_component::scroll::ScrollableElement;
 use gpui_component::scroll::Scrollable;
 use gpui_component::{Disableable, Icon, IconName, IndexPath, Sizable, StyledExt, WindowExt};
 use gpui_component::dialog::{Dialog, DialogHeader, DialogTitle};
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use tokio;
 
@@ -73,6 +78,7 @@ pub enum BuilderTab {
 
 /// 侧边栏标签页
 #[derive(Clone, Copy, PartialEq)]
+#[derive(Debug)]
 pub enum SidebarTab {
     Collections,
     History,
@@ -120,12 +126,24 @@ pub struct MainView {
     pub(crate) sidebar_collapsed: bool,
     pub(crate) sidebar_tab: SidebarTab,
     pub(crate) show_settings_popover: bool,
+    pub(crate) context_menu_target: Option<String>,
+    pub(crate) hovered_item_name: Option<String>,
+    pub(crate) hovered_item_y: Option<f32>,
+    pub(crate) hovered_item_x: Option<f32>,
+    pub(crate) context_menu_pos: Option<(f32, f32)>,
+    pub(crate) env_menu_target: Option<String>,
+    pub(crate) env_menu_pos: Option<(f32, f32)>,
     pub(crate) history: Vec<HistoryEntry>,
     pub(crate) saved_requests: Vec<crate::app::database::SavedRequest>,
     pub(crate) folders: Vec<crate::app::database::Folder>,
     pub(crate) environments: Vec<crate::app::database::Environment>,
     pub(crate) active_environment_name: Option<String>,
     pub(crate) env_dialog_state: Arc<Mutex<EnvDialogState>>,
+    pub(crate) folder_dialog_state: Arc<Mutex<FolderDialogState>>,
+    pub(crate) move_dialog_state: Arc<Mutex<MoveDialogState>>,
+    pub(crate) expanded_folders: HashSet<String>,
+    pub(crate) collection_items: Vec<CollectionItem>,
+    pub(crate) needs_collections_refresh: bool,
     pub(crate) url_input: Entity<InputState>,
     pub(crate) _url_change_sub: gpui::Subscription,
     pub(crate) _param_input_subs: Vec<gpui::Subscription>,
@@ -368,6 +386,8 @@ impl MainView {
             .find(|e| e.is_active)
             .map(|e| e.name.clone());
         let env_dialog_state = Arc::new(Mutex::new(EnvDialogState::new(window, cx)));
+        let folder_dialog_state = Arc::new(Mutex::new(FolderDialogState::new(window, cx)));
+        let move_dialog_state = Arc::new(Mutex::new(MoveDialogState::new()));
 
         Self {
             app_state,
@@ -386,14 +406,30 @@ impl MainView {
             is_loading: false,
             error_message: None,
             sidebar_collapsed: false,
-            sidebar_tab: SidebarTab::History,
+            sidebar_tab: SidebarTab::Collections,
             show_settings_popover: false,
+            context_menu_target: None,
+            hovered_item_name: None,
+            hovered_item_y: None,
+            hovered_item_x: None,
+            context_menu_pos: None,
+            env_menu_target: None,
+            env_menu_pos: None,
+            expanded_folders: HashSet::new(),
+            collection_items: crate::ui::sidebar::build_collection_tree(
+                &folders,
+                &saved_requests,
+                &HashSet::new(),
+            ),
+            needs_collections_refresh: false,
             history,
             saved_requests,
             folders,
             environments,
             active_environment_name,
             env_dialog_state,
+            folder_dialog_state,
+            move_dialog_state,
             url_input,
             _url_change_sub,
             _param_input_subs: Vec::new(),
@@ -634,7 +670,11 @@ impl MainView {
     /// 切换侧边栏标签
     #[allow(dead_code)]
     pub fn set_sidebar_tab(&mut self, tab: SidebarTab, cx: &mut Context<Self>) {
+        log::info!("set_sidebar_tab: 切换到标签页 {:?}", tab);
         self.sidebar_tab = tab;
+        if tab == SidebarTab::Collections {
+            self.needs_collections_refresh = true;
+        }
         cx.notify();
     }
 
@@ -1572,7 +1612,138 @@ impl MainView {
             return;
         }
         self.saved_requests = self.app_state.lock().unwrap().db.get_saved_requests().unwrap_or_default();
+        self.needs_collections_refresh = true;
         cx.notify();
+    }
+
+    /// 展开/折叠文件夹
+    pub fn toggle_folder_expand(&mut self, folder_id: &str, cx: &mut Context<Self>) {
+        if self.expanded_folders.contains(folder_id) {
+            self.expanded_folders.remove(folder_id);
+        } else {
+            self.expanded_folders.insert(folder_id.to_string());
+        }
+        self.rebuild_collections();
+        cx.notify();
+    }
+
+    /// 重建集合树
+    fn rebuild_collections(&mut self) {
+        self.collection_items = crate::ui::sidebar::build_collection_tree(
+            &self.folders,
+            &self.saved_requests,
+            &self.expanded_folders,
+        );
+        log::debug!("集合树已重建: {} 个项目 ({} 个文件夹, {} 个请求)",
+            self.collection_items.len(), self.folders.len(), self.saved_requests.len());
+    }
+
+    /// 重新加载集合数据（从数据库）
+    fn reload_collections(&mut self) {
+        if let Ok(app) = self.app_state.lock() {
+            self.saved_requests = app.db.get_saved_requests().unwrap_or_default();
+            self.folders = app.db.get_folders().unwrap_or_default();
+        }
+        self.rebuild_collections();
+    }
+
+    /// 打开文件夹创建对话框
+    pub fn open_folder_dialog(&mut self, parent_id: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
+        log::info!("打开文件夹对话框, parent_id: {:?}", parent_id);
+        self.folder_dialog_state.lock().unwrap().open_for_create(parent_id, window, cx);
+        cx.notify();
+    }
+
+    /// 打开文件夹重命名对话框
+    pub fn open_folder_edit_dialog(&mut self, folder_id: String, current_name: String, window: &mut Window, cx: &mut Context<Self>) {
+        let parent_id = self.folders.iter()
+            .find(|f| f.id == folder_id)
+            .and_then(|f| f.parent_id.clone());
+        self.folder_dialog_state.lock().unwrap()
+            .open_for_edit(folder_id, current_name, parent_id, window, cx);
+        cx.notify();
+    }
+
+    /// 删除文件夹
+    pub fn delete_folder_from_sidebar(&mut self, folder_id: &str, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Ok(app) = self.app_state.lock() {
+            let _ = app.db.delete_folder_cascade(folder_id);
+        }
+        self.reload_collections();
+        cx.notify();
+    }
+
+    /// 删除收藏请求
+    pub fn delete_saved_request_from_sidebar(&mut self, request_id: &str, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Ok(app) = self.app_state.lock() {
+            let _ = app.db.delete_saved_request(request_id);
+        }
+        self.reload_collections();
+        cx.notify();
+    }
+
+    /// 打开移动对话框
+    pub fn open_move_dialog(&mut self, item_id: &str, is_folder: bool, _window: &mut Window, cx: &mut Context<Self>) {
+        self.move_dialog_state.lock().unwrap().open(item_id.to_string(), is_folder);
+        cx.notify();
+    }
+
+    /// 通过 ID 加载收藏请求（用于树节点点击）
+    pub fn load_saved_request_by_id(
+        &mut self,
+        request_id: &str,
+        method: &str,
+        url: &str,
+        name: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let found = self.app_state.lock().ok().and_then(|app| {
+            app.db.get_saved_request_by_id(request_id).ok().flatten().map(|req| {
+                (req.id, req.method, req.url, req.name, req.headers, req.body)
+            })
+        });
+        if let Some((id, m, u, n, h, b)) = found {
+            self.load_saved_request(&id, &m, &u, &n, h.as_deref(), b.as_deref(), window, cx);
+            return;
+        }
+        // fallback: use provided values
+        self.load_saved_request(request_id, method, url, name, None, None, window, cx);
+    }
+
+    /// 检查所有对话框刷新标志
+    fn check_dialog_refresh_flags(&mut self) {
+        // 环境变量对话框
+        if self.env_dialog_state.lock().unwrap().needs_refresh {
+            log::debug!("刷新: 环境变量对话框标记");
+            self.load_environments();
+            self.saved_requests = self.app_state.lock().unwrap().db.get_saved_requests().unwrap_or_default();
+            self.folders = self.app_state.lock().unwrap().db.get_folders().unwrap_or_default();
+            self.env_dialog_state.lock().unwrap().needs_refresh = false;
+            self.needs_collections_refresh = true;
+        }
+        // 文件夹对话框
+        if self.folder_dialog_state.lock().unwrap().needs_refresh {
+            log::debug!("刷新: 文件夹对话框标记");
+            self.folders = self.app_state.lock().unwrap().db.get_folders().unwrap_or_default();
+            self.saved_requests = self.app_state.lock().unwrap().db.get_saved_requests().unwrap_or_default();
+            self.folder_dialog_state.lock().unwrap().needs_refresh = false;
+            self.needs_collections_refresh = true;
+        }
+        // 移动对话框
+        if self.move_dialog_state.lock().unwrap().needs_refresh {
+            log::debug!("刷新: 移动对话框标记");
+            self.folders = self.app_state.lock().unwrap().db.get_folders().unwrap_or_default();
+            self.saved_requests = self.app_state.lock().unwrap().db.get_saved_requests().unwrap_or_default();
+            self.move_dialog_state.lock().unwrap().needs_refresh = false;
+            self.needs_collections_refresh = true;
+        }
+        // 集合面板
+        if self.needs_collections_refresh {
+            log::debug!("刷新: 重建集合树 (needs_collections_refresh=true)");
+            self.rebuild_collections();
+            self.needs_collections_refresh = false;
+        }
     }
 }
 
@@ -1779,15 +1950,11 @@ impl Render for MainView {
         let settings = self.settings.clone();
         let request_tabs = self.request_tabs.clone();
         let active_tab = self.active_tab;
-        // 检查环境保存后是否需要刷新
-        if self.env_dialog_state.lock().unwrap().needs_refresh {
-            self.load_environments();
-            self.saved_requests = self.app_state.lock().unwrap().db.get_saved_requests().unwrap_or_default();
-            self.folders = self.app_state.lock().unwrap().db.get_folders().unwrap_or_default();
-            self.env_dialog_state.lock().unwrap().needs_refresh = false;
-        }
+        // 检查所有对话框保存后是否需要刷新
+        self.check_dialog_refresh_flags();
         let saved_requests = self.saved_requests.clone();
         let folders = self.folders.clone();
+        let collection_items = self.collection_items.clone();
         let environments = self.environments.clone();
         let show_close = self.request_tabs.len() > 1;
         let theme = Theme::from_str(&self.app_state.lock().unwrap().theme_name);
@@ -1879,7 +2046,7 @@ impl Render for MainView {
                                     .h(px(40.0))
                                     .children([
                                         div()
-                                            .id("sidebar-collections") // 收藏夹
+                                            .id("sidebar-collections-tab") // 收藏夹
                                             .w(px(48.0))
                                             .h(px(40.0))
                                             .flex()
@@ -1927,7 +2094,7 @@ impl Render for MainView {
                                         .flex()
                                         .flex_1()
                                         .h(px(600.0))
-                                        .overflow_y_hidden()
+                                        .overflow_hidden()
                                         .children([
                                             if sidebar_tab == SidebarTab::History { // 历史记录
                                                 if history.is_empty() {
@@ -2039,69 +2206,66 @@ impl Render for MainView {
                                                         }))
                                                 }
                                             } else if sidebar_tab == SidebarTab::Collections { // 收藏夹
-                                                if saved_requests.is_empty() && folders.is_empty() {
-                                                    div()
-                                                        .id("sidebar-collections")
-                                                        .p_2()
-                                                        .text_sm()
-                                                        .text_color(theme.muted_foreground)
-                                                        .child(self.t("sidebar.collections_empty"))
-                                                } else {
-                                                    div()
-                                                        .id("sidebar-collections")
-                                                        .flex_col()
-                                                        .gap_1()
-                                                        .overflow_y_scroll()
-                                                        .p_2()
-                                                        .children(saved_requests.iter().map(|req| {
-                                                            let req_id = req.id.clone();
-                                                            let req_method = req.method.clone();
-                                                            let req_url = req.url.clone();
-                                                            let req_name = req.name.clone();
-                                                            let req_headers = req.headers.clone();
-                                                            let req_body = req.body.clone();
-                                                            let display_method = req_method.clone();
-                                                            let display_name = req_name.clone();
-                                                            let display_url = req_url.clone();
-                                                            let listener_method = req_method.clone();
-                                                            let listener_url = req_url.clone();
-                                                            let listener_name = req_name.clone();
+                                                log::debug!("渲染收藏夹面板: collection_items={}, saved_requests={}, folders={}",
+                                                    collection_items.len(), saved_requests.len(), folders.len());
+                                                div()
+                                                    .id("sidebar-collections")
+                                                    .relative()
+                                                    .flex_col()
+                                                    .flex_1()
+                                                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                        this.context_menu_target = None;
+                                                        this.env_menu_target = None;
+                                                        cx.notify();
+                                                    }))
+                                                    .on_mouse_move(cx.listener(|this, _: &MouseMoveEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                        this.hovered_item_name = None;
+                                                        cx.notify();
+                                                    }))
+                                                    .child(
+                                                        // 标题栏：新建文件夹按钮
+                                                        div()
+                                                            .flex()
+                                                            .flex_row()
+                                                            .items_center()
+                                                            .justify_between()
+                                                            .px_2()
+                                                            .py_1()
+                                                            .child(
+                                                                div()
+                                                                    .text_sm()
+                                                                    .text_color(theme.muted_foreground)
+                                                                    .child(format!("收藏夹 ({})", collection_items.len())),
+                                                            )
+                                                            .child(
+                                                                Button::new("add-folder-btn")
+                                                                    .icon(IconName::Plus)
+                                                                    .xsmall()
+                                                                    .on_click(cx.listener(|this, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>| {
+                                                                        this.open_folder_dialog(None, window, cx);
+                                                                    })),
+                                                            ),
+                                                    )
+                                                    .child(
+                                                        if collection_items.is_empty() && saved_requests.is_empty() && folders.is_empty() {
                                                             div()
-                                                                .flex_col()
-                                                                .gap_1()
+                                                                .id("collections-empty")
                                                                 .p_2()
-                                                                .rounded_md()
-                                                                .cursor_pointer()
-                                                                .hover(|s| s.bg(theme.code_background))
-                                                                .bg(theme.muted_background)
-                                                                .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>| {
-                                                                    this.load_saved_request(&req_id, &listener_method, &listener_url, &listener_name, req_headers.as_deref(), req_body.as_deref(), window, cx);
-                                                                }))
-                                                                .children([
-                                                                    div().flex().items_center().gap_2().children([
-                                                                        div()
-                                                                            .px_1()
-                                                                            .py_px()
-                                                                            .rounded_sm()
-                                                                            .bg(rgb(method_color(&display_method)))
-                                                                            .text_xs()
-                                                                            .text_color(rgb(0xffffff))
-                                                                            .child(display_method),
-                                                                        div()
-                                                                            .flex_1()
-                                                                            .text_ellipsis()
-                                                                            .text_xs()
-                                                                            .text_color(theme.foreground)
-                                                                            .child(display_name),
-                                                                    ]),
-                                                                    div()
-                                                                        .text_xs()
-                                                                        .text_color(theme.muted_foreground)
-                                                                        .text_ellipsis()
-                                                                        .child(display_url),
-                                                                ])
-                                                        }))
-                                                }
+                                                                .text_sm()
+                                                                .text_color(theme.muted_foreground)
+                                                                .child(self.t("sidebar.collections_empty"))
+                                                                .into_any_element()
+                                                        } else {
+                                                            div()
+                                                                .id("sidebar-collections-scroll")
+                                                                .flex_1()
+                                                                .overflow_y_scroll()
+                                                                .overflow_x_hidden()
+                                                                .p_2()
+                                                                .child(render_collection_panel(&collection_items, &self.context_menu_target, &self.hovered_item_name, cx, &theme))
+                                                                .into_any_element()
+                                                        }
+                                                    )
                                             } else {
                                                 div()
                                                     .id("sidebar-environments")
@@ -2113,7 +2277,7 @@ impl Render for MainView {
                                                             .items_center()
                                                             .justify_between()
                                                             .px_2()
-                                                            .py_2()
+                                                            .py_1()
                                                             .child(
                                                                 div()
                                                                     .flex()
@@ -2137,6 +2301,12 @@ impl Render for MainView {
                                                             }),
                                                     )
                                                     .child(
+                                                        div()
+                                                            .id("sidebar-env-scroll")
+                                                            .flex_1()
+                                                            .overflow_y_scroll()
+                                                            .overflow_x_hidden()
+                                                            .child(
                                                         if environments.is_empty() {
                                                             div()
                                                                 .id("sidebar-env-empty")
@@ -2152,20 +2322,29 @@ impl Render for MainView {
                                                                 .id("sidebar-env-list")
                                                                 .flex_col()
                                                                 .gap_1()
-                                                                .overflow_y_scroll()
-                                                                .p_2()
+                                                                .py_1()
+                                                                .px_1()
+                                                                .overflow_x_hidden()
                                                                 .children(environments.iter().map(|env| {
                                                                     let env_id = env.id.clone();
                                                                     let env_name = env.name.clone();
+                                                                    let display_name = if env_name.chars().count() > 12 {
+                                                                        format!("{}...", env_name.chars().take(12).collect::<String>())
+                                                                    } else {
+                                                                        env_name.clone()
+                                                                    };
                                                                     let env_id_edit = env.id.clone();
                                                                     let env_id_del = env.id.clone();
                                                                     let is_active = env.is_active;
                                                                     div()
+                                                                        .w_full()
+                                                                        .relative()
                                                                         .flex()
                                                                         .flex_row()
                                                                         .items_center()
-                                                                        .gap_2()
-                                                                        .p_2()
+                                                                        .px_1()
+                                                                        .py_1()
+                                                                        .pr(px(28.0))
                                                                         .rounded_md()
                                                                         .cursor_pointer()
                                                                         .hover(|s| s.bg(theme.code_background))
@@ -2178,42 +2357,51 @@ impl Render for MainView {
                                                                                 .flex_shrink_0()
                                                                                 .bg(if is_active { theme.success } else { theme.muted_foreground }),
                                                                             div()
-                                                                                .flex_1()
                                                                                 .text_sm()
-                                                                                .text_ellipsis()
                                                                                 .text_color(if is_active { theme.foreground } else { theme.muted_foreground })
                                                                                 .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>| {
                                                                                     this.activate_environment(&env_id, window, cx);
                                                                                 }))
-                                                                                .child(env_name.clone()),
-                                                                            div()
-                                                                                .cursor_pointer()
-                                                                                .p_1()
-                                                                                .rounded_sm()
-                                                                                .hover(|s| s.bg(theme.muted_background))
-                                                                                .on_mouse_down(MouseButton::Left, cx.listener({
-                                                                                    let id = env_id_edit.clone();
-                                                                                    move |this, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>| {
-                                                                                        this.open_environment_dialog(Some(id.clone()), window, cx);
-                                                                                    }
-                                                                                }))
-                                                                                .child(
-                                                                                    Icon::new(IconName::Replace).xsmall().text_color(theme.accent),
-                                                                                ),
-                                                                            div()
-                                                                                .cursor_pointer()
-                                                                                .p_1()
-                                                                                .rounded_sm()
-                                                                                .hover(|s| s.bg(theme.error))
-                                                                                .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>| {
-                                                                                    this.delete_environment(&env_id_del, window, cx);
-                                                                                }))
-                                                                                .child(
-                                                                                    Icon::new(IconName::Delete).xsmall().text_color(theme.muted_foreground),
-                                                                                ),
+                                                                                .child(display_name),
                                                                         ])
+                                                                        .child(
+                                                                            div()
+                                                                                .absolute()
+                                                                                .right(px(2.0))
+                                                                                .top(px(0.0))
+                                                                                .h_full()
+                                                                                .flex().items_center()
+                                                                                .px(px(2.0))
+                                                                                .bg(theme.background)
+                                                                                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                                                                                .child(
+                                                                                    div()
+                                                                                        .w(px(24.0)).h(px(24.0))
+                                                                                        .flex().items_center().justify_center()
+                                                                                        .rounded_sm()
+                                                                                        .cursor_pointer()
+                                                                                        .hover(|s| s.bg(theme.muted_background))
+                                                                                        .on_mouse_down(MouseButton::Left, cx.listener({
+                                                                                            let id = env_id_edit.clone();
+                                                                                            move |this, e: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                                                cx.stop_propagation();
+                                                                                                this.env_menu_pos = Some((e.position.x.into(), e.position.y.into()));
+                                                                                                this.env_menu_target = if this.env_menu_target.as_ref() == Some(&id) {
+                                                                                                    None
+                                                                                                } else {
+                                                                                                    Some(id.clone())
+                                                                                                };
+                                                                                                cx.notify();
+                                                                                            }
+                                                                                        }))
+                                                                                        .child(
+                                                                                            Icon::new(IconName::Ellipsis).xsmall().text_color(theme.muted_foreground),
+                                                                                        ),
+                                                                                ),
+                                                                        )
                                                                 }))
                                                         }
+                                                    )
                                                     )
                                             },
                                         ])
@@ -2246,7 +2434,7 @@ impl Render for MainView {
                                     .absolute()
                                     .top(px(48.0))
                                     .left(px(0.0))
-                                    .right(px(0.0))
+                                    .w(px(280.0))
                                     .shadow_md()
                             } else {
                                 div()
@@ -2257,6 +2445,11 @@ impl Render for MainView {
                             .flex_1()
                             .flex()
                             .flex_col()
+                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                this.context_menu_target = None;
+                                this.env_menu_target = None;
+                                cx.notify();
+                            }))
                             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                 if this.splitter_dragging {
                                     let y: f32 = event.position.y.into();
@@ -2747,6 +2940,116 @@ impl Render for MainView {
                         &self.env_dialog_state,
                         &self.app_state,
                         &self.active_env_id(),
+                        &theme,
+                        cx.entity_id(),
+                        cx,
+                    )
+                )
+            )
+            .when(
+                self.folder_dialog_state.lock().map(|s| s.visible).unwrap_or(false),
+                |d| d.child(
+                    render_folder_dialog_overlay(
+                        &self.folder_dialog_state,
+                        &self.app_state,
+                        &theme,
+                        cx.entity_id(),
+                        cx,
+                    )
+                )
+            )
+            .when(
+                self.hovered_item_name.is_some(),
+                |d| {
+                    let name = self.hovered_item_name.clone().unwrap_or_default();
+                    let row_y = self.hovered_item_y.unwrap_or(0.0);
+                    let x = self.hovered_item_x.unwrap_or(0.0);
+                    // 浮层在行下方14px，但如果超出窗口底部则翻转到行上方
+                    let tooltip_h = 28.0;
+                    let window_h = 800.0; // 估计窗口高度
+                    let mut y = row_y + 20.0;
+                    if y + tooltip_h > window_h {
+                        y = row_y - tooltip_h - 4.0;
+                    }
+                    d.child(
+                        tooltip_popup(&theme, x, y, &name)
+                    )
+                },
+            )
+            .when(
+                self.context_menu_target.is_some() && self.context_menu_pos.is_some(),
+                |d| {
+                    let target_id = self.context_menu_target.clone().unwrap_or_default();
+                    let (x, y) = self.context_menu_pos.unwrap_or((0.0, 0.0));
+                    let mut menu = div();
+                    if let Some(folder) = self.folders.iter().find(|f| f.id == target_id) {
+                        menu = render_folder_context_menu(&target_id, &folder.name, cx, &theme)
+                            .absolute()
+                            .left(px((x - 140.0).max(0.0)))
+                            .top(px(y + 4.0));
+                    } else if self.saved_requests.iter().any(|r| r.id == target_id) {
+                        menu = render_request_context_menu(&target_id, cx, &theme)
+                            .absolute()
+                            .left(px((x - 120.0).max(0.0)))
+                            .top(px(y + 4.0));
+                    }
+                    d.child(menu)
+                },
+            )
+            .when(
+                self.env_menu_target.is_some() && self.env_menu_pos.is_some(),
+                |d| {
+                    let target_id = self.env_menu_target.clone().unwrap_or_default();
+                    let (x, y) = self.env_menu_pos.unwrap_or((0.0, 0.0));
+                    let env = self.environments.iter().find(|e| e.id == target_id);
+                    let mut menu = popup_panel(&theme)
+                        .absolute()
+                        .left(px((x - 120.0).max(0.0)))
+                        .top(px(y + 4.0))
+                        .min_w(px(120.0));
+                    if let Some(env) = env {
+                        let edit_id = env.id.clone();
+                        let del_id = env.id.clone();
+                        menu = menu
+                            .child(
+                                div()
+                                    .flex().flex_row().items_center().gap_2()
+                                    .px_3().py_1p5()
+                                    .cursor_pointer()
+                                    .hover(|s| s.bg(theme.muted_background))
+                                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>| {
+                                        this.env_menu_target = None;
+                                        this.open_environment_dialog(Some(edit_id.clone()), window, cx);
+                                        cx.notify();
+                                    }))
+                                    .child(Icon::new(IconName::Replace).xsmall().text_color(theme.muted_foreground))
+                                    .child(div().text_sm().text_color(theme.foreground).child("重命名")),
+                            )
+                            .child(div().w_full().h(px(1.0)).bg(theme.muted_background))
+                            .child(
+                                div()
+                                    .flex().flex_row().items_center().gap_2()
+                                    .px_3().py_1p5()
+                                    .cursor_pointer()
+                                    .hover(|s| s.bg(theme.error))
+                                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>| {
+                                        this.env_menu_target = None;
+                                        this.delete_environment(&del_id, window, cx);
+                                        cx.notify();
+                                    }))
+                                    .child(Icon::new(IconName::Delete).xsmall().text_color(theme.muted_foreground))
+                                    .child(div().text_sm().text_color(theme.foreground).child("删除")),
+                            );
+                    }
+                    d.child(menu)
+                },
+            )
+            .when(
+                self.move_dialog_state.lock().map(|s| s.visible).unwrap_or(false),
+                |d| d.child(
+                    render_move_dialog_overlay(
+                        &self.move_dialog_state,
+                        &self.app_state,
                         &theme,
                         cx.entity_id(),
                         cx,

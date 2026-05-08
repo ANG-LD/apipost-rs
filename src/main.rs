@@ -22,12 +22,38 @@ use log::info;
 use std::sync::Arc;
 
 fn main() {
-    // 初始化日志系统
+    // 初始化日志系统（同时输出到 stderr 和文件）
+    let log_dir = dirs::data_local_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("apipost-rs");
+    let _ = std::fs::create_dir_all(&log_dir);
+    let log_path = log_dir.join("debug.log");
+    let log_file = std::io::BufWriter::new(
+        std::fs::File::create(&log_path).expect("无法创建日志文件")
+    );
+
+    struct TeeWriter {
+        file: std::sync::Mutex<std::io::BufWriter<std::fs::File>>,
+    }
+    impl std::io::Write for TeeWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            let n = std::io::stderr().write(buf)?;
+            self.file.lock().unwrap().write_all(buf)?;
+            Ok(n)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            std::io::stderr().flush()?;
+            self.file.lock().unwrap().flush()
+        }
+    }
+
+    let tee = TeeWriter { file: std::sync::Mutex::new(log_file) };
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .format_timestamp_millis()
+        .target(env_logger::Target::Pipe(Box::new(tee)))
         .init();
 
-    info!("ApiPost-Rs 启动中...");
+    info!("ApiPost-Rs 启动中, 日志文件: {:?}", log_path);
 
     // 加载应用配置
     let config = AppConfig::load().unwrap_or_default();

@@ -1,7 +1,7 @@
 //! UI组件模块
-//!
-//! 包含可复用的UI组件
-//! 注意：此模块需要使用gpui-component进行重写
+
+pub mod popup_panel;
+pub use popup_panel::*;
 
 /// HTTP方法颜色 (返回RGB值)
 pub fn method_color(method: &str) -> u32 {
