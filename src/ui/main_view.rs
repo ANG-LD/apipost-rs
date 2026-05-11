@@ -2793,12 +2793,21 @@ impl Render for MainView {
                                             .text_color(theme.muted_foreground)
                                             .children([
                                                 if let Some(err) = error_message {
+                                                    let parts: Vec<&str> = err.split("-> ").collect();
                                                     div()
+                                                        .w_full()
                                                         .p_3()
                                                         .rounded_md()
                                                         .bg(rgb(0x3f2020))
                                                         .text_color(theme.error)
-                                                        .child(err)
+                                                        .text_xs()
+                                                        .overflow_x_hidden()
+                                                        .flex_col()
+                                                        .gap_1()
+                                                        .children(parts.iter().enumerate().map(|(i, part)| {
+                                                            let text = if i == 0 { part.to_string() } else { format!("-> {}", part) };
+                                                            div().w_full().overflow_x_hidden().text_ellipsis().child(text)
+                                                        }))
                                                 } else if let Some(resp) = response {
                                                     let theme = Theme::from_str(&self.app_state.lock().unwrap().theme_name);
                                                     let header_row = div()
