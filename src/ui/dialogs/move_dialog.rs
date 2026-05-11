@@ -123,6 +123,7 @@ pub fn render_move_dialog_overlay(
                     let s = state.clone();
                     let eid = entity_id;
                     move |_, _, cx| {
+                        cx.stop_propagation();
                         if let Ok(mut st) = s.lock() {
                             st.visible = false;
                         }

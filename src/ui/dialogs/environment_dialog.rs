@@ -232,7 +232,7 @@ pub fn render_env_dialog_overlay(
         .flex()
         .items_center()
         .justify_center()
-        .on_mouse_down(MouseButton::Left, |_, _, _| {})
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(
             div()
                 .w(px(640.0))

@@ -13,7 +13,7 @@ use crate::ui::{
 };
 use crate::ui::dialogs::{EnvDialogState, FolderDialogState, MoveDialogState, render_env_dialog_overlay, render_folder_dialog_overlay, render_move_dialog_overlay};
 use crate::ui::sidebar::CollectionItem;
-use crate::ui::sidebar::{build_collection_tree, render_collection_panel};
+use crate::ui::sidebar::{build_collection_tree, render_collection_panel, DragItem};
 use crate::ui::components::{tooltip_popup, popup_panel};
 use crate::ui::sidebar::{render_folder_context_menu, render_request_context_menu};
 use gpui::prelude::*;
@@ -268,9 +268,9 @@ impl MainView {
 
         // 创建URL输入状态
         let url_input = cx.new(|cx| {
+            let placeholder = app_state.lock().unwrap().i18n.get("request.url.placeholder");
             InputState::new(window, cx)
-                .default_value("https://httpbin.org/get")
-                .placeholder("Enter URL...")
+                .placeholder(placeholder)
         });
 
         // 设置URL输入变化订阅（URL变化时自动解析到params）
@@ -430,11 +430,11 @@ impl MainView {
         Self {
             app_state,
             method: "GET".to_string(),
-            url: "https://httpbin.org/get".to_string(),
+            url: String::new(),
             request_tabs: vec![RequestTab {
                 id: 1,
                 method: "GET".to_string(),
-                url: "https://httpbin.org/get".to_string(),
+                url: String::new(),
                 name: default_tab_name,
             }],
             active_tab: 0,
@@ -1795,6 +1795,13 @@ impl MainView {
             self.move_dialog_state.lock().unwrap().needs_refresh = false;
             self.needs_collections_refresh = true;
         }
+        // 拖拽放置
+        if self.needs_drop_refresh.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            log::debug!("刷新: 拖拽放置标记");
+            self.folders = self.app_state.lock().unwrap().db.get_folders().unwrap_or_default();
+            self.saved_requests = self.app_state.lock().unwrap().db.get_saved_requests().unwrap_or_default();
+            self.needs_collections_refresh = true;
+        }
         // 保存到收藏夹对话框
         if self.save_request_dialog.lock().unwrap().needs_refresh {
             log::debug!("刷新: 保存到收藏夹对话框标记");
@@ -1823,6 +1830,19 @@ fn settings_popover(
     let auto_save = this.app_state.lock().unwrap().config.general.auto_save;
     let proxy_enabled = this.app_state.lock().unwrap().config.proxy.enabled;
     let proxy_url = this.app_state.lock().unwrap().config.proxy.url.clone();
+    let t_lang_title = this.t("language.title");
+    let t_lang_zh = this.t("language.zh");
+    let t_lang_en = this.t("language.en");
+    let t_theme_title = this.t("theme.title");
+    let t_theme_dark = this.t("theme.dark");
+    let t_theme_light = this.t("theme.light");
+    let t_theme_sepia = this.t("theme.sepia");
+    let t_settings_general = this.t("settings.general");
+    let t_settings_auto_save = this.t("settings.auto_save");
+    let t_settings_proxy = this.t("settings.proxy");
+    let t_settings_proxy_enable = this.t("settings.proxy_enable");
+    let t_settings_proxy_url = this.t("settings.proxy_url");
+    let t_settings_not_set = this.t("settings.not_set");
 
     div()
         .px_3()
@@ -1834,12 +1854,12 @@ fn settings_popover(
         .gap_3()
         .children([
             // === 语言 ===
-            section_label("语言 / Language", theme),
+            section_label(&t_lang_title, theme),
             div()
                 .flex()
                 .gap_2()
                 .child(setting_option_btn(
-                    "中文",
+                    &t_lang_zh,
                     "lang-zh",
                     current_lang == "zh-CN",
                     theme,
@@ -1850,7 +1870,7 @@ fn settings_popover(
                     },
                 ))
                 .child(setting_option_btn(
-                    "English",
+                    &t_lang_en,
                     "lang-en",
                     current_lang == "en-US",
                     theme,
@@ -1861,13 +1881,13 @@ fn settings_popover(
                     },
                 )),
             // === 主题 ===
-            section_label("主题 / Theme", theme),
+            section_label(&t_theme_title, theme),
             div()
                 .flex()
                 .flex_wrap()
                 .gap_2()
                 .child(setting_option_btn(
-                    "暗色",
+                    &t_theme_dark,
                     "theme-dark",
                     current_theme == "dark",
                     theme,
@@ -1877,7 +1897,7 @@ fn settings_popover(
                     },
                 ))
                 .child(setting_option_btn(
-                    "浅色",
+                    &t_theme_light,
                     "theme-light",
                     current_theme == "light",
                     theme,
@@ -1887,7 +1907,7 @@ fn settings_popover(
                     },
                 ))
                 .child(setting_option_btn(
-                    "暖色",
+                    &t_theme_sepia,
                     "theme-sepia",
                     current_theme == "sepia",
                     theme,
@@ -1897,7 +1917,7 @@ fn settings_popover(
                     },
                 )),
             // === 常规 ===
-            section_label("常规 / General", theme),
+            section_label(&t_settings_general, theme),
             div()
                 .flex()
                 .items_center()
@@ -1906,7 +1926,7 @@ fn settings_popover(
                     div()
                         .text_sm()
                         .text_color(theme.foreground)
-                        .child("自动保存 / Auto Save"),
+                        .child(t_settings_auto_save.clone()),
                 )
                 .child(
                     toggle_switch("auto-save", auto_save, theme, cx,
@@ -1919,7 +1939,7 @@ fn settings_popover(
                     ),
                 ),
             // === 代理 ===
-            section_label("代理 / Proxy", theme),
+            section_label(&t_settings_proxy, theme),
             div()
                 .flex()
                 .items_center()
@@ -1928,7 +1948,7 @@ fn settings_popover(
                     div()
                         .text_sm()
                         .text_color(theme.foreground)
-                        .child("启用代理 / Enable"),
+                        .child(t_settings_proxy_enable.clone()),
                 )
                 .child(
                     toggle_switch("proxy-enabled", proxy_enabled, theme, cx,
@@ -1943,20 +1963,20 @@ fn settings_popover(
             div()
                 .text_xs()
                 .text_color(theme.muted_foreground)
-                .child(format!("代理地址: {}", if proxy_url.is_empty() { "(未设置)" } else { &proxy_url })),
+                .child(format!("{}: {}", t_settings_proxy_url, if proxy_url.is_empty() { t_settings_not_set.as_str() } else { &proxy_url })),
         ])
 }
 
-fn section_label(label: &'static str, theme: &Theme) -> gpui::Div {
+fn section_label(label: &str, theme: &Theme) -> gpui::Div {
     div()
         .text_xs()
         .font_semibold()
         .text_color(theme.muted_foreground)
-        .child(label)
+        .child(label.to_string())
 }
 
 fn setting_option_btn(
-    label: &'static str,
+    label: &str,
     id: &'static str,
     active: bool,
     theme: &Theme,
@@ -1974,7 +1994,7 @@ fn setting_option_btn(
         .bg(if active { theme.accent } else { theme.input_background })
         .text_color(if active { theme.accent_foreground } else { theme.foreground })
         .on_mouse_down(MouseButton::Left, cx.listener(on_toggle))
-        .child(label)
+        .child(label.to_string())
 }
 
 fn toggle_switch(
@@ -2300,7 +2320,7 @@ impl Render for MainView {
                                                                 div()
                                                                     .text_sm()
                                                                     .text_color(theme.muted_foreground)
-                                                                    .child(format!("收藏夹 ({})", collection_items.len())),
+                                                                    .child(format!("{} ({})", self.t("sidebar.collections"), collection_items.len())),
                                                             )
                                                             .child(
                                                                 Button::new("add-folder-btn")
@@ -2321,12 +2341,29 @@ impl Render for MainView {
                                                                 .child(self.t("sidebar.collections_empty"))
                                                                 .into_any_element()
                                                         } else {
+                                                            let drop_app = self.app_state.clone();
+                                                            let drop_flag = self.needs_drop_refresh.clone();
+                                                            let drop_eid = cx.entity_id();
                                                             div()
                                                                 .id("sidebar-collections-scroll")
                                                                 .flex_1()
                                                                 .overflow_y_scroll()
                                                                 .overflow_x_hidden()
                                                                 .p_2()
+                                                                .drag_over::<DragItem>(|style, _data, _window, _cx| {
+                                                                    style.bg(rgba(0x88888822))
+                                                                })
+                                                                .on_drop::<DragItem>(move |data: &DragItem, _window, cx| {
+                                                                    if let Ok(app) = drop_app.lock() {
+                                                                        if data.is_folder {
+                                                                            let _ = app.db.move_folder(&data.id, None);
+                                                                        } else {
+                                                                            let _ = app.db.move_request(&data.id, None);
+                                                                        }
+                                                                    }
+                                                                    drop_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                                                                    cx.notify(drop_eid);
+                                                                })
                                                                 .child(render_collection_panel(&collection_items, &self.context_menu_target, &self.hovered_item_name, cx, &theme, &self.app_state, self.needs_drop_refresh.clone()))
                                                                 .into_any_element()
                                                         }
@@ -2438,6 +2475,7 @@ impl Render for MainView {
                                                                         .flex()
                                                                         .flex_row()
                                                                         .items_center()
+                                                                        .gap(px(1.0))
                                                                         .px_1()
                                                                         .py_1()
                                                                         .pr(px(28.0))
@@ -2532,6 +2570,7 @@ impl Render for MainView {
                                     .left(px(0.0))
                                     .w(px(280.0))
                                     .shadow_md()
+                                    .occlude()
                             } else {
                                 div()
                             },
@@ -3079,12 +3118,12 @@ impl Render for MainView {
                     let (x, y) = self.context_menu_pos.unwrap_or((0.0, 0.0));
                     let mut menu = div();
                     if let Some(folder) = self.folders.iter().find(|f| f.id == target_id) {
-                        menu = render_folder_context_menu(&target_id, &folder.name, cx, &theme)
+                        menu = render_folder_context_menu(&target_id, &folder.name, cx, &theme, &|key| self.t(key))
                             .absolute()
                             .left(px((x - 140.0).max(0.0)))
                             .top(px(y + 4.0));
                     } else if let Some(req) = self.saved_requests.iter().find(|r| r.id == target_id) {
-                        menu = render_request_context_menu(&target_id, &req.name, cx, &theme)
+                        menu = render_request_context_menu(&target_id, &req.name, cx, &theme, &|key| self.t(key))
                             .absolute()
                             .left(px((x - 120.0).max(0.0)))
                             .top(px(y + 4.0));
@@ -3161,13 +3200,17 @@ impl Render for MainView {
                     drop(dialog);
                     let save_dialog = self.save_request_dialog.clone();
                     let save_app = self.app_state.clone();
+                    let dialog_title: gpui::SharedString = self.t("dialog.save_to_collections").into();
+                    let title_label: gpui::SharedString = self.t("dialog.title_label").into();
+                    let cancel_text: gpui::SharedString = self.t("dialog.cancel").into();
+                    let save_text: gpui::SharedString = self.t("dialog.save").into();
                     d.child(
                         div()
                             .absolute()
                             .top_0().left_0().right_0().bottom_0()
                             .bg(rgba(0x00000055))
                             .flex().items_center().justify_center()
-                            .on_mouse_down(MouseButton::Left, |_, _, _| {})
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                             .child(
                                 div()
                                     .w(px(420.0))
@@ -3187,7 +3230,7 @@ impl Render for MainView {
                                             .child(
                                                 div().flex().items_center().gap_2()
                                                     .child(Icon::new(IconName::Star).text_color(theme.accent))
-                                                    .child(div().text_sm().font_weight(FontWeight(600.0)).text_color(theme.foreground).child("保存到收藏夹")),
+                                                    .child(div().text_sm().font_weight(FontWeight(600.0)).text_color(theme.foreground).child(dialog_title.clone()))
                                             )
                                             .child({
                                                 let s = save_dialog.clone();
@@ -3206,7 +3249,7 @@ impl Render for MainView {
                                                 div().flex_col().gap_2()
                                                     .child(div().flex().items_center().gap_1p5()
                                                         .child(Icon::new(IconName::File).small().text_color(theme.accent))
-                                                        .child(div().text_xs().font_weight(FontWeight(500.0)).text_color(theme.muted_foreground).child("标题")),
+                                                        .child(div().text_xs().font_weight(FontWeight(500.0)).text_color(theme.muted_foreground).child(title_label.clone())),
                                                     )
                                                     .child(Input::new(&name_input).h(px(42.0)).w_full().rounded_md().bg(theme.background).text_color(theme.foreground)),
                                             )
@@ -3216,7 +3259,7 @@ impl Render for MainView {
                                             .border_t_1().border_color(theme.border).bg(theme.muted_background)
                                             .child({
                                                 let s = save_dialog.clone();
-                                                Button::new("cancel-save-dialog-btn").label("取消")
+                                                Button::new("cancel-save-dialog-btn").label(cancel_text.clone())
                                                     .on_click(move |_, _, cx| {
                                                         if let Ok(mut d) = s.lock() { d.visible = false; d.pending_request = None; }
                                                         cx.notify(entity_id);
@@ -3225,7 +3268,7 @@ impl Render for MainView {
                                             .child({
                                                 let s = save_dialog.clone();
                                                 let app = save_app.clone();
-                                                Button::new("confirm-save-dialog-btn").icon(IconName::Check).label("保存")
+                                                Button::new("confirm-save-dialog-btn").icon(IconName::Check).label(save_text.clone())
                                                     .bg(theme.accent).text_color(rgb(0xffffff)).rounded_md()
                                                     .on_click(move |_, _window, cx| {
                                                         let d = s.lock().unwrap();

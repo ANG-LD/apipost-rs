@@ -203,6 +203,18 @@ impl I18nManager {
         map.insert("error.parse_failed".to_string(), "解析失败".to_string());
         map.insert("error.unknown".to_string(), "未知错误".to_string());
 
+        // 对话框
+        map.insert("dialog.save_to_collections".to_string(), "保存到收藏夹".to_string());
+        map.insert("dialog.title_label".to_string(), "标题".to_string());
+        map.insert("dialog.cancel".to_string(), "取消".to_string());
+        map.insert("dialog.save".to_string(), "保存".to_string());
+
+        // 上下文菜单
+        map.insert("context.rename".to_string(), "重命名".to_string());
+        map.insert("context.move_to".to_string(), "移动到...".to_string());
+        map.insert("context.add_subfolder".to_string(), "添加子文件夹".to_string());
+        map.insert("context.delete".to_string(), "删除".to_string());
+
         // 侧边栏
         map.insert("sidebar.collections".to_string(), "收藏夹".to_string());
         map.insert("sidebar.collections_empty".to_string(), "暂无收藏请求，点击书签按钮保存请求".to_string());
@@ -212,8 +224,10 @@ impl I18nManager {
         map.insert("sidebar.new_request".to_string(), "新建请求".to_string());
 
         // 设置
+        map.insert("settings.general".to_string(), "常规".to_string());
         map.insert("settings.auto_save".to_string(), "自动保存".to_string());
         map.insert("settings.proxy".to_string(), "代理".to_string());
+        map.insert("settings.proxy_enable".to_string(), "启用代理".to_string());
         map.insert("settings.proxy_url".to_string(), "代理地址".to_string());
         map.insert("settings.not_set".to_string(), "未设置".to_string());
 
@@ -374,6 +388,18 @@ impl I18nManager {
         map.insert("error.parse_failed".to_string(), "Parse failed".to_string());
         map.insert("error.unknown".to_string(), "Unknown error".to_string());
 
+        // Dialog
+        map.insert("dialog.save_to_collections".to_string(), "Save to Collections".to_string());
+        map.insert("dialog.title_label".to_string(), "Title".to_string());
+        map.insert("dialog.cancel".to_string(), "Cancel".to_string());
+        map.insert("dialog.save".to_string(), "Save".to_string());
+
+        // Context Menu
+        map.insert("context.rename".to_string(), "Rename".to_string());
+        map.insert("context.move_to".to_string(), "Move to...".to_string());
+        map.insert("context.add_subfolder".to_string(), "Add Subfolder".to_string());
+        map.insert("context.delete".to_string(), "Delete".to_string());
+
         // Sidebar
         map.insert("sidebar.collections".to_string(), "Collections".to_string());
         map.insert("sidebar.collections_empty".to_string(), "No saved requests. Click the bookmark button to save.".to_string());
@@ -383,8 +409,10 @@ impl I18nManager {
         map.insert("sidebar.new_request".to_string(), "New Request".to_string());
 
         // Settings
+        map.insert("settings.general".to_string(), "General".to_string());
         map.insert("settings.auto_save".to_string(), "Auto Save".to_string());
         map.insert("settings.proxy".to_string(), "Proxy".to_string());
+        map.insert("settings.proxy_enable".to_string(), "Enable Proxy".to_string());
         map.insert("settings.proxy_url".to_string(), "Proxy URL".to_string());
         map.insert("settings.not_set".to_string(), "Not set".to_string());
 

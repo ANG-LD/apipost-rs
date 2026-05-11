@@ -9,10 +9,10 @@ use std::sync::{Arc, Mutex};
 
 /// 拖拽数据
 #[derive(Clone)]
-struct DragItem {
-    id: String,
-    is_folder: bool,
-    name: String,
+pub struct DragItem {
+    pub id: String,
+    pub is_folder: bool,
+    pub name: String,
 }
 
 /// 拖拽预览（跟随鼠标显示）
@@ -387,13 +387,14 @@ pub fn render_folder_context_menu(
     folder_name: &str,
     cx: &mut Context<MainView>,
     theme: &Theme,
+    t: &dyn Fn(&str) -> String,
 ) -> gpui::Div {
     let fid = folder_id.to_string();
     let fname = folder_name.to_string();
 
     popup_panel(theme)
         .min_w(px(140.0))
-        .child(menu_item("重命名", IconName::Replace, theme, cx, {
+        .child(menu_item(&t("context.rename"), IconName::Replace, theme, cx, {
             let edit_id = fid.clone();
             let edit_name = fname.clone();
             move |this, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<MainView>| {
@@ -402,7 +403,7 @@ pub fn render_folder_context_menu(
                 cx.notify();
             }
         }))
-        .child(menu_item("移动到...", IconName::ArrowRight, theme, cx, {
+        .child(menu_item(&t("context.move_to"), IconName::ArrowRight, theme, cx, {
             let move_id = fid.clone();
             move |this, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<MainView>| {
                 this.context_menu_target = None;
@@ -410,7 +411,7 @@ pub fn render_folder_context_menu(
                 cx.notify();
             }
         }))
-        .child(menu_item("添加子文件夹", IconName::Plus, theme, cx, {
+        .child(menu_item(&t("context.add_subfolder"), IconName::Plus, theme, cx, {
             let parent_id = fid.clone();
             move |this, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<MainView>| {
                 this.context_menu_target = None;
@@ -419,7 +420,7 @@ pub fn render_folder_context_menu(
             }
         }))
         .child(div().w_full().h(px(1.0)).bg(theme.muted_background))
-        .child(menu_item_danger("删除", IconName::Delete, theme, cx, {
+        .child(menu_item_danger(&t("context.delete"), IconName::Delete, theme, cx, {
             let del_id = fid.clone();
             move |this, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<MainView>| {
                 this.context_menu_target = None;
@@ -434,13 +435,14 @@ pub fn render_request_context_menu(
     request_name: &str,
     cx: &mut Context<MainView>,
     theme: &Theme,
+    t: &dyn Fn(&str) -> String,
 ) -> gpui::Div {
     let rid = request_id.to_string();
     let rname = request_name.to_string();
 
     popup_panel(theme)
         .min_w(px(120.0))
-        .child(menu_item("重命名", IconName::Replace, theme, cx, {
+        .child(menu_item(&t("context.rename"), IconName::Replace, theme, cx, {
             let rename_id = rid.clone();
             let rename_name = rname.clone();
             move |this, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<MainView>| {
@@ -450,7 +452,7 @@ pub fn render_request_context_menu(
             }
         }))
         .child(div().w_full().h(px(1.0)).bg(theme.muted_background))
-        .child(menu_item("移动到...", IconName::ArrowRight, theme, cx, {
+        .child(menu_item(&t("context.move_to"), IconName::ArrowRight, theme, cx, {
             let move_id = rid.clone();
             move |this, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<MainView>| {
                 this.context_menu_target = None;
@@ -459,7 +461,7 @@ pub fn render_request_context_menu(
             }
         }))
         .child(div().w_full().h(px(1.0)).bg(theme.muted_background))
-        .child(menu_item_danger("删除", IconName::Delete, theme, cx, {
+        .child(menu_item_danger(&t("context.delete"), IconName::Delete, theme, cx, {
             let del_id = rid.clone();
             move |this, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<MainView>| {
                 this.context_menu_target = None;
