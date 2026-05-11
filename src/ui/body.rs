@@ -166,7 +166,13 @@ impl RawFormat {
     /// 根据格式格式化内容
     pub fn format_body(&self, body: &str) -> String {
         match self {
-            RawFormat::Json => crate::http::format_json_folded(body, 5, 2),
+            RawFormat::Json => {
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(body) {
+                    serde_json::to_string_pretty(&value).unwrap_or_else(|_| body.to_string())
+                } else {
+                    body.to_string()
+                }
+            }
             RawFormat::Xml => body.to_string(),
             RawFormat::Text => body.to_string(),
             RawFormat::Html => body.to_string(),

@@ -21,6 +21,7 @@ const MAX_VAR_SLOTS: usize = 15;
 pub struct EnvDialogState {
     pub visible: bool,
     pub is_edit: bool,
+    pub is_global_only: bool,
     pub env_id: Option<String>,
     pub name_input: Entity<InputState>,
     pub current_var_count: usize,
@@ -49,26 +50,27 @@ impl EnvDialogState {
         Self {
             visible: false,
             is_edit: false,
+            is_global_only: false,
             env_id: None,
             name_input,
             current_var_count: 0,
             current_vars,
-            global_var_count: 0,
+            global_var_count: 1,
             global_vars,
             needs_refresh: false,
         }
     }
 
-    /// 填充对话框数据
+    /// 填充对话框数据（环境变量模式）
     pub fn load_from(
         &mut self,
         env: Option<&Environment>,
-        globals: &HashMap<String, String>,
         window: &mut Window,
         cx: &mut Context<crate::ui::MainView>,
     ) {
         self.env_id = env.map(|e| e.id.clone());
         self.is_edit = env.is_some();
+        self.is_global_only = false;
 
         if let Some(env) = env {
             self.name_input.update(cx, |s, cx| {
@@ -96,20 +98,46 @@ impl EnvDialogState {
             vi.update(cx, |s, cx| s.set_value("", window, cx));
         }
 
-        self.global_var_count = globals.len().min(MAX_VAR_SLOTS);
+        // 清除全局变量槽位
+        self.global_var_count = 0;
+        for i in 0..MAX_VAR_SLOTS {
+            let (ref ki, ref vi) = self.global_vars[i];
+            ki.update(cx, |s, cx| s.set_value("", window, cx));
+            vi.update(cx, |s, cx| s.set_value("", window, cx));
+        }
+
+        self.visible = true;
+    }
+
+    /// 打开全局变量编辑模式
+    pub fn open_global(
+        &mut self,
+        globals: &HashMap<String, String>,
+        window: &mut Window,
+        cx: &mut Context<crate::ui::MainView>,
+    ) {
+        self.is_global_only = true;
+        self.is_edit = false;
+        self.env_id = None;
+        self.name_input.update(cx, |s, cx| s.set_value("", window, cx));
+        self.current_var_count = 0;
+        for i in 0..MAX_VAR_SLOTS {
+            let (ref ki, ref vi) = self.current_vars[i];
+            ki.update(cx, |s, cx| s.set_value("", window, cx));
+            vi.update(cx, |s, cx| s.set_value("", window, cx));
+        }
+        self.global_var_count = (globals.len().max(1)).min(MAX_VAR_SLOTS);
         for (i, (k, v)) in globals.iter().enumerate() {
             if i >= MAX_VAR_SLOTS { break; }
             let (ref ki, ref vi) = self.global_vars[i];
             ki.update(cx, |s, cx| s.set_value(k, window, cx));
             vi.update(cx, |s, cx| s.set_value(v, window, cx));
         }
-        // 清除多余的全局变量槽位
         for i in self.global_var_count..MAX_VAR_SLOTS {
             let (ref ki, ref vi) = self.global_vars[i];
             ki.update(cx, |s, cx| s.set_value("", window, cx));
             vi.update(cx, |s, cx| s.set_value("", window, cx));
         }
-
         self.visible = true;
     }
 
@@ -161,7 +189,10 @@ pub fn render_env_dialog_overlay(
             .unwrap_or_else(|_| key.to_string())
     };
 
-    let title = if st.is_edit {
+    let is_global_only = st.is_global_only;
+    let title = if st.is_global_only {
+        "全局变量".to_string()
+    } else if st.is_edit {
         t("env.edit")
     } else {
         t("env.create")
@@ -197,30 +228,30 @@ pub fn render_env_dialog_overlay(
         .left(px(0.0))
         .right(px(0.0))
         .bottom(px(0.0))
-        .bg(rgba(0x00000044))
+        .bg(rgba(0x00000055))
         .flex()
         .items_center()
         .justify_center()
         .on_mouse_down(MouseButton::Left, |_, _, _| {})
         .child(
             div()
-                .w(px(680.0))
+                .w(px(640.0))
                 .bg(theme.background)
-                .rounded_lg()
+                .rounded_xl()
                 .border_1()
                 .border_color(theme.border)
-                .shadow_lg()
+                .shadow_2xl()
                 .flex_col()
                 .overflow_hidden()
                 // 标题栏
                 .child(
                     div()
-                        .h(px(52.0))
+                        .h(px(48.0))
                         .flex()
                         .flex_row()
                         .items_center()
                         .justify_between()
-                        .px_6()
+                        .px_5()
                         .bg(theme.muted_background)
                         .border_b_1()
                         .border_color(theme.border)
@@ -228,18 +259,8 @@ pub fn render_env_dialog_overlay(
                             div()
                                 .flex()
                                 .items_center()
-                                .gap_3()
-                                .child(
-                                    div()
-                                        .w(px(36.0))
-                                        .h(px(36.0))
-                                        .rounded_md()
-                                        .bg(theme.muted_background)
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .child(Icon::new(IconName::Globe).text_color(theme.accent)),
-                                )
+                                .gap_2p5()
+                                .child(Icon::new(IconName::Globe).text_color(theme.accent))
                                 .child(
                                     div()
                                         .text_sm()
@@ -263,65 +284,72 @@ pub fn render_env_dialog_overlay(
                                 })
                         }),
                 )
-                // 内容区（固定高度 + 超出滚动）
+                // 内容区
                 .child(
                     div()
-                        .h(px(380.0))
-                        .px_6()
-                        .py_5()
+                        .h(px(420.0))
+                        .px_5()
+                        .py_4()
                         .flex_col()
-                        .gap_6()
+                        .gap_5()
                         .overflow_y_scrollbar()
-                        // 环境名称
-                        .child(
-                            div().flex_col().gap_2()
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap_2()
-                                        .child(Icon::new(IconName::File).small().text_color(theme.accent))
-                                        .child(
-                                            div()
-                                                .text_sm()
-                                                .font_weight(FontWeight(500.0))
-                                                .text_color(theme.foreground)
-                                                .child(env_name_label.clone()),
-                                        ),
-                                )
-                                .child(
-                                    Input::new(&name_input)
-                                        .h(px(38.0))
-                                        .w_full()
-                                        .bg(theme.background)
-                                        .text_color(theme.foreground),
-                                ),
-                        )
-                        // 当前环境变量
-                        .child(render_var_section(
-                            &state_c, &current_vars_label,
-                            "add-cur", true, current_var_count,
-                            &current_slots, theme, entity_id, IconName::Globe,
-                            &add_var_label, &var_name_label, &var_value_label, &empty_hint,
-                        ))
-                        // 全局变量
-                        .child(render_var_section(
-                            &state_c, &global_vars_label,
-                            "add-glob", false, global_var_count,
-                            &global_slots, theme, entity_id, IconName::Star,
-                            &add_var_label, &var_name_label, &var_value_label, &empty_hint,
-                        )),
+                        // 环境名称（仅非全局模式显示）
+                        .when(!is_global_only, |d| {
+                            d.child(
+                                div().flex_col().gap_1p5()
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap_1p5()
+                                            .child(Icon::new(IconName::File).small().text_color(theme.accent))
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .font_weight(FontWeight(500.0))
+                                                    .text_color(theme.muted_foreground)
+                                                    .child(env_name_label.clone()),
+                                            ),
+                                    )
+                                    .child(
+                                        Input::new(&name_input)
+                                            .h(px(42.0))
+                                            .w_full()
+                                            .rounded_md()
+                                            .bg(theme.background)
+                                            .text_color(theme.foreground),
+                                    ),
+                            )
+                        })
+                        // 当前环境变量（仅非全局模式显示）
+                        .when(!is_global_only, |d| {
+                            d.child(render_var_section(
+                                &state_c, &current_vars_label,
+                                "add-cur", true, current_var_count,
+                                &current_slots, theme, entity_id, IconName::Globe,
+                                &add_var_label, &var_name_label, &var_value_label, &empty_hint,
+                            ))
+                        })
+                        // 全局变量（仅全局模式显示）
+                        .when(is_global_only, |d| {
+                            d.child(render_var_section(
+                                &state_c, &global_vars_label,
+                                "add-glob", false, global_var_count,
+                                &global_slots, theme, entity_id, IconName::Star,
+                                &add_var_label, &var_name_label, &var_value_label, &empty_hint,
+                            ))
+                        }),
                 )
                 // 底部按钮栏
                 .child(
                     div()
-                        .h(px(52.0))
+                        .h(px(48.0))
                         .flex()
                         .flex_row()
                         .justify_end()
                         .items_center()
                         .gap_3()
-                        .px_6()
+                        .px_5()
                         .border_t_1()
                         .border_color(theme.border)
                         .bg(theme.muted_background)
@@ -343,10 +371,12 @@ pub fn render_env_dialog_overlay(
                                 .label(save_env_label.clone())
                                 .bg(theme.accent)
                                 .text_color(rgb(0xffffff))
+                                .rounded_md()
                                 .on_click(move |_, _window, cx| {
                                     let st = save_state.lock().unwrap();
+                                    let is_global_only = st.is_global_only;
                                     let env_name = st.name_input.read(cx).value().to_string();
-                                    if env_name.trim().is_empty() {
+                                    if !is_global_only && env_name.trim().is_empty() {
                                         drop(st);
                                         return;
                                     }
@@ -366,38 +396,46 @@ pub fn render_env_dialog_overlay(
                                             if key.trim().is_empty() { None } else { Some((key, val)) }
                                         })
                                         .collect();
-                                    let env_id = st.env_id.clone().unwrap_or_else(|| {
-                                        uuid::Uuid::new_v4().to_string()
+                                    let env_id = st.env_id.clone();
+                                    let is_active = env_id.as_ref().and_then(|id| {
+                                        if save_active.as_ref() == Some(id) { Some(true) } else { None }
                                     });
-                                    let is_active = save_active.as_ref().map_or(false, |id| *id == env_id);
                                     let now = chrono::Utc::now();
                                     drop(st);
 
                                     if let Ok(app) = save_app.lock() {
-                                        let created_at = if let Ok(envs) = app.db.get_environments() {
-                                            envs.iter().find(|e| e.id == env_id)
-                                                .map(|e| e.created_at)
-                                                .unwrap_or(now)
-                                        } else { now };
+                                        if is_global_only {
+                                            // 仅保存全局变量
+                                            if let Err(e) = app.db.save_global_variables(&global_map) {
+                                                log::error!("保存全局变量失败: {}", e);
+                                            }
+                                            app.env_manager.set_globals(global_map);
+                                        } else {
+                                            let env_id = env_id.unwrap_or_else(|| {
+                                                uuid::Uuid::new_v4().to_string()
+                                            });
+                                            let created_at = if let Ok(envs) = app.db.get_environments() {
+                                                envs.iter().find(|e| e.id == env_id)
+                                                    .map(|e| e.created_at)
+                                                    .unwrap_or(now)
+                                            } else { now };
 
-                                        let env = Environment {
-                                            id: env_id.clone(),
-                                            name: env_name,
-                                            variables: serde_json::to_string(&current_map).unwrap_or_default(),
-                                            is_active,
-                                            created_at,
-                                            updated_at: now,
-                                        };
-                                        if let Err(e) = app.db.save_environment(&env) {
-                                            log::error!("保存环境失败: {}", e);
-                                        }
-                                        if let Err(e) = app.db.save_global_variables(&global_map) {
-                                            log::error!("保存全局变量失败: {}", e);
-                                        }
-                                        app.env_manager.set_globals(global_map);
-                                        if is_active {
-                                            if let Err(e) = app.env_manager.load_from_json(&env.variables) {
-                                                log::warn!("重载环境变量失败: {}", e);
+                                            let env = Environment {
+                                                id: env_id.clone(),
+                                                name: env_name,
+                                                variables: serde_json::to_string(&current_map).unwrap_or_default(),
+                                                is_active: is_active.unwrap_or(false),
+                                                is_global: false,
+                                                created_at,
+                                                updated_at: now,
+                                            };
+                                            if let Err(e) = app.db.save_environment(&env) {
+                                                log::error!("保存环境失败: {}", e);
+                                            }
+                                            if is_active.unwrap_or(false) {
+                                                if let Err(e) = app.env_manager.load_from_json(&env.variables) {
+                                                    log::warn!("重载环境变量失败: {}", e);
+                                                }
                                             }
                                         }
                                     }
@@ -406,7 +444,7 @@ pub fn render_env_dialog_overlay(
                                         st.visible = false;
                                         st.needs_refresh = true;
                                     }
-                                    log::info!("环境保存成功: {}", env_id);
+                                    log::info!("环境保存成功");
                                     cx.notify(save_entity_id);
                                 }),
                         ),
@@ -440,7 +478,7 @@ fn render_var_section(
 
     div()
         .flex_col()
-        .gap_3()
+        .gap_2p5()
         // 节标题行
         .child(
             div()
@@ -456,9 +494,9 @@ fn render_var_section(
                         .child(Icon::new(section_icon).small().text_color(theme.accent))
                         .child(
                             div()
-                                .text_sm()
+                                .text_xs()
                                 .font_weight(FontWeight(500.0))
-                                .text_color(theme.foreground)
+                                .text_color(theme.muted_foreground)
                                 .child(label.clone()),
                         ),
                 )
@@ -467,6 +505,8 @@ fn render_var_section(
                         .icon(IconName::Plus)
                         .label(add_label.clone())
                         .small()
+                        .compact()
+                        .my(px(2.0))
                         .text_color(theme.accent)
                         .on_click(move |_, _, cx| {
                             if let Ok(mut st) = s_add.lock() {
@@ -488,19 +528,21 @@ fn render_var_section(
         .child({
             if count == 0 {
                 div()
-                    .rounded_md()
+                    .ml(px(20.0))
+                    .rounded_lg()
                     .border_1()
                     .border_color(theme.border)
                     .p_5()
                     .flex()
                     .items_center()
                     .justify_center()
-                    .text_sm()
+                    .text_xs()
                     .text_color(theme.muted_foreground)
                     .child(empty_hint.clone())
             } else {
                 div()
-                    .rounded_md()
+                    .ml(px(20.0))
+                    .rounded_lg()
                     .border_1()
                     .border_color(theme.border)
                     .overflow_hidden()
@@ -510,8 +552,8 @@ fn render_var_section(
                         div()
                             .flex()
                             .flex_row()
-                            .px_4()
-                            .py_2()
+                            .px_3()
+                            .py_1p5()
                             .bg(theme.muted_background)
                             .border_b_1()
                             .border_color(theme.border)
@@ -523,10 +565,7 @@ fn render_var_section(
                                     .text_color(theme.muted_foreground)
                                     .child(key_label.clone()),
                             )
-                            .child(
-                                div()
-                                    .w(px(4.0)),
-                            )
+                            .child(div().w(px(12.0)))
                             .child(
                                 div()
                                     .flex_1()
@@ -535,10 +574,7 @@ fn render_var_section(
                                     .text_color(theme.muted_foreground)
                                     .child(value_label.clone()),
                             )
-                            .child(
-                                div()
-                                    .w(px(36.0)),
-                            ),
+                            .child(div().w(px(32.0))),
                     )
                     .children(
                         (0..count).map(move |i| {
@@ -548,23 +584,27 @@ fn render_var_section(
                             div()
                                 .flex()
                                 .flex_row()
-                                .gap_2()
+                                .gap_3()
                                 .items_center()
-                                .px_4()
-                                .py_3()
+                                .px_3()
+                                .py_2p5()
+                                .my(px(2.0))
                                 .when(i > 0, |d| d.border_t_1().border_color(theme.border))
                                 .bg(theme.background)
+                                .hover(|s| s.bg(theme.muted_background))
                                 .child(
                                     Input::new(k)
-                                        .h(px(36.0))
+                                        .h(px(40.0))
                                         .flex_1()
+                                        .rounded_md()
                                         .bg(theme.background)
                                         .text_color(theme.foreground),
                                 )
                                 .child(
                                     Input::new(v)
-                                        .h(px(36.0))
+                                        .h(px(40.0))
                                         .flex_1()
+                                        .rounded_md()
                                         .bg(theme.background)
                                         .text_color(theme.foreground),
                                 )
@@ -576,7 +616,6 @@ fn render_var_section(
                                         .on_click(move |_, window, cx| {
                                             if let Ok(mut st) = s.lock() {
                                                 if is_current && i < st.current_var_count {
-                                                    // 将后续变量前移，并清空最后一个位置
                                                     for j in i..st.current_var_count.saturating_sub(1) {
                                                         let (ref next_k, ref next_v) = st.current_vars[j + 1].clone();
                                                         let (ref cur_k, ref cur_v) = st.current_vars[j].clone();
@@ -590,7 +629,7 @@ fn render_var_section(
                                                     lk.update(cx, |s, cx| s.set_value("", window, cx));
                                                     lv.update(cx, |s, cx| s.set_value("", window, cx));
                                                     st.current_var_count -= 1;
-                                                } else if i < st.global_var_count {
+                                                } else if i < st.global_var_count && st.global_var_count > 1 {
                                                     for j in i..st.global_var_count.saturating_sub(1) {
                                                         let (ref next_k, ref next_v) = st.global_vars[j + 1].clone();
                                                         let (ref cur_k, ref cur_v) = st.global_vars[j].clone();

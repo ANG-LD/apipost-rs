@@ -182,6 +182,7 @@ impl I18nManager {
         map.insert("theme.title".to_string(), "主题".to_string());
         map.insert("theme.light".to_string(), "浅色".to_string());
         map.insert("theme.dark".to_string(), "深色".to_string());
+        map.insert("theme.sepia".to_string(), "暖色".to_string());
 
         // 语言
         map.insert("language.title".to_string(), "语言".to_string());
@@ -203,11 +204,18 @@ impl I18nManager {
         map.insert("error.unknown".to_string(), "未知错误".to_string());
 
         // 侧边栏
-        map.insert("sidebar.collections".to_string(), "收藏".to_string());
+        map.insert("sidebar.collections".to_string(), "收藏夹".to_string());
         map.insert("sidebar.collections_empty".to_string(), "暂无收藏请求，点击书签按钮保存请求".to_string());
         map.insert("sidebar.history".to_string(), "历史".to_string());
-        map.insert("sidebar.env".to_string(), "环境".to_string());
+        map.insert("sidebar.env".to_string(), "环境变量".to_string());
+        map.insert("sidebar.global_vars".to_string(), "全局变量".to_string());
         map.insert("sidebar.new_request".to_string(), "新建请求".to_string());
+
+        // 设置
+        map.insert("settings.auto_save".to_string(), "自动保存".to_string());
+        map.insert("settings.proxy".to_string(), "代理".to_string());
+        map.insert("settings.proxy_url".to_string(), "代理地址".to_string());
+        map.insert("settings.not_set".to_string(), "未设置".to_string());
 
         map
     }
@@ -345,6 +353,7 @@ impl I18nManager {
         map.insert("theme.title".to_string(), "Theme".to_string());
         map.insert("theme.light".to_string(), "Light".to_string());
         map.insert("theme.dark".to_string(), "Dark".to_string());
+        map.insert("theme.sepia".to_string(), "Sepia".to_string());
 
         // Language
         map.insert("language.title".to_string(), "Language".to_string());
@@ -370,7 +379,14 @@ impl I18nManager {
         map.insert("sidebar.collections_empty".to_string(), "No saved requests. Click the bookmark button to save.".to_string());
         map.insert("sidebar.history".to_string(), "History".to_string());
         map.insert("sidebar.env".to_string(), "Environment".to_string());
+        map.insert("sidebar.global_vars".to_string(), "Global Variables".to_string());
         map.insert("sidebar.new_request".to_string(), "New Request".to_string());
+
+        // Settings
+        map.insert("settings.auto_save".to_string(), "Auto Save".to_string());
+        map.insert("settings.proxy".to_string(), "Proxy".to_string());
+        map.insert("settings.proxy_url".to_string(), "Proxy URL".to_string());
+        map.insert("settings.not_set".to_string(), "Not set".to_string());
 
         map
     }

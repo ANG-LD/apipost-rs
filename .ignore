@@ -1,0 +1,7 @@
+# Rust 编译产物
+/target/
+/dist/
+
+# 其他可排除的目录
+**/.git/
+**/node_modules/

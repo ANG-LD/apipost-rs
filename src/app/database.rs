@@ -82,6 +82,8 @@ impl Database {
         )?;
         // 兼容旧数据库：尝试添加 response_size 列
         let _ = conn.execute("ALTER TABLE history ADD COLUMN response_size INTEGER", []);
+        // 兼容旧数据库：尝试添加 is_global 列
+        let _ = conn.execute("ALTER TABLE environments ADD COLUMN is_global INTEGER DEFAULT 0", []);
 
         // 创建环境变量表
         conn.execute(
@@ -90,6 +92,7 @@ impl Database {
                 name TEXT NOT NULL UNIQUE,
                 variables TEXT NOT NULL,
                 is_active INTEGER DEFAULT 0,
+                is_global INTEGER DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )",
@@ -279,18 +282,20 @@ impl Database {
         let conn = self.conn.lock()
             .map_err(|_| anyhow::anyhow!("数据库锁中毒"))?;
         conn.execute(
-            "INSERT INTO environments (id, name, variables, is_active, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            "INSERT INTO environments (id, name, variables, is_active, is_global, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 variables = excluded.variables,
                 is_active = excluded.is_active,
+                is_global = excluded.is_global,
                 updated_at = excluded.updated_at",
             params![
                 env.id,
                 env.name,
                 env.variables,
                 env.is_active as i32,
+                env.is_global as i32,
                 env.created_at.to_rfc3339(),
                 env.updated_at.to_rfc3339(),
             ],
@@ -303,7 +308,7 @@ impl Database {
         let conn = self.conn.lock()
             .map_err(|_| anyhow::anyhow!("数据库锁中毒"))?;
         let mut stmt = conn.prepare(
-            "SELECT id, name, variables, is_active, created_at, updated_at FROM environments ORDER BY name"
+            "SELECT id, name, variables, is_active, is_global, created_at, updated_at FROM environments ORDER BY is_global DESC, name"
         )?;
 
         let envs = stmt.query_map([], |row| {
@@ -312,10 +317,11 @@ impl Database {
                 name: row.get(1)?,
                 variables: row.get(2)?,
                 is_active: row.get::<_, i32>(3)? == 1,
-                created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(4)?)
+                is_global: row.get::<_, i32>(4)? == 1,
+                created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(5)?)
                     .unwrap_or_else(|_| Utc::now().into())
                     .with_timezone(&Utc),
-                updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(5)?)
+                updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(6)?)
                     .unwrap_or_else(|_| Utc::now().into())
                     .with_timezone(&Utc),
             })
@@ -329,7 +335,7 @@ impl Database {
         let conn = self.conn.lock()
             .map_err(|_| anyhow::anyhow!("数据库锁中毒"))?;
         let mut stmt = conn.prepare(
-            "SELECT id, name, variables, is_active, created_at, updated_at FROM environments WHERE is_active = 1 LIMIT 1"
+            "SELECT id, name, variables, is_active, is_global, created_at, updated_at FROM environments WHERE is_active = 1 LIMIT 1"
         )?;
 
         let mut rows = stmt.query([])?;
@@ -339,10 +345,11 @@ impl Database {
                 name: row.get(1)?,
                 variables: row.get(2)?,
                 is_active: true,
-                created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(4)?)
+                is_global: row.get::<_, i32>(4)? == 1,
+                created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(5)?)
                     .unwrap_or_else(|_| Utc::now().into())
                     .with_timezone(&Utc),
-                updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(5)?)
+                updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(6)?)
                     .unwrap_or_else(|_| Utc::now().into())
                     .with_timezone(&Utc),
             }))
@@ -683,6 +690,7 @@ pub struct Environment {
     pub name: String,
     pub variables: String,  // JSON格式的键值对
     pub is_active: bool,
+    pub is_global: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -758,6 +766,7 @@ mod tests {
             name: "测试环境".to_string(),
             variables: r#"{"base_url":"https://test.api.com","api_key":"test123"}"#.to_string(),
             is_active: true,
+            is_global: false,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };

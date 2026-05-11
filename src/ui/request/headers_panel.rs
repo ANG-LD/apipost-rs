@@ -67,12 +67,16 @@ pub fn render_headers_panel(
                                 .items_center()
                                 .justify_center()
                                 .text_sm()
+                                .cursor_pointer()
                                 .text_color(if header.enabled {
                                     theme.success
                                 } else {
                                     theme.muted_foreground
                                 })
-                                .child(if header.enabled { "✓" } else { "○" }),
+                                .child(if header.enabled { "✓" } else { "○" })
+                                .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
+                                    this.toggle_header(idx, cx);
+                                })),
                             div().flex_1().child(
                                 Input::new(&header.key)
                                     .small()

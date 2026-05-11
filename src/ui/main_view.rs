@@ -3,29 +3,31 @@
 //! 应用主界面，包含侧边栏和请求/响应面板
 
 use crate::app::database::{Environment, Folder, HistoryEntry, SavedRequest};
+use crate::app::history::CreateHistoryEntry;
 use crate::app::HttpResponse;
 use crate::http::HttpRequest;
-use crate::app::history::CreateHistoryEntry;
-use crate::ui::{
-    count_lines, json_editor, ApiKeyLocation, AuthState, AuthType, BodyState, BodyType,
-    HeaderEntry, RawFormat, RequestSettings, ScriptState,
-    SettingsInputs, Theme,
+use crate::ui::components::{popup_panel, tooltip_popup};
+use crate::ui::dialogs::{
+    render_env_dialog_overlay, render_folder_dialog_overlay, render_move_dialog_overlay,
+    EnvDialogState, FolderDialogState, MoveDialogState,
 };
-use crate::ui::dialogs::{EnvDialogState, FolderDialogState, MoveDialogState, render_env_dialog_overlay, render_folder_dialog_overlay, render_move_dialog_overlay};
 use crate::ui::sidebar::CollectionItem;
 use crate::ui::sidebar::{build_collection_tree, render_collection_panel};
-use crate::ui::components::{tooltip_popup, popup_panel};
 use crate::ui::sidebar::{render_folder_context_menu, render_request_context_menu};
+use crate::ui::{
+    count_lines, json_editor, ApiKeyLocation, AuthState, AuthType, BodyState, BodyType,
+    HeaderEntry, RawFormat, RequestSettings, ScriptState, SettingsInputs, Theme,
+};
 use gpui::prelude::*;
-use gpui::*;
 use gpui::InteractiveElement;
-use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_component::select::{Select, SelectState};
+use gpui::*;
 use gpui_component::button::Button;
-use gpui_component::scroll::ScrollableElement;
-use gpui_component::scroll::Scrollable;
-use gpui_component::{Disableable, Icon, IconName, IndexPath, Sizable, StyledExt, WindowExt};
 use gpui_component::dialog::{Dialog, DialogHeader, DialogTitle};
+use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::scroll::Scrollable;
+use gpui_component::scroll::ScrollableElement;
+use gpui_component::select::{Select, SelectState};
+use gpui_component::{Disableable, Icon, IconName, IndexPath, Sizable, StyledExt, WindowExt};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use tokio;
@@ -77,8 +79,7 @@ pub enum BuilderTab {
 }
 
 /// 侧边栏标签页
-#[derive(Clone, Copy, PartialEq)]
-#[derive(Debug)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum SidebarTab {
     Collections,
     History,
@@ -141,6 +142,8 @@ pub struct MainView {
     pub(crate) env_dialog_state: Arc<Mutex<EnvDialogState>>,
     pub(crate) folder_dialog_state: Arc<Mutex<FolderDialogState>>,
     pub(crate) move_dialog_state: Arc<Mutex<MoveDialogState>>,
+    pub(crate) save_request_dialog: Arc<Mutex<SaveRequestDialog>>,
+    pub(crate) needs_drop_refresh: Arc<std::sync::atomic::AtomicBool>,
     pub(crate) expanded_folders: HashSet<String>,
     pub(crate) collection_items: Vec<CollectionItem>,
     pub(crate) needs_collections_refresh: bool,
@@ -177,6 +180,76 @@ pub struct MainView {
     pub(crate) response_editor_height: f32,
     pub(crate) response_editor_dragging: bool,
     pub(crate) response_editor_start_y: f32,
+    pub(crate) sidebar_scroll_handle: gpui::ScrollHandle,
+}
+
+/// 保存到收藏夹的对话框状态
+pub(crate) struct SaveRequestDialog {
+    pub(crate) visible: bool,
+    pub(crate) name_input: Entity<InputState>,
+    pub(crate) folder_select: Entity<SelectState<Vec<gpui::SharedString>>>,
+    pub(crate) pending_request: Option<crate::app::database::SavedRequest>,
+    pub(crate) needs_refresh: bool,
+}
+
+impl SaveRequestDialog {
+    pub(crate) fn new(window: &mut Window, cx: &mut Context<MainView>) -> Self {
+        let folder_items: Vec<gpui::SharedString> = vec!["根目录 (未分类)".into()];
+        Self {
+            visible: false,
+            name_input: cx.new(|cx| InputState::new(window, cx).default_value("")),
+            folder_select: cx.new(|cx| {
+                SelectState::new(folder_items, Some(IndexPath::default().row(0)), window, cx)
+            }),
+            pending_request: None,
+            needs_refresh: false,
+        }
+    }
+
+    pub(crate) fn open(
+        &mut self,
+        default_name: String,
+        request: crate::app::database::SavedRequest,
+        folders: &[crate::app::database::Folder],
+        window: &mut Window,
+        cx: &mut Context<MainView>,
+    ) {
+        self.name_input.update(cx, |s, cx| {
+            s.set_value(&default_name, window, cx);
+        });
+
+        let mut items: Vec<gpui::SharedString> = vec!["根目录 (未分类)".into()];
+        fn collect_folder_items(
+            folders: &[crate::app::database::Folder],
+            parent_id: Option<&str>,
+            depth: usize,
+            items: &mut Vec<gpui::SharedString>,
+        ) {
+            let indent = "  ".repeat(depth);
+            for f in folders
+                .iter()
+                .filter(|f| f.parent_id.as_deref() == parent_id)
+            {
+                items.push(format!("{}{}", indent, f.name).into());
+                collect_folder_items(folders, Some(&f.id), depth + 1, items);
+            }
+        }
+        collect_folder_items(folders, None, 0, &mut items);
+
+        self.folder_select.update(cx, |s, cx| {
+            s.set_items(items, window, cx);
+            s.set_selected_index(Some(IndexPath::default().row(0)), window, cx);
+        });
+
+        self.pending_request = Some(request);
+        self.needs_refresh = false;
+        self.visible = true;
+    }
+}
+
+/// 在 `->` 处切割换行，去掉箭头符号
+fn break_long_text(text: &str) -> String {
+    text.replace("-> ", "\n")
 }
 
 impl MainView {
@@ -186,7 +259,14 @@ impl MainView {
     }
 
     /// 创建构建器标签页按钮（带i18n支持）
-    fn builder_tab_button(&self, cx: &Context<Self>, label_key: &str, tab: BuilderTab, current_tab: BuilderTab, id: impl Into<ElementId>) -> impl IntoElement {
+    fn builder_tab_button(
+        &self,
+        cx: &Context<Self>,
+        label_key: &str,
+        tab: BuilderTab,
+        current_tab: BuilderTab,
+        id: impl Into<ElementId>,
+    ) -> impl IntoElement {
         let theme = Theme::from_str(&self.app_state.lock().unwrap().theme_name);
         let is_active = current_tab == tab;
         div()
@@ -196,36 +276,81 @@ impl MainView {
             .py_2()
             .text_sm()
             .cursor_pointer()
-            .text_color(if is_active { theme.accent_foreground } else { theme.muted_foreground })
-            .bg(if is_active { theme.code_background } else { theme.background })
-            .on_click(cx.listener(move |this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
-                this.set_builder_tab(tab, cx);
-            }))
+            .text_color(if is_active {
+                theme.accent_foreground
+            } else {
+                theme.muted_foreground
+            })
+            .bg(if is_active {
+                theme.code_background
+            } else {
+                theme.background
+            })
+            .on_click(cx.listener(
+                move |this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                    this.set_builder_tab(tab, cx);
+                },
+            ))
             .child(self.t(label_key))
     }
 
     /// 创建响应标签页按钮（带i18n支持）
-    fn response_tab_button(&self, cx: &Context<Self>, label_key: &str, tab: ResponseTab, current_tab: ResponseTab, id: impl Into<ElementId>) -> impl IntoElement {
+    fn response_tab_button(
+        &self,
+        cx: &Context<Self>,
+        label_key: &str,
+        tab: ResponseTab,
+        current_tab: ResponseTab,
+        id: impl Into<ElementId>,
+    ) -> impl IntoElement {
         let theme = Theme::from_str(&self.app_state.lock().unwrap().theme_name);
         let is_active = current_tab == tab;
         div()
             .id(id)
-            .min_w(px(70.0))
+            .min_w(px(60.0))
             .px_3()
-            .py_2()
+            .py_1p5()
             .text_sm()
             .cursor_pointer()
-            .text_color(if is_active { theme.accent_foreground } else { theme.muted_foreground })
-            .on_click(cx.listener(move |this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
-                this.set_response_tab(tab, cx);
-            }))
+            .relative()
+            .rounded_sm()
+            .text_color(if is_active {
+                theme.accent
+            } else {
+                theme.muted_foreground
+            })
+            .hover(|s| s.bg(theme.muted_background))
+            .when(is_active, |d| {
+                d.font_weight(FontWeight(500.0)).child(
+                    div()
+                        .absolute()
+                        .bottom(px(0.0))
+                        .left(px(12.0))
+                        .right(px(12.0))
+                        .h(px(2.0))
+                        .bg(theme.accent)
+                        .rounded_full(),
+                )
+            })
+            .on_click(cx.listener(
+                move |this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                    this.set_response_tab(tab, cx);
+                },
+            ))
             .child(self.t(label_key))
     }
 
     /// 创建新的主视图
-    pub fn new(app_state: Arc<std::sync::Mutex<crate::app::AppState>>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        app_state: Arc<std::sync::Mutex<crate::app::AppState>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         // 加载历史记录
-        let history = app_state.lock().unwrap().db
+        let history = app_state
+            .lock()
+            .unwrap()
+            .db
             .get_history(50, 0)
             .unwrap_or_default();
 
@@ -238,28 +363,32 @@ impl MainView {
 
         // 设置URL输入变化订阅（URL变化时自动解析到params）
         let url_input_clone = url_input.clone();
-        let _url_change_sub = cx.subscribe_in(&url_input, window, move |this, _state, event, _window, cx| {
-            match event {
-                InputEvent::Change => {
-                    if this.is_importing_curl {
-                        return;
-                    }
-                    let url = url_input_clone.read(cx).value().to_string();
-                    if url == this.last_synced_url {
-                        return;
-                    }
-                    // 检测cURL命令
-                    if url.trim().starts_with("curl ") || url.trim().starts_with("curl\n") {
-                        if let Err(e) = this.import_curl(&url, _window, cx) {
-                            log::warn!("解析cURL命令失败: {}", e);
+        let _url_change_sub = cx.subscribe_in(
+            &url_input,
+            window,
+            move |this, _state, event, _window, cx| {
+                match event {
+                    InputEvent::Change => {
+                        if this.is_importing_curl {
+                            return;
                         }
-                    } else if url.contains('?') {
-                        this.parse_url_to_params_internal(&url, _window, cx);
+                        let url = url_input_clone.read(cx).value().to_string();
+                        if url == this.last_synced_url {
+                            return;
+                        }
+                        // 检测cURL命令
+                        if url.trim().starts_with("curl ") || url.trim().starts_with("curl\n") {
+                            if let Err(e) = this.import_curl(&url, _window, cx) {
+                                log::warn!("解析cURL命令失败: {}", e);
+                            }
+                        } else if url.contains('?') {
+                            this.parse_url_to_params_internal(&url, _window, cx);
+                        }
                     }
+                    _ => {}
                 }
-                _ => {}
-            }
-        });
+            },
+        );
 
         // 创建HTTP方法选择状态
         let methods: Vec<gpui::SharedString> = vec![
@@ -271,9 +400,8 @@ impl MainView {
             "HEAD".into(),
             "OPTIONS".into(),
         ];
-        let method_select = cx.new(|cx| {
-            SelectState::new(methods, Some(IndexPath::default()), window, cx)
-        });
+        let method_select =
+            cx.new(|cx| SelectState::new(methods, Some(IndexPath::default()), window, cx));
 
         // 创建参数输入状态（从空开始，支持动态添加）
         let params: Vec<ParamEntry> = vec![];
@@ -288,7 +416,7 @@ impl MainView {
                 .multi_line(true)
                 .code_editor("json")
                 .line_number(true)
-                        });
+        });
         // XML 格式的 raw_content - 复制JSON编辑框
         let raw_content_xml = cx.new(|cx| {
             InputState::new(window, cx)
@@ -296,7 +424,7 @@ impl MainView {
                 .multi_line(true)
                 .code_editor("json")
                 .line_number(true)
-                        });
+        });
         // Text 格式的 raw_content - 复制JSON编辑框
         let raw_content_text = cx.new(|cx| {
             InputState::new(window, cx)
@@ -304,7 +432,7 @@ impl MainView {
                 .multi_line(true)
                 .code_editor("json")
                 .line_number(true)
-                        });
+        });
         // HTML 格式的 raw_content - 复制JSON编辑框
         let raw_content_html = cx.new(|cx| {
             InputState::new(window, cx)
@@ -312,8 +440,13 @@ impl MainView {
                 .multi_line(true)
                 .code_editor("json")
                 .line_number(true)
-                        });
-        let body_state = BodyState::new(raw_content, raw_content_xml, raw_content_text, raw_content_html);
+        });
+        let body_state = BodyState::new(
+            raw_content,
+            raw_content_xml,
+            raw_content_text,
+            raw_content_html,
+        );
 
         // 创建 Body 类型选择器
         let body_type_select = BodyState::create_body_type_select(window, cx);
@@ -341,7 +474,7 @@ impl MainView {
                 .multi_line(true)
                 .soft_wrap(true)
                 .line_number(true)
-                                .default_value("")
+                .default_value("")
         });
 
         // 创建响应体 XML 输入状态（使用 code_editor）
@@ -350,7 +483,7 @@ impl MainView {
                 .multi_line(true)
                 .code_editor("json")
                 .line_number(true)
-                                .default_value("")
+                .default_value("")
         });
 
         // 创建响应体 Text 输入状态（使用 code_editor）
@@ -359,7 +492,7 @@ impl MainView {
                 .multi_line(true)
                 .code_editor("json")
                 .line_number(true)
-                                .default_value("")
+                .default_value("")
         });
 
         // 创建响应体 Html 输入状态（使用 code_editor）
@@ -368,7 +501,7 @@ impl MainView {
                 .multi_line(true)
                 .code_editor("json")
                 .line_number(true)
-                                .default_value("")
+                .default_value("")
         });
 
         // 响应头输入状态（动态创建，每个头一个键值对）
@@ -379,15 +512,33 @@ impl MainView {
 
         // 获取默认标签页名称
         let default_tab_name = app_state.lock().unwrap().i18n.get("sidebar.new_request");
-        let saved_requests = app_state.lock().unwrap().db.get_saved_requests().unwrap_or_default();
-        let folders = app_state.lock().unwrap().db.get_folders().unwrap_or_default();
-        let environments = app_state.lock().unwrap().db.get_environments().unwrap_or_default();
-        let active_environment_name = environments.iter()
+        let saved_requests = app_state
+            .lock()
+            .unwrap()
+            .db
+            .get_saved_requests()
+            .unwrap_or_default();
+        let folders = app_state
+            .lock()
+            .unwrap()
+            .db
+            .get_folders()
+            .unwrap_or_default();
+        let environments = app_state
+            .lock()
+            .unwrap()
+            .db
+            .get_environments()
+            .unwrap_or_default();
+        let active_environment_name = environments
+            .iter()
             .find(|e| e.is_active)
             .map(|e| e.name.clone());
         let env_dialog_state = Arc::new(Mutex::new(EnvDialogState::new(window, cx)));
         let folder_dialog_state = Arc::new(Mutex::new(FolderDialogState::new(window, cx)));
         let move_dialog_state = Arc::new(Mutex::new(MoveDialogState::new()));
+        let save_request_dialog = Arc::new(Mutex::new(SaveRequestDialog::new(window, cx)));
+        let needs_drop_refresh = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
         Self {
             app_state,
@@ -430,6 +581,8 @@ impl MainView {
             env_dialog_state,
             folder_dialog_state,
             move_dialog_state,
+            save_request_dialog,
+            needs_drop_refresh,
             url_input,
             _url_change_sub,
             _param_input_subs: Vec::new(),
@@ -463,6 +616,7 @@ impl MainView {
             response_editor_height: 400.0,
             response_editor_dragging: false,
             response_editor_start_y: 0.0,
+            sidebar_scroll_handle: gpui::ScrollHandle::new(),
         }
     }
 
@@ -482,7 +636,9 @@ impl MainView {
         let auth_headers = self.auth_state.to_headers(cx);
 
         // 2. 获取用户定义的 Headers
-        let user_headers: Vec<(String, String)> = self.headers.iter()
+        let user_headers: Vec<(String, String)> = self
+            .headers
+            .iter()
             .filter(|h| h.enabled)
             .filter_map(|h| {
                 let key = h.key.read(cx).value().to_string();
@@ -504,18 +660,27 @@ impl MainView {
 
         // 5. 如果有 content_type 但不在 headers 中，添加它
         if let Some(ref ct) = content_type {
-            if !all_headers.iter().any(|(k, _)| k.to_lowercase() == "content-type") {
+            if !all_headers
+                .iter()
+                .any(|(k, _)| k.to_lowercase() == "content-type")
+            {
                 all_headers.push(("Content-Type".to_string(), ct.clone()));
             }
         }
 
         // 6. 构建完整URL（先替换环境变量再检查scheme，避免变量值含http导致重复添加）
-        let resolved_url = self.app_state.lock().unwrap().env_manager.replace_variables(&self.url);
-        let url_with_scheme = if !resolved_url.starts_with("http://") && !resolved_url.starts_with("https://") {
-            format!("http://{}", resolved_url)
-        } else {
-            resolved_url
-        };
+        let resolved_url = self
+            .app_state
+            .lock()
+            .unwrap()
+            .env_manager
+            .replace_variables(&self.url);
+        let url_with_scheme =
+            if !resolved_url.starts_with("http://") && !resolved_url.starts_with("https://") {
+                format!("http://{}", resolved_url)
+            } else {
+                resolved_url
+            };
 
         let base_url = if let Some(query_start) = url_with_scheme.find('?') {
             url_with_scheme[..query_start].to_string()
@@ -523,20 +688,31 @@ impl MainView {
             url_with_scheme
         };
 
-        let params: Vec<(String, String, bool)> = self.params.iter().map(|p| {
-            let key = p.key.read(cx).value().to_string();
-            let value = p.value.read(cx).value().to_string();
-            (key, value, p.enabled)
-        }).collect();
+        let params: Vec<(String, String, bool)> = self
+            .params
+            .iter()
+            .map(|p| {
+                let key = p.key.read(cx).value().to_string();
+                let value = p.value.read(cx).value().to_string();
+                (key, value, p.enabled)
+            })
+            .collect();
 
-        let enabled_params: Vec<&(String, String, bool)> = params.iter().filter(|p| p.2 && !p.0.is_empty()).collect();
+        let enabled_params: Vec<&(String, String, bool)> =
+            params.iter().filter(|p| p.2 && !p.0.is_empty()).collect();
 
         let mut full_url = if enabled_params.is_empty() {
             base_url
         } else {
             let query_string: String = enabled_params
                 .iter()
-                .map(|(key, value, _)| format!("{}={}", urlencoding::encode(key), urlencoding::encode(value)))
+                .map(|(key, value, _)| {
+                    format!(
+                        "{}={}",
+                        urlencoding::encode(key),
+                        urlencoding::encode(value)
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join("&");
             format!("{}?{}", base_url, query_string)
@@ -561,11 +737,13 @@ impl MainView {
         let file_fields_raw = self.body_state.get_form_data_file_fields(cx);
         let file_fields: Vec<crate::http::FileField> = file_fields_raw
             .into_iter()
-            .map(|(field_name, file_path, content_type)| crate::http::FileField {
-                field_name,
-                file_path,
-                content_type,
-            })
+            .map(
+                |(field_name, file_path, content_type)| crate::http::FileField {
+                    field_name,
+                    file_path,
+                    content_type,
+                },
+            )
             .collect();
 
         let headers_text_for_history: String = all_headers
@@ -595,54 +773,65 @@ impl MainView {
             let result = rt.block_on(app_state.lock().unwrap().send_request(request));
 
             this.update_in(cx, |this, window, cx| {
-                    match result {
-                        Ok(response) => {
-                            let history_entry = CreateHistoryEntry {
-                                method: method.clone(),
-                                url: url.clone(),
-                                headers: Some(headers_text_for_history),
-                                body: body_for_history,
-                                response_status: Some(response.status as i32),
-                                response_headers: Some(serde_json::to_string(&response.headers).unwrap_or_default()),
-                                response_body: Some(response.body.clone()),
-                                response_time_ms: Some(response.time_ms),
-                                response_size: Some(response.size_bytes),
-                            };
+                match result {
+                    Ok(response) => {
+                        let history_entry = CreateHistoryEntry {
+                            method: method.clone(),
+                            url: url.clone(),
+                            headers: Some(headers_text_for_history),
+                            body: body_for_history,
+                            response_status: Some(response.status as i32),
+                            response_headers: Some(
+                                serde_json::to_string(&response.headers).unwrap_or_default(),
+                            ),
+                            response_body: Some(response.body.clone()),
+                            response_time_ms: Some(response.time_ms),
+                            response_size: Some(response.size_bytes),
+                        };
 
-                            if let Err(e) = this.app_state.lock().unwrap().db.add_history(&history_entry.into_history_entry()) {
-                                log::error!("保存历史记录失败: {}", e);
-                            }
-
-                            this.response = Some(response.clone());
-                            let content_type = response.detect_content_type();
-                            this.response_raw_format = RawFormat::detect(content_type.as_deref(), &response.body);
-                            let json_body = RawFormat::Json.format_body(&response.body);
-                            this.response_input.update(cx, |state, cx| {
-                                state.set_value(&json_body, window, cx);
-                            });
-                            this.response_xml_input.update(cx, |state, cx| {
-                                state.set_value(&response.body, window, cx);
-                            });
-                            this.response_text_input.update(cx, |state, cx| {
-                                state.set_value(&response.body, window, cx);
-                            });
-                            this.response_html_input.update(cx, |state, cx| {
-                                state.set_value(&response.body, window, cx);
-                            });
-                            this.rebuild_response_header_inputs(&response.headers, window, cx);
-                            if let Ok(hist) = this.app_state.lock().unwrap().db.get_history(50, 0) {
-                                this.history = hist;
-                            }
+                        if let Err(e) = this
+                            .app_state
+                            .lock()
+                            .unwrap()
+                            .db
+                            .add_history(&history_entry.into_history_entry())
+                        {
+                            log::error!("保存历史记录失败: {}", e);
                         }
-                        Err(e) => {
-                            this.error_message = Some(e);
+
+                        this.response = Some(response.clone());
+                        let content_type = response.detect_content_type();
+                        this.response_raw_format =
+                            RawFormat::detect(content_type.as_deref(), &response.body);
+                        let json_body = RawFormat::Json.format_body(&response.body);
+                        this.response_input.update(cx, |state, cx| {
+                            state.set_value(&json_body, window, cx);
+                        });
+                        this.response_xml_input.update(cx, |state, cx| {
+                            state.set_value(&response.body, window, cx);
+                        });
+                        this.response_text_input.update(cx, |state, cx| {
+                            state.set_value(&response.body, window, cx);
+                        });
+                        this.response_html_input.update(cx, |state, cx| {
+                            state.set_value(&response.body, window, cx);
+                        });
+                        this.rebuild_response_header_inputs(&response.headers, window, cx);
+                        if let Ok(hist) = this.app_state.lock().unwrap().db.get_history(50, 0) {
+                            this.history = hist;
                         }
                     }
+                    Err(e) => {
+                        this.error_message = Some(e);
+                    }
+                }
 
-                    this.is_loading = false;
-                    cx.notify();
-            }).ok();
-        }).detach();
+                this.is_loading = false;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// 从历史记录加载请求
@@ -748,7 +937,11 @@ impl MainView {
     pub fn add_param(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let key = cx.new(|cx| InputState::new(window, cx).default_value(""));
         let value = cx.new(|cx| InputState::new(window, cx).default_value(""));
-        self.params.push(ParamEntry { key, value, enabled: true });
+        self.params.push(ParamEntry {
+            key,
+            value,
+            enabled: true,
+        });
         self.rebuild_param_subscriptions(window, cx);
         self.sync_params_to_url(window, cx);
         cx.notify();
@@ -784,17 +977,16 @@ impl MainView {
 
     /// 删除指定索引的 Header 行
     /// 根据响应头重建响应头输入状态（用于显示键值对）
-    fn rebuild_response_header_inputs(&mut self, headers: &std::collections::HashMap<String, String>, window: &mut Window, cx: &mut Context<Self>) {
+    fn rebuild_response_header_inputs(
+        &mut self,
+        headers: &std::collections::HashMap<String, String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.response_header_inputs.clear();
         for (k, v) in headers.iter() {
-            let key_input = cx.new(|cx| {
-                InputState::new(window, cx)
-                    .default_value(k)
-            });
-            let val_input = cx.new(|cx| {
-                InputState::new(window, cx)
-                    .default_value(v)
-            });
+            let key_input = cx.new(|cx| InputState::new(window, cx).default_value(k));
+            let val_input = cx.new(|cx| InputState::new(window, cx).default_value(v));
             self.response_header_inputs.push((key_input, val_input));
         }
     }
@@ -835,8 +1027,14 @@ impl MainView {
                 let key = cx.new(|cx| InputState::new(window, cx).default_value(""));
                 let value = cx.new(|cx| InputState::new(window, cx).default_value(""));
                 let locations = ApiKeyLocation::all();
-                let location = cx.new(|cx| SelectState::new(locations, Some(IndexPath::default()), window, cx));
-                AuthState::ApiKey(crate::ui::ApiKeyAuthData { key, value, location, location_value: ApiKeyLocation::Header })
+                let location = cx
+                    .new(|cx| SelectState::new(locations, Some(IndexPath::default()), window, cx));
+                AuthState::ApiKey(crate::ui::ApiKeyAuthData {
+                    key,
+                    value,
+                    location,
+                    location_value: ApiKeyLocation::Header,
+                })
             }
         };
         cx.notify();
@@ -889,7 +1087,12 @@ impl MainView {
     }
 
     /// 设置响应体 Raw 格式
-    pub fn set_response_raw_format(&mut self, index: usize, _window: &mut Window, cx: &mut Context<Self>) {
+    pub fn set_response_raw_format(
+        &mut self,
+        index: usize,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.response_raw_format = RawFormat::from_index(index);
         cx.notify();
     }
@@ -928,13 +1131,25 @@ impl MainView {
     }
 
     /// 设置 form-data 条目类型
-    pub fn set_form_data_param_type(&mut self, index: usize, param_type: crate::ui::FormDataParamType, window: &mut Window, cx: &mut Context<Self>) {
-        self.body_state.set_form_data_param_type(index, param_type, window, cx);
+    pub fn set_form_data_param_type(
+        &mut self,
+        index: usize,
+        param_type: crate::ui::FormDataParamType,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.body_state
+            .set_form_data_param_type(index, param_type, window, cx);
         cx.notify();
     }
 
     /// 为 form-data File 类型选择文件
-    pub fn pick_file_for_form_data(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn pick_file_for_form_data(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         use rfd::FileDialog;
 
         if index >= self.body_state.form_data.len() {
@@ -947,18 +1162,24 @@ impl MainView {
         }
 
         // 打开文件选择对话框
-        if let Some(file_path) = FileDialog::new()
-            .pick_file()
-        {
+        if let Some(file_path) = FileDialog::new().pick_file() {
             let path_str = file_path.to_string_lossy().to_string();
-            self.body_state.update_form_data_file_path(index, &path_str, window, cx);
+            self.body_state
+                .update_form_data_file_path(index, &path_str, window, cx);
             cx.notify();
         }
     }
 
     /// 设置 url-encoded 条目类型
-    pub fn set_urlencoded_param_type(&mut self, index: usize, param_type: crate::ui::FormDataParamType, window: &mut Window, cx: &mut Context<Self>) {
-        self.body_state.set_urlencoded_param_type(index, param_type, window, cx);
+    pub fn set_urlencoded_param_type(
+        &mut self,
+        index: usize,
+        param_type: crate::ui::FormDataParamType,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.body_state
+            .set_urlencoded_param_type(index, param_type, window, cx);
         cx.notify();
     }
 
@@ -975,7 +1196,12 @@ impl MainView {
     // ==================== URL 与 Params 同步 ====================
 
     /// 从URL解析query string并填充到params
-    fn parse_url_to_params_internal(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) {
+    fn parse_url_to_params_internal(
+        &mut self,
+        url: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         // 清空现有params
         self.params.clear();
 
@@ -990,11 +1216,17 @@ impl MainView {
                 if let Some(eq_pos) = pair.find('=') {
                     let key = &pair[..eq_pos];
                     let value = &pair[eq_pos + 1..];
-                    let decoded_key = urlencoding::decode(key).map(|s| s.to_string()).unwrap_or_else(|_| key.to_string());
-                    let decoded_value = urlencoding::decode(value).map(|s| s.to_string()).unwrap_or_else(|_| value.to_string());
+                    let decoded_key = urlencoding::decode(key)
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|_| key.to_string());
+                    let decoded_value = urlencoding::decode(value)
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|_| value.to_string());
 
-                    let key_entity = cx.new(|cx| InputState::new(window, cx).default_value(&decoded_key));
-                    let value_entity = cx.new(|cx| InputState::new(window, cx).default_value(&decoded_value));
+                    let key_entity =
+                        cx.new(|cx| InputState::new(window, cx).default_value(&decoded_key));
+                    let value_entity =
+                        cx.new(|cx| InputState::new(window, cx).default_value(&decoded_value));
 
                     self.params.push(ParamEntry {
                         key: key_entity,
@@ -1002,8 +1234,11 @@ impl MainView {
                         enabled: true,
                     });
                 } else {
-                    let decoded_key = urlencoding::decode(pair).map(|s| s.to_string()).unwrap_or_else(|_| pair.to_string());
-                    let key_entity = cx.new(|cx| InputState::new(window, cx).default_value(&decoded_key));
+                    let decoded_key = urlencoding::decode(pair)
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|_| pair.to_string());
+                    let key_entity =
+                        cx.new(|cx| InputState::new(window, cx).default_value(&decoded_key));
                     let value_entity = cx.new(|cx| InputState::new(window, cx).default_value(""));
 
                     self.params.push(ParamEntry {
@@ -1029,22 +1264,32 @@ impl MainView {
             current_url
         };
 
-
         // 构建新的query string
-        let params: Vec<(String, String, bool)> = self.params.iter().map(|p| {
-            let key = p.key.read(cx).value().to_string();
-            let value = p.value.read(cx).value().to_string();
-            (key, value, p.enabled)
-        }).collect();
+        let params: Vec<(String, String, bool)> = self
+            .params
+            .iter()
+            .map(|p| {
+                let key = p.key.read(cx).value().to_string();
+                let value = p.value.read(cx).value().to_string();
+                (key, value, p.enabled)
+            })
+            .collect();
 
-        let enabled_params: Vec<&(String, String, bool)> = params.iter().filter(|p| p.2 && !p.0.is_empty()).collect();
+        let enabled_params: Vec<&(String, String, bool)> =
+            params.iter().filter(|p| p.2 && !p.0.is_empty()).collect();
 
         let new_url = if enabled_params.is_empty() {
             base_url
         } else {
             let query_string: String = enabled_params
                 .iter()
-                .map(|(key, value, _)| format!("{}={}", urlencoding::encode(key), urlencoding::encode(value)))
+                .map(|(key, value, _)| {
+                    format!(
+                        "{}={}",
+                        urlencoding::encode(key),
+                        urlencoding::encode(value)
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join("&");
             format!("{}?{}", base_url, query_string)
@@ -1063,7 +1308,11 @@ impl MainView {
     }
 
     /// 重建所有 param key/value 的输入变化订阅，实现实时 URL 同步
-    pub(crate) fn rebuild_param_subscriptions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn rebuild_param_subscriptions(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self._param_input_subs.clear();
         for param in &self.params {
             let key = param.key.clone();
@@ -1073,18 +1322,23 @@ impl MainView {
                     this.sync_params_to_url(_window, cx);
                 }
             });
-            let value_sub = cx.subscribe_in(&value, window, move |this, _state, event, _window, cx| {
-                if matches!(event, InputEvent::Change) {
-                    this.sync_params_to_url(_window, cx);
-                }
-            });
+            let value_sub =
+                cx.subscribe_in(&value, window, move |this, _state, event, _window, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        this.sync_params_to_url(_window, cx);
+                    }
+                });
             self._param_input_subs.push(key_sub);
             self._param_input_subs.push(value_sub);
         }
     }
 
     /// 重建所有 header key/value 的输入变化订阅，检测 Content-Type 自动切换 Body 类型
-    pub(crate) fn rebuild_header_subscriptions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn rebuild_header_subscriptions(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self._header_subs.clear();
         for header in &self.headers {
             let key = header.key.clone();
@@ -1094,18 +1348,23 @@ impl MainView {
                     this.auto_detect_body_type_from_headers(_window, cx);
                 }
             });
-            let value_sub = cx.subscribe_in(&value, window, move |this, _state, event, _window, cx| {
-                if matches!(event, InputEvent::Change) {
-                    this.auto_detect_body_type_from_headers(_window, cx);
-                }
-            });
+            let value_sub =
+                cx.subscribe_in(&value, window, move |this, _state, event, _window, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        this.auto_detect_body_type_from_headers(_window, cx);
+                    }
+                });
             self._header_subs.push(key_sub);
             self._header_subs.push(value_sub);
         }
     }
 
     /// 根据 Content-Type header 自动切换 Body 类型
-    pub(crate) fn auto_detect_body_type_from_headers(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn auto_detect_body_type_from_headers(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let content_type = self.headers.iter().find_map(|h| {
             let key = h.key.read(cx).value();
             if key.trim().eq_ignore_ascii_case("content-type") {
@@ -1122,8 +1381,10 @@ impl MainView {
 
         if let Some(ct) = content_type {
             let ct_lower = ct.to_lowercase();
-            if ct_lower.contains("json") || ct_lower.contains("xml")
-                || ct_lower.contains("html") || ct_lower.contains("text")
+            if ct_lower.contains("json")
+                || ct_lower.contains("xml")
+                || ct_lower.contains("html")
+                || ct_lower.contains("text")
                 || ct_lower.contains("javascript")
             {
                 // 切换到 Raw
@@ -1149,7 +1410,12 @@ impl MainView {
     }
 
     /// 导入cURL命令并解析为请求参数
-    pub fn import_curl(&mut self, curl_command: &str, window: &mut Window, cx: &mut Context<Self>) -> Result<(), String> {
+    pub fn import_curl(
+        &mut self,
+        curl_command: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
         let request = crate::http::parse_curl(curl_command).map_err(|e| e.to_string())?;
 
         self.is_importing_curl = true;
@@ -1169,7 +1435,10 @@ impl MainView {
 
         // 分离URL中的query参数和base URL
         let (base_url, query_string) = if let Some(query_pos) = request.url.find('?') {
-            (&request.url[..query_pos], Some(&request.url[query_pos + 1..]))
+            (
+                &request.url[..query_pos],
+                Some(&request.url[query_pos + 1..]),
+            )
         } else {
             (request.url.as_str(), None)
         };
@@ -1312,11 +1581,17 @@ impl MainView {
     fn save_current_tab_meta(&mut self, cx: &mut Context<Self>) {
         if self.active_tab < self.request_tabs.len() {
             let url = self.url_input.read(cx).value().to_string();
-            let method = self.method_select.read(cx)
+            let method = self
+                .method_select
+                .read(cx)
                 .selected_value()
                 .map(|v| v.to_string())
                 .unwrap_or_else(|| "GET".to_string());
-            let short = if url.len() > 30 { format!("{}…", &url[..30]) } else { url.clone() };
+            let short = if url.len() > 30 {
+                format!("{}…", &url[..30])
+            } else {
+                url.clone()
+            };
             self.request_tabs[self.active_tab].url = url;
             self.request_tabs[self.active_tab].method = method;
             self.request_tabs[self.active_tab].name = if short.is_empty() {
@@ -1420,8 +1695,7 @@ impl MainView {
                 })
             });
             self.body_state.body_type = BodyType::Raw;
-            self.body_state.raw_format =
-                RawFormat::detect(content_type.as_deref(), &body_owned);
+            self.body_state.raw_format = RawFormat::detect(content_type.as_deref(), &body_owned);
             // 同步 body_type_select
             let bt_idx = BodyType::Raw.to_index();
             self.body_type_select.update(cx, |state, cx| {
@@ -1471,7 +1745,8 @@ impl MainView {
                         .map(|s| s.to_string())
                         .unwrap_or_else(|_| param[eq_pos + 1..].to_string());
                     let key_entity = cx.new(|cx| InputState::new(window, cx).default_value(&key));
-                    let value_entity = cx.new(|cx| InputState::new(window, cx).default_value(&value));
+                    let value_entity =
+                        cx.new(|cx| InputState::new(window, cx).default_value(&value));
                     self.params.push(ParamEntry {
                         key: key_entity,
                         value: value_entity,
@@ -1507,7 +1782,9 @@ impl MainView {
             let updated_env = app.env_manager.clone();
             app.http_client.set_env_manager(updated_env);
             self.environments = app.db.get_environments().unwrap_or_default();
-            self.active_environment_name = self.environments.iter()
+            self.active_environment_name = self
+                .environments
+                .iter()
                 .find(|e| e.is_active)
                 .map(|e| e.name.clone());
         }
@@ -1516,8 +1793,16 @@ impl MainView {
 
     /// 从数据库刷新环境列表
     fn load_environments(&mut self) {
-        self.environments = self.app_state.lock().unwrap().db.get_environments().unwrap_or_default();
-        self.active_environment_name = self.environments.iter()
+        self.environments = self
+            .app_state
+            .lock()
+            .unwrap()
+            .db
+            .get_environments()
+            .unwrap_or_default();
+        self.active_environment_name = self
+            .environments
+            .iter()
             .find(|e| e.is_active)
             .map(|e| e.name.clone());
     }
@@ -1534,20 +1819,29 @@ impl MainView {
         } else {
             None
         };
-        let globals = self.app_state.lock().unwrap().env_manager.get_all_globals();
 
-        self.env_dialog_state.lock().unwrap().load_from(
-            env_data.as_ref(),
-            &globals,
-            window,
-            cx,
-        );
+        self.env_dialog_state
+            .lock()
+            .unwrap()
+            .load_from(env_data.as_ref(), window, cx);
+        cx.notify();
+    }
+
+    fn open_global_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let globals = self.app_state.lock().unwrap().env_manager.get_all_globals();
+        self.env_dialog_state
+            .lock()
+            .unwrap()
+            .open_global(&globals, window, cx);
         cx.notify();
     }
 
     /// 获取当前活跃环境ID
     pub(crate) fn active_env_id(&self) -> Option<String> {
-        self.environments.iter().find(|e| e.is_active).map(|e| e.id.clone())
+        self.environments
+            .iter()
+            .find(|e| e.is_active)
+            .map(|e| e.id.clone())
     }
 
     /// 删除环境
@@ -1574,18 +1868,22 @@ impl MainView {
         cx.notify();
     }
 
-    /// 保存当前请求到收藏
+    /// 保存当前请求到收藏（弹出标题编辑弹窗）
     pub fn save_current_request(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let url = self.url_input.read(cx).value().to_string();
-        let method = self.method_select.read(cx)
+        let method = self
+            .method_select
+            .read(cx)
             .selected_value()
             .map(|v| v.to_string())
             .unwrap_or_else(|| "GET".to_string());
         if url.trim().is_empty() {
             return;
         }
-        let short_name = if url.len() > 40 { format!("{}…", &url[..40]) } else { url.clone() };
-        let headers_text = self.headers.iter()
+        let default_name = url.clone();
+        let headers_text = self
+            .headers
+            .iter()
             .filter(|h| h.enabled)
             .map(|h| {
                 let k = h.key.read(cx).value().to_string();
@@ -1597,22 +1895,29 @@ impl MainView {
         let body_text = self.body_state.raw_content.read(cx).value().to_string();
         let saved = SavedRequest {
             id: uuid::Uuid::new_v4().to_string(),
-            name: short_name,
+            name: String::new(),
             method,
             url,
-            headers: if headers_text.is_empty() { None } else { Some(headers_text) },
-            body: if body_text.is_empty() { None } else { Some(body_text) },
+            headers: if headers_text.is_empty() {
+                None
+            } else {
+                Some(headers_text)
+            },
+            body: if body_text.is_empty() {
+                None
+            } else {
+                Some(body_text)
+            },
             description: None,
             folder_id: None,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };
-        if let Err(e) = self.app_state.lock().unwrap().db.save_request(&saved) {
-            log::error!("保存请求失败: {}", e);
-            return;
-        }
-        self.saved_requests = self.app_state.lock().unwrap().db.get_saved_requests().unwrap_or_default();
-        self.needs_collections_refresh = true;
+        let folders = self.folders.clone();
+        self.save_request_dialog
+            .lock()
+            .unwrap()
+            .open(default_name, saved, &folders, window, cx);
         cx.notify();
     }
 
@@ -1634,8 +1939,12 @@ impl MainView {
             &self.saved_requests,
             &self.expanded_folders,
         );
-        log::debug!("集合树已重建: {} 个项目 ({} 个文件夹, {} 个请求)",
-            self.collection_items.len(), self.folders.len(), self.saved_requests.len());
+        log::debug!(
+            "集合树已重建: {} 个项目 ({} 个文件夹, {} 个请求)",
+            self.collection_items.len(),
+            self.folders.len(),
+            self.saved_requests.len()
+        );
     }
 
     /// 重新加载集合数据（从数据库）
@@ -1648,24 +1957,65 @@ impl MainView {
     }
 
     /// 打开文件夹创建对话框
-    pub fn open_folder_dialog(&mut self, parent_id: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn open_folder_dialog(
+        &mut self,
+        parent_id: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         log::info!("打开文件夹对话框, parent_id: {:?}", parent_id);
-        self.folder_dialog_state.lock().unwrap().open_for_create(parent_id, window, cx);
+        self.folder_dialog_state
+            .lock()
+            .unwrap()
+            .open_for_create(parent_id, window, cx);
+        cx.notify();
+    }
+
+    /// 打开请求重命名对话框
+    pub fn open_request_rename_dialog(
+        &mut self,
+        request_id: &str,
+        current_name: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.folder_dialog_state
+            .lock()
+            .unwrap()
+            .open_for_request_rename(request_id.to_string(), current_name.to_string(), window, cx);
         cx.notify();
     }
 
     /// 打开文件夹重命名对话框
-    pub fn open_folder_edit_dialog(&mut self, folder_id: String, current_name: String, window: &mut Window, cx: &mut Context<Self>) {
-        let parent_id = self.folders.iter()
+    pub fn open_folder_edit_dialog(
+        &mut self,
+        folder_id: String,
+        current_name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let parent_id = self
+            .folders
+            .iter()
             .find(|f| f.id == folder_id)
             .and_then(|f| f.parent_id.clone());
-        self.folder_dialog_state.lock().unwrap()
-            .open_for_edit(folder_id, current_name, parent_id, window, cx);
+        self.folder_dialog_state.lock().unwrap().open_for_edit(
+            folder_id,
+            current_name,
+            parent_id,
+            window,
+            cx,
+        );
         cx.notify();
     }
 
     /// 删除文件夹
-    pub fn delete_folder_from_sidebar(&mut self, folder_id: &str, _window: &mut Window, cx: &mut Context<Self>) {
+    pub fn delete_folder_from_sidebar(
+        &mut self,
+        folder_id: &str,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Ok(app) = self.app_state.lock() {
             let _ = app.db.delete_folder_cascade(folder_id);
         }
@@ -1674,7 +2024,12 @@ impl MainView {
     }
 
     /// 删除收藏请求
-    pub fn delete_saved_request_from_sidebar(&mut self, request_id: &str, _window: &mut Window, cx: &mut Context<Self>) {
+    pub fn delete_saved_request_from_sidebar(
+        &mut self,
+        request_id: &str,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Ok(app) = self.app_state.lock() {
             let _ = app.db.delete_saved_request(request_id);
         }
@@ -1683,8 +2038,17 @@ impl MainView {
     }
 
     /// 打开移动对话框
-    pub fn open_move_dialog(&mut self, item_id: &str, is_folder: bool, _window: &mut Window, cx: &mut Context<Self>) {
-        self.move_dialog_state.lock().unwrap().open(item_id.to_string(), is_folder);
+    pub fn open_move_dialog(
+        &mut self,
+        item_id: &str,
+        is_folder: bool,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.move_dialog_state
+            .lock()
+            .unwrap()
+            .open(item_id.to_string(), is_folder);
         cx.notify();
     }
 
@@ -1699,9 +2063,11 @@ impl MainView {
         cx: &mut Context<Self>,
     ) {
         let found = self.app_state.lock().ok().and_then(|app| {
-            app.db.get_saved_request_by_id(request_id).ok().flatten().map(|req| {
-                (req.id, req.method, req.url, req.name, req.headers, req.body)
-            })
+            app.db
+                .get_saved_request_by_id(request_id)
+                .ok()
+                .flatten()
+                .map(|req| (req.id, req.method, req.url, req.name, req.headers, req.body))
         });
         if let Some((id, m, u, n, h, b)) = found {
             self.load_saved_request(&id, &m, &u, &n, h.as_deref(), b.as_deref(), window, cx);
@@ -1717,25 +2083,95 @@ impl MainView {
         if self.env_dialog_state.lock().unwrap().needs_refresh {
             log::debug!("刷新: 环境变量对话框标记");
             self.load_environments();
-            self.saved_requests = self.app_state.lock().unwrap().db.get_saved_requests().unwrap_or_default();
-            self.folders = self.app_state.lock().unwrap().db.get_folders().unwrap_or_default();
+            self.saved_requests = self
+                .app_state
+                .lock()
+                .unwrap()
+                .db
+                .get_saved_requests()
+                .unwrap_or_default();
+            self.folders = self
+                .app_state
+                .lock()
+                .unwrap()
+                .db
+                .get_folders()
+                .unwrap_or_default();
             self.env_dialog_state.lock().unwrap().needs_refresh = false;
             self.needs_collections_refresh = true;
         }
         // 文件夹对话框
         if self.folder_dialog_state.lock().unwrap().needs_refresh {
             log::debug!("刷新: 文件夹对话框标记");
-            self.folders = self.app_state.lock().unwrap().db.get_folders().unwrap_or_default();
-            self.saved_requests = self.app_state.lock().unwrap().db.get_saved_requests().unwrap_or_default();
+            self.folders = self
+                .app_state
+                .lock()
+                .unwrap()
+                .db
+                .get_folders()
+                .unwrap_or_default();
+            self.saved_requests = self
+                .app_state
+                .lock()
+                .unwrap()
+                .db
+                .get_saved_requests()
+                .unwrap_or_default();
             self.folder_dialog_state.lock().unwrap().needs_refresh = false;
             self.needs_collections_refresh = true;
         }
         // 移动对话框
         if self.move_dialog_state.lock().unwrap().needs_refresh {
             log::debug!("刷新: 移动对话框标记");
-            self.folders = self.app_state.lock().unwrap().db.get_folders().unwrap_or_default();
-            self.saved_requests = self.app_state.lock().unwrap().db.get_saved_requests().unwrap_or_default();
+            self.folders = self
+                .app_state
+                .lock()
+                .unwrap()
+                .db
+                .get_folders()
+                .unwrap_or_default();
+            self.saved_requests = self
+                .app_state
+                .lock()
+                .unwrap()
+                .db
+                .get_saved_requests()
+                .unwrap_or_default();
             self.move_dialog_state.lock().unwrap().needs_refresh = false;
+            self.needs_collections_refresh = true;
+        }
+        // 保存到收藏夹对话框
+        if self.save_request_dialog.lock().unwrap().needs_refresh {
+            log::debug!("刷新: 保存到收藏夹对话框标记");
+            self.saved_requests = self
+                .app_state
+                .lock()
+                .unwrap()
+                .db
+                .get_saved_requests()
+                .unwrap_or_default();
+            self.save_request_dialog.lock().unwrap().needs_refresh = false;
+            self.needs_collections_refresh = true;
+        }
+        // 拖拽放置后刷新
+        if self
+            .needs_drop_refresh
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
+        {
+            self.saved_requests = self
+                .app_state
+                .lock()
+                .unwrap()
+                .db
+                .get_saved_requests()
+                .unwrap_or_default();
+            self.folders = self
+                .app_state
+                .lock()
+                .unwrap()
+                .db
+                .get_folders()
+                .unwrap_or_default();
             self.needs_collections_refresh = true;
         }
         // 集合面板
@@ -1748,168 +2184,252 @@ impl MainView {
 }
 
 /// 设置浮层面板 — 在侧边栏 logo 下方展开
-fn settings_popover(
-    this: &mut MainView,
-    cx: &mut Context<MainView>,
-    theme: &Theme,
-) -> gpui::Div {
-    let current_lang = this.app_state.lock().unwrap().config.general.language.clone();
+fn settings_popover(this: &mut MainView, cx: &mut Context<MainView>, theme: &Theme) -> gpui::Div {
+    let current_lang = this
+        .app_state
+        .lock()
+        .unwrap()
+        .config
+        .general
+        .language
+        .clone();
     let current_theme = this.app_state.lock().unwrap().config.general.theme.clone();
     let auto_save = this.app_state.lock().unwrap().config.general.auto_save;
     let proxy_enabled = this.app_state.lock().unwrap().config.proxy.enabled;
     let proxy_url = this.app_state.lock().unwrap().config.proxy.url.clone();
+    let t = |key: &str| this.t(key);
 
+    // 标题栏
     div()
-        .px_3()
-        .py_3()
-        .border_b(px(1.0))
-        .border_color(theme.muted_background)
         .bg(theme.background)
         .flex_col()
-        .gap_3()
-        .children([
-            // === 语言 ===
-            section_label("语言 / Language", theme),
+        .child(
             div()
-                .flex()
-                .gap_2()
-                .child(setting_option_btn(
-                    "中文",
-                    "lang-zh",
-                    current_lang == "zh-CN",
-                    theme,
-                    cx,
-                    |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
-                        this.app_state.lock().unwrap().switch_language("zh-CN");
-                        cx.notify();
-                    },
-                ))
-                .child(setting_option_btn(
-                    "English",
-                    "lang-en",
-                    current_lang == "en-US",
-                    theme,
-                    cx,
-                    |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
-                        this.app_state.lock().unwrap().switch_language("en-US");
-                        cx.notify();
-                    },
-                )),
-            // === 主题 ===
-            section_label("主题 / Theme", theme),
-            div()
-                .flex()
-                .flex_wrap()
-                .gap_2()
-                .child(setting_option_btn(
-                    "暗色",
-                    "theme-dark",
-                    current_theme == "dark",
-                    theme,
-                    cx,
-                    |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
-                        this.switch_theme("dark", cx);
-                    },
-                ))
-                .child(setting_option_btn(
-                    "浅色",
-                    "theme-light",
-                    current_theme == "light",
-                    theme,
-                    cx,
-                    |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
-                        this.switch_theme("light", cx);
-                    },
-                ))
-                .child(setting_option_btn(
-                    "暖色",
-                    "theme-sepia",
-                    current_theme == "sepia",
-                    theme,
-                    cx,
-                    |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
-                        this.switch_theme("sepia", cx);
-                    },
-                )),
-            // === 常规 ===
-            section_label("常规 / General", theme),
-            div()
+                .px_4()
+                .py_3()
+                .border_b_1()
+                .border_color(theme.muted_background)
                 .flex()
                 .items_center()
                 .justify_between()
                 .child(
                     div()
                         .text_sm()
+                        .font_weight(FontWeight(600.0))
                         .text_color(theme.foreground)
-                        .child("自动保存 / Auto Save"),
+                        .child(t("request.settings")),
                 )
                 .child(
-                    toggle_switch("auto-save", auto_save, theme, cx,
-                        |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
+                    gpui_component::button::Button::new("close-settings")
+                        .icon(IconName::Close)
+                        .small()
+                        .text_color(theme.muted_foreground)
+                        .on_click(cx.listener(
+                            |this, _: &ClickEvent, _: &mut Window, cx: &mut Context<MainView>| {
+                                this.show_settings_popover = false;
+                                cx.notify();
+                            },
+                        )),
+                ),
+        )
+        .child(
+            div().px_4().py_3().flex_col().gap_4().children([
+                // === 语言 ===
+                div().flex_col().gap_2().children([
+                    section_label(&t("language.title"), theme),
+                    div()
+                        .flex()
+                        .gap_2()
+                        .child(setting_option_btn(
+                            &t("language.zh"),
+                            "lang-zh",
+                            current_lang == "zh-CN",
+                            theme,
+                            cx,
+                            |this,
+                             _: &MouseDownEvent,
+                             _window: &mut Window,
+                             cx: &mut Context<MainView>| {
+                                this.app_state.lock().unwrap().switch_language("zh-CN");
+                                cx.notify();
+                            },
+                        ))
+                        .child(setting_option_btn(
+                            &t("language.en"),
+                            "lang-en",
+                            current_lang == "en-US",
+                            theme,
+                            cx,
+                            |this,
+                             _: &MouseDownEvent,
+                             _window: &mut Window,
+                             cx: &mut Context<MainView>| {
+                                this.app_state.lock().unwrap().switch_language("en-US");
+                                cx.notify();
+                            },
+                        )),
+                ]),
+                // === 主题 ===
+                div().flex_col().gap_2().children([
+                    section_label(&t("theme.title"), theme),
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap_2()
+                        .child(setting_option_btn(
+                            &t("theme.dark"),
+                            "theme-dark",
+                            current_theme == "dark",
+                            theme,
+                            cx,
+                            |this,
+                             _: &MouseDownEvent,
+                             _window: &mut Window,
+                             cx: &mut Context<MainView>| {
+                                this.switch_theme("dark", cx);
+                            },
+                        ))
+                        .child(setting_option_btn(
+                            &t("theme.light"),
+                            "theme-light",
+                            current_theme == "light",
+                            theme,
+                            cx,
+                            |this,
+                             _: &MouseDownEvent,
+                             _window: &mut Window,
+                             cx: &mut Context<MainView>| {
+                                this.switch_theme("light", cx);
+                            },
+                        ))
+                        .child(setting_option_btn(
+                            &t("theme.sepia"),
+                            "theme-sepia",
+                            current_theme == "sepia",
+                            theme,
+                            cx,
+                            |this,
+                             _: &MouseDownEvent,
+                             _window: &mut Window,
+                             cx: &mut Context<MainView>| {
+                                this.switch_theme("sepia", cx);
+                            },
+                        )),
+                ]),
+                // === 自动保存 ===
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(theme.foreground)
+                            .child(t("settings.auto_save")),
+                    )
+                    .child(toggle_switch(
+                        "auto-save",
+                        auto_save,
+                        theme,
+                        cx,
+                        |this,
+                         _: &MouseDownEvent,
+                         _window: &mut Window,
+                         cx: &mut Context<MainView>| {
                             let new_val = !this.app_state.lock().unwrap().config.general.auto_save;
                             this.app_state.lock().unwrap().config.general.auto_save = new_val;
-                            let _ = this.app_state.lock().unwrap().config.save();
+                            if let Err(e) = this.app_state.lock().unwrap().config.save() {
+                                log::error!("保存自动保存设置失败: {}", e);
+                            }
                             cx.notify();
                         },
-                    ),
-                ),
-            // === 代理 ===
-            section_label("代理 / Proxy", theme),
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .child(
+                    )),
+                // === 代理 ===
+                div().flex_col().gap_2().children([
                     div()
-                        .text_sm()
-                        .text_color(theme.foreground)
-                        .child("启用代理 / Enable"),
-                )
-                .child(
-                    toggle_switch("proxy-enabled", proxy_enabled, theme, cx,
-                        |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
-                            let new_val = !this.app_state.lock().unwrap().config.proxy.enabled;
-                            this.app_state.lock().unwrap().config.proxy.enabled = new_val;
-                            let _ = this.app_state.lock().unwrap().config.save();
-                            cx.notify();
-                        },
-                    ),
-                ),
-            div()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child(format!("代理地址: {}", if proxy_url.is_empty() { "(未设置)" } else { &proxy_url })),
-        ])
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(theme.foreground)
+                                .child(t("settings.proxy")),
+                        )
+                        .child(toggle_switch(
+                            "proxy-enabled",
+                            proxy_enabled,
+                            theme,
+                            cx,
+                            |this,
+                             _: &MouseDownEvent,
+                             _window: &mut Window,
+                             cx: &mut Context<MainView>| {
+                                let new_val = !this.app_state.lock().unwrap().config.proxy.enabled;
+                                this.app_state.lock().unwrap().config.proxy.enabled = new_val;
+                                if let Err(e) = this.app_state.lock().unwrap().config.save() {
+                                    log::error!("保存代理设置失败: {}", e);
+                                }
+                                cx.notify();
+                            },
+                        )),
+                    div().text_xs().text_color(theme.muted_foreground).child({
+                        let not_set = t("settings.not_set");
+                        format!(
+                            "{}: {}",
+                            t("settings.proxy_url"),
+                            if proxy_url.is_empty() {
+                                not_set.as_str()
+                            } else {
+                                proxy_url.as_str()
+                            }
+                        )
+                    }),
+                ]),
+            ]),
+        )
 }
 
-fn section_label(label: &'static str, theme: &Theme) -> gpui::Div {
+fn section_label(label: &str, theme: &Theme) -> gpui::Div {
     div()
         .text_xs()
-        .font_semibold()
+        .font_weight(FontWeight(500.0))
         .text_color(theme.muted_foreground)
-        .child(label)
+        .child(label.to_string())
 }
 
 fn setting_option_btn(
-    label: &'static str,
-    id: &'static str,
+    label: &str,
+    id: &str,
     active: bool,
     theme: &Theme,
     cx: &mut Context<MainView>,
     on_toggle: impl Fn(&mut MainView, &MouseDownEvent, &mut Window, &mut Context<MainView>) + 'static,
 ) -> impl IntoElement {
     div()
-        .id(id)
-        .text_sm()
+        .id(id.to_string())
+        .text_xs()
         .cursor_pointer()
-        .min_w(px(70.0))
-        .px_3()
+        .px_2()
         .py_1()
         .rounded_sm()
-        .bg(if active { theme.accent } else { theme.input_background })
-        .text_color(if active { theme.accent_foreground } else { theme.foreground })
+        .bg(if active {
+            theme.accent
+        } else {
+            theme.muted_background
+        })
+        .text_color(if active {
+            rgb(0xffffff)
+        } else {
+            theme.foreground
+        })
+        .font_weight(if active {
+            FontWeight(500.0)
+        } else {
+            FontWeight(400.0)
+        })
         .on_mouse_down(MouseButton::Left, cx.listener(on_toggle))
-        .child(label)
+        .child(label.to_string())
 }
 
 fn toggle_switch(
@@ -1921,19 +2441,34 @@ fn toggle_switch(
 ) -> impl IntoElement {
     div()
         .cursor_pointer()
+        .min_w(px(40.0))
         .px_2()
         .py_1()
         .rounded_sm()
         .text_sm()
-        .bg(if value { theme.success } else { theme.muted_background })
-        .text_color(if value { theme.accent_foreground } else { theme.foreground })
+        .flex()
+        .justify_center()
+        .bg(if value {
+            theme.success
+        } else {
+            theme.muted_background
+        })
+        .text_color(if value {
+            theme.accent_foreground
+        } else {
+            theme.foreground
+        })
         .on_mouse_down(MouseButton::Left, cx.listener(on_toggle))
         .child(if value { "ON" } else { "OFF" })
 }
 
 impl Render for MainView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let sidebar_width = if self.sidebar_collapsed { px(48.0) } else { px(280.0) };
+        let sidebar_width = if self.sidebar_collapsed {
+            px(48.0)
+        } else {
+            px(280.0)
+        };
         let is_loading = self.is_loading;
         let response = self.response.clone();
         let error_message = self.error_message.clone();
@@ -1956,6 +2491,7 @@ impl Render for MainView {
         let folders = self.folders.clone();
         let collection_items = self.collection_items.clone();
         let environments = self.environments.clone();
+        let sidebar_scroll_handle = self.sidebar_scroll_handle.clone();
         let show_close = self.request_tabs.len() > 1;
         let theme = Theme::from_str(&self.app_state.lock().unwrap().theme_name);
 
@@ -2044,48 +2580,89 @@ impl Render for MainView {
                                     .flex()
                                     .flex_row()
                                     .h(px(40.0))
+                                    .border_b_1()
+                                    .border_color(theme.muted_background)
                                     .children([
                                         div()
-                                            .id("sidebar-collections-tab") // 收藏夹
-                                            .w(px(48.0))
+                                            .id("sidebar-collections-tab")
+                                            .flex_1()
                                             .h(px(40.0))
                                             .flex()
                                             .items_center()
                                             .justify_center()
                                             .cursor_pointer()
-                                            .bg(if sidebar_tab == SidebarTab::Collections { theme.muted_background } else { theme.input_background })
-                                            .text_color(if sidebar_tab == SidebarTab::Collections { theme.accent_foreground } else { theme.muted_foreground })
+                                            .relative()
+                                            .text_color(if sidebar_tab == SidebarTab::Collections { theme.accent } else { theme.muted_foreground })
+                                            .hover(|s| s.bg(theme.muted_background))
                                             .on_click(cx.listener(|this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                 this.set_sidebar_tab(SidebarTab::Collections, cx);
                                             }))
+                                            .when(sidebar_tab == SidebarTab::Collections, |d| {
+                                                d.child(
+                                                    div()
+                                                        .absolute()
+                                                        .bottom(px(0.0))
+                                                        .left(px(8.0))
+                                                        .right(px(8.0))
+                                                        .h(px(2.0))
+                                                        .bg(theme.accent)
+                                                        .rounded_full()
+                                                )
+                                            })
                                             .child(Icon::new(IconName::FolderClosed).small()),
                                         div()
-                                            .id("sidebar-history") // 历史记录
-                                            .w(px(48.0))
+                                            .id("sidebar-history")
+                                            .flex_1()
                                             .h(px(40.0))
                                             .flex()
                                             .items_center()
                                             .justify_center()
                                             .cursor_pointer()
-                                            .bg(if sidebar_tab == SidebarTab::History { theme.muted_background } else { theme.input_background })
-                                            .text_color(if sidebar_tab == SidebarTab::History { theme.accent_foreground } else { theme.muted_foreground })
+                                            .relative()
+                                            .text_color(if sidebar_tab == SidebarTab::History { theme.accent } else { theme.muted_foreground })
+                                            .hover(|s| s.bg(theme.muted_background))
                                             .on_click(cx.listener(|this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                 this.set_sidebar_tab(SidebarTab::History, cx);
                                             }))
+                                            .when(sidebar_tab == SidebarTab::History, |d| {
+                                                d.child(
+                                                    div()
+                                                        .absolute()
+                                                        .bottom(px(0.0))
+                                                        .left(px(8.0))
+                                                        .right(px(8.0))
+                                                        .h(px(2.0))
+                                                        .bg(theme.accent)
+                                                        .rounded_full()
+                                                )
+                                            })
                                             .child(Icon::new(IconName::GalleryVerticalEnd).small()),
                                         div()
                                             .id("sidebar-env-tab")
-                                            .w(px(48.0))
+                                            .flex_1()
                                             .h(px(40.0))
                                             .flex()
                                             .items_center()
                                             .justify_center()
                                             .cursor_pointer()
-                                            .bg(if sidebar_tab == SidebarTab::Environments { theme.muted_background } else { theme.input_background })
-                                            .text_color(if sidebar_tab == SidebarTab::Environments { theme.accent_foreground } else { theme.muted_foreground })
+                                            .relative()
+                                            .text_color(if sidebar_tab == SidebarTab::Environments { theme.accent } else { theme.muted_foreground })
+                                            .hover(|s| s.bg(theme.muted_background))
                                             .on_click(cx.listener(|this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                 this.set_sidebar_tab(SidebarTab::Environments, cx);
                                             }))
+                                            .when(sidebar_tab == SidebarTab::Environments, |d| {
+                                                d.child(
+                                                    div()
+                                                        .absolute()
+                                                        .bottom(px(0.0))
+                                                        .left(px(8.0))
+                                                        .right(px(8.0))
+                                                        .h(px(2.0))
+                                                        .bg(theme.accent)
+                                                        .rounded_full()
+                                                )
+                                            })
                                             .child(Icon::new(IconName::Globe).small()),
                                     ]),
                                 // 侧边栏内容
@@ -2093,10 +2670,9 @@ impl Render for MainView {
                                     div()
                                         .flex()
                                         .flex_1()
-                                        .h(px(600.0))
                                         .overflow_hidden()
                                         .children([
-                                            if sidebar_tab == SidebarTab::History { // 历史记录
+                                            if sidebar_tab == SidebarTab::History {
                                                 if history.is_empty() {
                                                     div()
                                                         .id("history-empty")
@@ -2107,10 +2683,13 @@ impl Render for MainView {
                                                 } else {
                                                     div()
                                                         .id("history-list")
+                                                        .w_full()
                                                         .flex_col()
                                                         .gap_1()
-                                                        .overflow_y_scroll()
+                                                        .h_full()
                                                         .p_2()
+                                                        .track_scroll(&sidebar_scroll_handle)
+                                                        .overflow_y_scroll()
                                                         .children(history.iter().map(|entry| {
                                                             let method_clr = method_color(&entry.method);
                                                             let entry_url = entry.url.clone();
@@ -2235,7 +2814,7 @@ impl Render for MainView {
                                                                 div()
                                                                     .text_sm()
                                                                     .text_color(theme.muted_foreground)
-                                                                    .child(format!("收藏夹 ({})", collection_items.len())),
+                                                                    .child(format!("{} ({})", self.t("sidebar.collections"), collection_items.len())),
                                                             )
                                                             .child(
                                                                 Button::new("add-folder-btn")
@@ -2259,17 +2838,24 @@ impl Render for MainView {
                                                             div()
                                                                 .id("sidebar-collections-scroll")
                                                                 .flex_1()
-                                                                .overflow_y_scroll()
-                                                                .overflow_x_hidden()
                                                                 .p_2()
-                                                                .child(render_collection_panel(&collection_items, &self.context_menu_target, &self.hovered_item_name, cx, &theme))
+                                                                .track_scroll(&sidebar_scroll_handle)
+                                                                .overflow_y_scroll()
+                                                                .child(render_collection_panel(&collection_items, &self.context_menu_target, &self.hovered_item_name, cx, &theme, &self.app_state, self.needs_drop_refresh.clone()))
                                                                 .into_any_element()
                                                         }
                                                     )
                                             } else {
                                                 div()
                                                     .id("sidebar-environments")
+                                                    .relative()
                                                     .flex_col()
+                                                    .flex_1()
+                                                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                        this.context_menu_target = None;
+                                                        this.env_menu_target = None;
+                                                        cx.notify();
+                                                    }))
                                                     .child(
                                                         div()
                                                             .flex()
@@ -2288,7 +2874,7 @@ impl Render for MainView {
                                                                         div()
                                                                             .text_sm()
                                                                             .text_color(theme.muted_foreground)
-                                                                            .child("环境变量"),
+                                                                            .child(self.t("sidebar.env")),
                                                                     ),
                                                             )
                                                             .child({
@@ -2304,8 +2890,8 @@ impl Render for MainView {
                                                         div()
                                                             .id("sidebar-env-scroll")
                                                             .flex_1()
+                                                            .track_scroll(&sidebar_scroll_handle)
                                                             .overflow_y_scroll()
-                                                            .overflow_x_hidden()
                                                             .child(
                                                         if environments.is_empty() {
                                                             div()
@@ -2321,11 +2907,39 @@ impl Render for MainView {
                                                             div()
                                                                 .id("sidebar-env-list")
                                                                 .flex_col()
+                                                                .w_full()
                                                                 .gap_1()
                                                                 .py_1()
-                                                                .px_1()
-                                                                .overflow_x_hidden()
-                                                                .children(environments.iter().map(|env| {
+                                                                .pl_3()
+                                                                .pr_1()
+                                                                .children({
+                                                                    let mut items: Vec<gpui::AnyElement> = Vec::new();
+                                                                    // 全局变量行（首行）
+                                                                    items.push(
+                                                                        div()
+                                                                            .w_full()
+                                                                            .relative()
+                                                                            .flex()
+                                                                            .flex_row()
+                                                                            .items_center()
+                                                                            .py_1()
+                                                                            .px_1()
+                                                                            .gap_1()
+                                                                            .rounded_sm()
+                                                                            .cursor_pointer()
+                                                                            .hover(|s| s.bg(theme.code_background))
+                                                                            .bg(theme.background)
+                                                                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>| {
+                                                                                this.open_global_dialog(window, cx);
+                                                                            }))
+                                                                            .child(Icon::new(IconName::Star).xsmall().text_color(theme.accent))
+                                                                            .child(
+                                                                                div().flex_1().text_sm().text_color(theme.foreground).child(self.t("sidebar.global_vars"))
+                                                                            )
+                                                                            .into_any_element(),
+                                                                    );
+                                                                    // 环境列表
+                                                                    for env in environments.iter() {
                                                                     let env_id = env.id.clone();
                                                                     let env_name = env.name.clone();
                                                                     let display_name = if env_name.chars().count() > 12 {
@@ -2336,70 +2950,82 @@ impl Render for MainView {
                                                                     let env_id_edit = env.id.clone();
                                                                     let env_id_del = env.id.clone();
                                                                     let is_active = env.is_active;
-                                                                    div()
-                                                                        .w_full()
-                                                                        .relative()
-                                                                        .flex()
-                                                                        .flex_row()
-                                                                        .items_center()
-                                                                        .px_1()
-                                                                        .py_1()
-                                                                        .pr(px(28.0))
-                                                                        .rounded_md()
-                                                                        .cursor_pointer()
-                                                                        .hover(|s| s.bg(theme.code_background))
-                                                                        .bg(if is_active { theme.muted_background } else { theme.background })
-                                                                        .children([
+                                                                    items.push(
+                                                                        div()
+                                                                            .w_full()
+                                                                            .flex_col()
+                                                                            .children([
                                                                             div()
-                                                                                .w(px(7.0))
-                                                                                .h(px(7.0))
-                                                                                .rounded_full()
-                                                                                .flex_shrink_0()
-                                                                                .bg(if is_active { theme.success } else { theme.muted_foreground }),
-                                                                            div()
-                                                                                .text_sm()
-                                                                                .text_color(if is_active { theme.foreground } else { theme.muted_foreground })
-                                                                                .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>| {
-                                                                                    this.activate_environment(&env_id, window, cx);
-                                                                                }))
-                                                                                .child(display_name),
-                                                                        ])
-                                                                        .child(
-                                                                            div()
-                                                                                .absolute()
-                                                                                .right(px(2.0))
-                                                                                .top(px(0.0))
-                                                                                .h_full()
-                                                                                .flex().items_center()
-                                                                                .px(px(2.0))
-                                                                                .bg(theme.background)
-                                                                                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                                                                                .w_full()
+                                                                                .flex()
+                                                                                .flex_row()
+                                                                                .items_center()
+                                                                                .py_1()
+                                                                                .px_1()
+                                                                                .gap_1()
+                                                                                .rounded_sm()
+                                                                                .cursor_pointer()
+                                                                                .hover(|s| s.bg(theme.code_background))
+                                                                                .bg(if is_active { theme.muted_background } else { theme.background })
+                                                                                .children([
+                                                                                    div()
+                                                                                        .w(px(7.0))
+                                                                                        .h(px(7.0))
+                                                                                        .rounded_full()
+                                                                                        .flex_shrink_0()
+                                                                                        .bg(if is_active { theme.success } else { theme.muted_foreground }),
+                                                                                    div()
+                                                                                        .w_full()
+                                                                                        .text_sm()
+                                                                                        .text_color(if is_active { theme.foreground } else { theme.muted_foreground })
+                                                                                        .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>| {
+                                                                                            this.env_menu_target = None;
+                                                                                            this.activate_environment(&env_id, window, cx);
+                                                                                        }))
+                                                                                        .child(display_name),
+                                                                                ])
                                                                                 .child(
                                                                                     div()
-                                                                                        .w(px(24.0)).h(px(24.0))
-                                                                                        .flex().items_center().justify_center()
-                                                                                        .rounded_sm()
-                                                                                        .cursor_pointer()
-                                                                                        .hover(|s| s.bg(theme.muted_background))
-                                                                                        .on_mouse_down(MouseButton::Left, cx.listener({
-                                                                                            let id = env_id_edit.clone();
-                                                                                            move |this, e: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
-                                                                                                cx.stop_propagation();
-                                                                                                this.env_menu_pos = Some((e.position.x.into(), e.position.y.into()));
-                                                                                                this.env_menu_target = if this.env_menu_target.as_ref() == Some(&id) {
-                                                                                                    None
-                                                                                                } else {
-                                                                                                    Some(id.clone())
-                                                                                                };
-                                                                                                cx.notify();
-                                                                                            }
-                                                                                        }))
+                                                                                        .absolute()
+                                                                                        .right(px(0.0))
+                                                                                        .top(px(0.0))
+                                                                                        .h_full()
+                                                                                        .flex().items_center()
+                                                                                        .bg(theme.background)
+                                                                                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                                                                                         .child(
-                                                                                            Icon::new(IconName::Ellipsis).xsmall().text_color(theme.muted_foreground),
+                                                                                            div()
+                                                                                                .w(px(24.0)).h(px(24.0))
+                                                                                                .flex().items_center().justify_center()
+                                                                                                .rounded_sm()
+                                                                                                .cursor_pointer()
+                                                                                                .hover(|s| s.bg(theme.muted_background))
+                                                                                                .on_mouse_down(MouseButton::Left, cx.listener({
+                                                                                                    let id = env_id_edit.clone();
+                                                                                                    move |this, e: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                                                        cx.stop_propagation();
+                                                                                                        this.env_menu_pos = Some((e.position.x.into(), e.position.y.into()));
+                                                                                                        this.env_menu_target = if this.env_menu_target.as_ref() == Some(&id) {
+                                                                                                            None
+                                                                                                        } else {
+                                                                                                            Some(id.clone())
+                                                                                                        };
+                                                                                                        cx.notify();
+                                                                                                    }
+                                                                                                }))
+                                                                                                .child(
+                                                                                                    Icon::new(IconName::Ellipsis).xsmall().text_color(theme.foreground),
+                                                                                                ),
                                                                                         ),
-                                                                                ),
-                                                                        )
-                                                                }))
+                                                                                )
+                                                                                .child(div())
+                                                                                .into_any_element(),
+                                                                        ])
+                                                                        .into_any_element(),
+                                                                    );
+                                                                    }
+                                                                    items
+                                                                })
                                                         }
                                                     )
                                                     )
@@ -2428,18 +3054,40 @@ impl Render for MainView {
                                     } else {
                                         Icon::new(IconName::PanelLeftClose).small()
                                     }),
-                            // 设置浮层面板（绝对定位、最后渲染以确保在最上层）
-                            if self.show_settings_popover {
-                                settings_popover(self, cx, &theme)
-                                    .absolute()
-                                    .top(px(48.0))
-                                    .left(px(0.0))
-                                    .w(px(280.0))
-                                    .shadow_md()
-                            } else {
-                                div()
-                            },
-                            ]),
+                            ])
+                            // 设置浮层面板 + 遮罩（在侧边栏内绝对定位）
+                            .when(self.show_settings_popover, |sidebar| {
+                                sidebar
+                                    .child(
+                                        // 透明遮罩：捕获点击关闭弹窗，阻止点击穿透
+                                        div()
+                                            .absolute()
+                                            .top(px(0.0))
+                                            .left(px(0.0))
+                                            .right(px(0.0))
+                                            .bottom(px(0.0))
+                                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _w: &mut Window, cx: &mut Context<Self>| {
+                                                this.show_settings_popover = false;
+                                                cx.notify();
+                                            }))
+                                    )
+                                    .child(
+                                        // 弹窗内容（在遮罩上层）
+                                        div()
+                                            .absolute()
+                                            .top(px(48.0))
+                                            .left(px(0.0))
+                                            .w(px(240.0))
+                                            .shadow_2xl()
+                                            .bg(theme.background)
+                                            .border_1()
+                                            .border_color(theme.border)
+                                            .rounded_lg()
+                                            .overflow_hidden()
+                                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                                            .child(settings_popover(self, cx, &theme))
+                                    )
+                            }),
                         // ==================== 主工作区 ====================
                         div()
                             .flex_1()
@@ -2448,6 +3096,7 @@ impl Render for MainView {
                             .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                 this.context_menu_target = None;
                                 this.env_menu_target = None;
+                                this.show_settings_popover = false;
                                 cx.notify();
                             }))
                             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window: &mut Window, cx: &mut Context<Self>| {
@@ -2485,19 +3134,19 @@ impl Render for MainView {
                                         let show_close = show_close;
 
                                         div()
-                                            .h(px(40.0))
+                                            .h(px(38.0))
                                             .w(px(150.0))
                                             .pl_3()
                                             .pr_1()
                                             .flex()
                                             .items_center()
                                             .gap_1()
-                                            .bg(if is_active { theme.background } else { theme.code_background })
-                                            .border_b_2()
+                                            .bg(if is_active { theme.background } else { theme.muted_background })
                                             .border_b(if is_active { px(2.0) } else { px(0.0) })
                                             .border_color(if is_active { theme.accent } else { theme.muted_background })
                                             .text_xs()
                                             .relative()
+                                            .hover(|s| s.bg(if is_active { theme.background } else { theme.code_background }))
                                             .child(
                                                 div()
                                                     .flex()
@@ -2507,7 +3156,6 @@ impl Render for MainView {
                                                     .px_1()
                                                     .py_px()
                                                     .cursor_pointer()
-                                                    .hover(|s| s.bg(theme.muted_background))
                                                     .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                         this.switch_tab(i, _window, cx);
                                                     }))
@@ -2517,7 +3165,7 @@ impl Render for MainView {
                                                             .text_xs().text_color(theme.accent_foreground)
                                                             .child(tab_method),
                                                         div()
-                                                            .text_color(if is_active { theme.accent_foreground } else { theme.muted_foreground })
+                                                            .text_color(if is_active { theme.foreground } else { theme.muted_foreground })
                                                             .max_w(px(90.0))
                                                             .overflow_hidden()
                                                             .text_ellipsis()
@@ -2528,16 +3176,16 @@ impl Render for MainView {
                                                 this.child(
                                                     div()
                                                         .absolute()
-                                                        .top(px(2.0))
-                                                        .right(px(2.0))
-                                                        .w(px(16.0))
-                                                        .h(px(16.0))
+                                                        .top(px(3.0))
+                                                        .right(px(3.0))
+                                                        .w(px(18.0))
+                                                        .h(px(18.0))
                                                         .flex()
                                                         .items_center()
                                                         .justify_center()
-                                                        .rounded_sm()
+                                                        .rounded_full()
                                                         .cursor_pointer()
-                                                        .hover(|s| s.bg(theme.muted_background))
+                                                        .hover(|s| s.bg(rgba(0xef444433)))
                                                         .text_color(theme.muted_foreground)
                                                         .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                             this.close_tab(i, _window, cx);
@@ -2602,11 +3250,11 @@ impl Render for MainView {
                                     ]),
                                 // Splitter（可拖拽调整上下区域大小）
                                 div()
-                                    .h(px(5.0))
+                                    .h(px(6.0))
                                     .w_full()
                                     .bg(theme.muted_background)
                                     .cursor_row_resize()
-                                    .hover(|s| s.bg(theme.accent))
+                                    .hover(|s| s.bg(rgba(0x88888844)))
                                     .on_mouse_down(MouseButton::Left, cx.listener(|this, event: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                         let y: f32 = event.position.y.into();
                                         this.start_splitter_drag(y);
@@ -2625,11 +3273,18 @@ impl Render for MainView {
                                     })),
                                 // 响应查看器
                                 div()
+                                    .w_full()
                                     .flex_1()
                                     .flex()
                                     .flex_col()
+                                    .overflow_hidden()
                                     .bg(theme.background)
                                     .children([
+                                        // 加载指示条
+                                        div()
+                                            .w_full()
+                                            .h(px(3.0))
+                                            .bg(if is_loading { theme.accent } else { theme.background }),
                                         // 响应标签页（全部可点击）
                                         div()
                                             .flex()
@@ -2650,7 +3305,7 @@ impl Render for MainView {
                                         div()
                                             .flex_1()
                                             .p_4()
-                                            .overflow_y_hidden()
+                                            .overflow_hidden()
                                             .flex()
                                             .flex_col()
                                             .gap_2()
@@ -2658,12 +3313,15 @@ impl Render for MainView {
                                             .text_color(theme.muted_foreground)
                                             .children([
                                                 if let Some(err) = error_message {
+                                                    let wrapped_err = break_long_text(&err);
                                                     div()
                                                         .p_3()
                                                         .rounded_md()
                                                         .bg(rgb(0x3f2020))
                                                         .text_color(theme.error)
-                                                        .child(err)
+                                                        .w_full()
+                                                        .overflow_hidden()
+                                                        .child(wrapped_err)
                                                 } else if let Some(resp) = response {
                                                     let theme = Theme::from_str(&self.app_state.lock().unwrap().theme_name);
                                                     let header_row = div()
@@ -2676,11 +3334,13 @@ impl Render for MainView {
                                                         .children([
                                                             // 状态徽章
                                                             div()
-                                                                .px_2()
-                                                                .py_px()
-                                                                .rounded_sm()
+                                                                .px_3()
+                                                                .py_1()
+                                                                .rounded_full()
                                                                 .bg(if (200..300).contains(&resp.status) { theme.success } else { theme.error })
-                                                                .text_color(theme.accent_foreground)
+                                                                .text_color(rgb(0xffffff))
+                                                                .text_sm()
+                                                                .font_weight(FontWeight(500.0))
                                                                 .child(format!("{} {}", resp.status, resp.status_text())),
                                                             // 模式选择按钮（仅 Body tab 显示）
                                                             if response_tab == ResponseTab::Body {
@@ -2739,10 +3399,24 @@ impl Render for MainView {
                                                             div()
                                                                 .flex()
                                                                 .flex_row()
-                                                                .gap_4()
+                                                                .gap_3()
                                                                 .children([
-                                                                    div().text_color(theme.muted_foreground).child(format!("Time: {}ms", resp.time_ms)),
-                                                                    div().text_color(theme.muted_foreground).child(format!("Size: {}", format_size(resp.size_bytes))),
+                                                                    div()
+                                                                        .px_2()
+                                                                        .py_px()
+                                                                        .rounded_sm()
+                                                                        .bg(theme.muted_background)
+                                                                        .text_xs()
+                                                                        .text_color(theme.muted_foreground)
+                                                                        .child(format!("{}ms", resp.time_ms)),
+                                                                    div()
+                                                                        .px_2()
+                                                                        .py_px()
+                                                                        .rounded_sm()
+                                                                        .bg(theme.muted_background)
+                                                                        .text_xs()
+                                                                        .text_color(theme.muted_foreground)
+                                                                        .child(format_size(resp.size_bytes)),
                                                         ])
                                                         ]);
 
@@ -2772,7 +3446,7 @@ impl Render for MainView {
                                                                 div()
                                                                     .flex_col()
                                                                     .gap_1()
-                                                                    .overflow_y_scrollbar()
+                                                                    .overflow_hidden()
                                                                     .flex_1()
                                                                     .children(self.response_header_inputs.iter().map(|(key_input, val_input)| {
                                                                         div()
@@ -2987,8 +3661,9 @@ impl Render for MainView {
                             .absolute()
                             .left(px((x - 140.0).max(0.0)))
                             .top(px(y + 4.0));
-                    } else if self.saved_requests.iter().any(|r| r.id == target_id) {
-                        menu = render_request_context_menu(&target_id, cx, &theme)
+                    } else if let Some(req) = self.saved_requests.iter().find(|r| r.id == target_id) {
+                        let req_name = req.name.clone();
+                        menu = render_request_context_menu(&target_id, &req_name, cx, &theme)
                             .absolute()
                             .left(px((x - 120.0).max(0.0)))
                             .top(px(y + 4.0));
@@ -3023,7 +3698,7 @@ impl Render for MainView {
                                         cx.notify();
                                     }))
                                     .child(Icon::new(IconName::Replace).xsmall().text_color(theme.muted_foreground))
-                                    .child(div().text_sm().text_color(theme.foreground).child("重命名")),
+                                    .child(div().text_sm().text_color(theme.foreground).child("编辑")),
                             )
                             .child(div().w_full().h(px(1.0)).bg(theme.muted_background))
                             .child(
@@ -3055,6 +3730,218 @@ impl Render for MainView {
                         cx,
                     )
                 )
+            )
+            .when(
+                self.save_request_dialog.lock().map(|s| s.visible).unwrap_or(false),
+                |d| {
+                    let dialog = self.save_request_dialog.lock().unwrap();
+                    let name_input = dialog.name_input.clone();
+                    let folder_select = dialog.folder_select.clone();
+                    let entity_id = cx.entity_id();
+                    drop(dialog);
+
+                    let save_dialog = self.save_request_dialog.clone();
+                    let save_app = self.app_state.clone();
+                    let save_folders = self.folders.clone();
+                    let theme = theme.clone();
+
+                    d.child(
+                        div()
+                            .absolute()
+                            .top(px(0.0))
+                            .left(px(0.0))
+                            .right(px(0.0))
+                            .bottom(px(0.0))
+                            .bg(rgba(0x00000055))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .on_mouse_down(MouseButton::Left, |_, _, _| {})
+                            .child(
+                                div()
+                                    .w(px(420.0))
+                                    .bg(theme.background)
+                                    .rounded_xl()
+                                    .border_1()
+                                    .border_color(theme.border)
+                                    .shadow_2xl()
+                                    .flex_col()
+                                    .overflow_hidden()
+                                    // 标题栏
+                                    .child(
+                                        div()
+                                            .h(px(48.0))
+                                            .flex()
+                                            .flex_row()
+                                            .items_center()
+                                            .justify_between()
+                                            .px_5()
+                                            .bg(theme.muted_background)
+                                            .border_b_1()
+                                            .border_color(theme.border)
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_2()
+                                                    .child(Icon::new(IconName::Star).text_color(theme.accent))
+                                                    .child(
+                                                        div()
+                                                            .text_sm()
+                                                            .font_weight(FontWeight(600.0))
+                                                            .text_color(theme.foreground)
+                                                            .child("保存到收藏夹"),
+                                                    ),
+                                            )
+                                            .child({
+                                                let s = save_dialog.clone();
+                                                Button::new("close-save-dialog")
+                                                    .icon(IconName::Close)
+                                                    .small()
+                                                    .text_color(theme.muted_foreground)
+                                                    .on_click(move |_, _, cx| {
+                                                        if let Ok(mut d) = s.lock() {
+                                                            d.visible = false;
+                                                            d.pending_request = None;
+                                                        }
+                                                        cx.notify(entity_id);
+                                                    })
+                                            }),
+                                    )
+                                    // 内容区
+                                    .child(
+                                        div()
+                                            .px_5()
+                                            .py_4()
+                                            .flex_col()
+                                            .gap_4()
+                                            .child(
+                                                div()
+                                                    .flex_col()
+                                                    .gap_2()
+                                                    .child(
+                                                        div()
+                                                            .flex()
+                                                            .items_center()
+                                                            .gap_1p5()
+                                                            .child(Icon::new(IconName::File).small().text_color(theme.accent))
+                                                            .child(
+                                                                div()
+                                                                    .text_xs()
+                                                                    .font_weight(FontWeight(500.0))
+                                                                    .text_color(theme.muted_foreground)
+                                                                    .child("标题"),
+                                                            ),
+                                                    )
+                                                    .child(
+                                                        Input::new(&name_input)
+                                                            .h(px(42.0))
+                                                            .w_full()
+                                                            .rounded_md()
+                                                            .bg(theme.background)
+                                                            .text_color(theme.foreground),
+                                                    ),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex_col()
+                                                    .gap_2()
+                                                    .child(
+                                                        div()
+                                                            .flex()
+                                                            .items_center()
+                                                            .gap_1p5()
+                                                            .child(Icon::new(IconName::Folder).small().text_color(theme.accent))
+                                                            .child(
+                                                                div()
+                                                                    .text_xs()
+                                                                    .font_weight(FontWeight(500.0))
+                                                                    .text_color(theme.muted_foreground)
+                                                                    .child("文件夹"),
+                                                            ),
+                                                    )
+                                                    .child(
+                                                        Select::new(&folder_select)
+                                                            .w_full(),
+                                                    ),
+                                            ),
+                                    )
+                                    // 底部按钮栏
+                                    .child(
+                                        div()
+                                            .h(px(48.0))
+                                            .flex()
+                                            .flex_row()
+                                            .justify_end()
+                                            .items_center()
+                                            .gap_3()
+                                            .px_5()
+                                            .border_t_1()
+                                            .border_color(theme.border)
+                                            .bg(theme.muted_background)
+                                            .child({
+                                                let s = save_dialog.clone();
+                                                Button::new("cancel-save-dialog-btn")
+                                                    .label("取消")
+                                                    .on_click(move |_, _, cx| {
+                                                        if let Ok(mut d) = s.lock() {
+                                                            d.visible = false;
+                                                            d.pending_request = None;
+                                                        }
+                                                        cx.notify(entity_id);
+                                                    })
+                                            })
+                                            .child({
+                                                let s = save_dialog.clone();
+                                                let app = save_app.clone();
+                                                let folders = save_folders.clone();
+                                                Button::new("confirm-save-dialog-btn")
+                                                    .icon(IconName::Check)
+                                                    .label("保存")
+                                                    .bg(theme.accent)
+                                                    .text_color(rgb(0xffffff))
+                                                    .rounded_md()
+                                                    .on_click(move |_, _window, cx| {
+                                                        let mut d = s.lock().unwrap();
+                                                        let name = d.name_input.read(cx).value().to_string();
+                                                        let name = if name.trim().is_empty() {
+                                                            "Untitled".to_string()
+                                                        } else {
+                                                            name.trim().to_string()
+                                                        };
+                                                        let selected = d.folder_select.read(cx).selected_value().cloned();
+                                                        let folder_id = selected.and_then(|sel_name| {
+                                                            let name = sel_name.trim();
+                                                            if name == "根目录 (未分类)" || name.is_empty() {
+                                                                None
+                                                            } else {
+                                                                folders.iter()
+                                                                    .find(|f| f.name == name)
+                                                                    .map(|f| f.id.clone())
+                                                            }
+                                                        });
+                                                        if let Some(ref mut req) = d.pending_request {
+                                                            req.name = name;
+                                                            req.folder_id = folder_id;
+                                                            req.updated_at = chrono::Utc::now();
+                                                            if let Ok(app) = app.lock() {
+                                                                if let Err(e) = app.db.save_request(req) {
+                                                                    log::error!("保存请求失败: {}", e);
+                                                                }
+                                                            }
+                                                        }
+                                                        drop(d);
+                                                        if let Ok(mut d) = s.lock() {
+                                                            d.visible = false;
+                                                            d.needs_refresh = true;
+                                                        }
+                                                        cx.notify(entity_id);
+                                                    })
+                                            }),
+                                    ),
+                            ),
+                    )
+                },
             )
     }
 }

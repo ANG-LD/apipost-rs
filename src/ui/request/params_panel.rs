@@ -67,12 +67,16 @@ pub fn render_params_panel(
                                 .items_center()
                                 .justify_center()
                                 .text_sm()
+                                .cursor_pointer()
                                 .text_color(if param.enabled {
                                     theme.success
                                 } else {
                                     theme.muted_foreground
                                 })
-                                .child(if param.enabled { "✓" } else { "○" }),
+                                .child(if param.enabled { "✓" } else { "○" })
+                                .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<MainView>| {
+                                    this.toggle_param(idx, window, cx);
+                                })),
                             div().flex_1().child(
                                 Input::new(&param.key)
                                     .small()

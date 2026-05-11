@@ -35,7 +35,7 @@ pub fn render_url_bar(
                         .small()
                         .h(px(34.0))
                         .border_1()
-                        .border_color(rgb(0x555555))
+                        .border_color(theme.border)
                         .rounded_sm()
                         .text_color(rgb(method_color(&method)))
                         .font_semibold()
@@ -52,7 +52,7 @@ pub fn render_url_bar(
                         .w_full()
                         .bg(theme.code_background)
                         .border_1()
-                        .border_color(rgb(0x555555))
+                        .border_color(theme.border)
                         .rounded_sm()
                         .text_color(theme.foreground),
                 ),

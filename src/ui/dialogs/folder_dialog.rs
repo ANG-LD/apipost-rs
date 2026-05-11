@@ -8,11 +8,13 @@ use gpui_component::input::{Input, InputState};
 use gpui_component::{Disableable, Icon, IconName, Sizable, StyledExt};
 use std::sync::{Arc, Mutex};
 
-/// 文件夹对话框状态
+/// 文件夹/请求重命名对话框状态
 pub struct FolderDialogState {
     pub visible: bool,
     pub is_edit: bool,
+    pub is_request: bool,
     pub folder_id: Option<String>,
+    pub request_id: Option<String>,
     pub parent_id: Option<String>,
     pub name_input: Entity<InputState>,
     pub needs_refresh: bool,
@@ -23,7 +25,9 @@ impl FolderDialogState {
         Self {
             visible: false,
             is_edit: false,
+            is_request: false,
             folder_id: None,
+            request_id: None,
             parent_id: None,
             name_input: cx.new(|cx| InputState::new(window, cx).default_value("")),
             needs_refresh: false,
@@ -35,7 +39,9 @@ impl FolderDialogState {
         log::info!("FolderDialogState::open_for_create, parent_id: {:?}", parent_id);
         self.visible = true;
         self.is_edit = false;
+        self.is_request = false;
         self.folder_id = None;
+        self.request_id = None;
         self.parent_id = parent_id;
         self.name_input.update(cx, |state, cx| {
             state.set_value("", window, cx);
@@ -47,8 +53,23 @@ impl FolderDialogState {
         log::info!("FolderDialogState::open_for_edit, folder_id={}, name={}", folder_id, current_name);
         self.visible = true;
         self.is_edit = true;
+        self.is_request = false;
         self.folder_id = Some(folder_id);
+        self.request_id = None;
         self.parent_id = parent_id;
+        self.name_input.update(cx, |state, cx| {
+            state.set_value(&current_name, window, cx);
+        });
+    }
+
+    /// 打开对话框用于重命名请求
+    pub fn open_for_request_rename(&mut self, request_id: String, current_name: String, window: &mut Window, cx: &mut Context<crate::ui::MainView>) {
+        self.visible = true;
+        self.is_edit = true;
+        self.is_request = true;
+        self.folder_id = None;
+        self.request_id = Some(request_id);
+        self.parent_id = None;
         self.name_input.update(cx, |state, cx| {
             state.set_value(&current_name, window, cx);
         });
@@ -64,9 +85,9 @@ pub fn render_folder_dialog_overlay(
     cx: &mut Context<crate::ui::MainView>,
 ) -> AnyElement {
     // 提前获取渲染所需的字段，尽早释放锁
-    let (visible, is_edit, name_input) = {
+    let (visible, is_edit, is_request, name_input) = {
         let s = state.lock().unwrap();
-        (s.visible, s.is_edit, s.name_input.clone())
+        (s.visible, s.is_edit, s.is_request, s.name_input.clone())
     };
 
     if !visible {
@@ -74,7 +95,13 @@ pub fn render_folder_dialog_overlay(
     }
 
     let t = theme.clone();
-    let title_text: &str = if is_edit { "重命名文件夹" } else { "新建文件夹" };
+    let (title_text, title_icon): (&str, IconName) = if is_request {
+        ("重命名请求", IconName::File)
+    } else if is_edit {
+        ("重命名文件夹", IconName::FolderClosed)
+    } else {
+        ("新建文件夹", IconName::FolderClosed)
+    };
 
     div()
         .absolute()
@@ -129,7 +156,7 @@ pub fn render_folder_dialog_overlay(
                                 .flex()
                                 .items_center()
                                 .gap_2()
-                                .child(Icon::new(IconName::FolderClosed).small().text_color(t.accent))
+                                .child(Icon::new(title_icon).small().text_color(t.accent))
                                 .child(div().font_semibold().text_color(t.foreground).child(title_text)),
                         )
                         .child(
@@ -207,12 +234,21 @@ pub fn render_folder_dialog_overlay(
                                     if trimmed.is_empty() {
                                         return;
                                     }
-                                    let (folder_id, parent_id, is_edit_val) = {
+                                    let (folder_id, parent_id, is_edit_val, is_request, request_id) = {
                                         let st = save_state.lock().unwrap();
-                                        (st.folder_id.clone(), st.parent_id.clone(), st.is_edit)
+                                        (st.folder_id.clone(), st.parent_id.clone(), st.is_edit, st.is_request, st.request_id.clone())
                                     };
                                     let app = save_app.lock().unwrap();
-                                    if is_edit_val {
+                                    if is_request {
+                                        if let Some(ref rid) = request_id {
+                                            if let Ok(mut saved) = app.db.get_saved_requests() {
+                                                if let Some(req) = saved.iter_mut().find(|r| r.id == *rid) {
+                                                    req.name = trimmed;
+                                                    let _ = app.db.save_request(req);
+                                                }
+                                            }
+                                        }
+                                    } else if is_edit_val {
                                         if let Some(ref fid) = folder_id {
                                             let existing = app.db.get_folders().unwrap_or_default()
                                                 .into_iter().find(|f| &f.id == fid);

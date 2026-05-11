@@ -1,9 +1,37 @@
 use crate::app::database::{Folder, SavedRequest};
+use crate::app::AppState;
 use crate::ui::components::{method_color, popup_panel};
 use crate::ui::main_view::MainView;
 use crate::ui::Theme;
 use gpui::*;
 use gpui_component::{Icon, IconName, Sizable, StyledExt};
+use std::sync::{Arc, Mutex};
+
+/// 拖拽数据
+#[derive(Clone)]
+struct DragItem {
+    id: String,
+    is_folder: bool,
+    name: String,
+}
+
+/// 拖拽预览（跟随鼠标显示）
+struct DragPreview {
+    label: gpui::SharedString,
+}
+
+impl Render for DragPreview {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_2()
+            .py_1()
+            .rounded_md()
+            .bg(rgba(0x000000cc))
+            .text_color(rgb(0xffffff))
+            .text_sm()
+            .child(self.label.clone())
+    }
+}
 
 /// 按显示宽度截断（中文≈2宽，英文≈1宽）
 fn truncate_name(s: &str, max_width: usize) -> String {
@@ -100,8 +128,11 @@ pub fn render_collection_panel(
     hovered_item_name: &Option<String>,
     cx: &mut Context<MainView>,
     theme: &Theme,
+    app_state: &Arc<Mutex<AppState>>,
+    needs_drop_refresh: Arc<std::sync::atomic::AtomicBool>,
 ) -> impl IntoElement {
     let menu_target = context_menu_target.clone();
+    let entity_id = cx.entity_id();
 
     let mut all_items: Vec<gpui::AnyElement> = Vec::new();
     for item in items {
@@ -113,6 +144,12 @@ pub fn render_collection_panel(
                 let d = *depth;
                 let child_items = children.clone();
                 let menu_open = menu_target.as_ref() == Some(&fid);
+
+                let drag_item = DragItem { id: fid.clone(), is_folder: true, name: fname.clone() };
+                let target_fid = fid.clone();
+                let drop_app = app_state.clone();
+                let drop_flag = needs_drop_refresh.clone();
+                let drop_eid = entity_id;
 
                 div()
                     .w_full()
@@ -130,6 +167,25 @@ pub fn render_collection_panel(
                             .rounded_sm()
                             .cursor_pointer()
                             .hover(|s| s.bg(theme.code_background))
+                            .id(ElementId::from(format!("folder-{}", fid)))
+                            .on_drag(drag_item, |data: &DragItem, _offset, window, cx| {
+                                cx.new(|_| DragPreview { label: data.name.clone().into() })
+                            })
+                            .drag_over::<DragItem>(|style, _data, _window, _cx| {
+                                style.bg(rgba(0x88888844))
+                            })
+                            .on_drop::<DragItem>(move |data: &DragItem, _window, cx| {
+                                if data.id == target_fid { return; }
+                                if let Ok(app) = drop_app.lock() {
+                                    if data.is_folder {
+                                        let _ = app.db.move_folder(&data.id, Some(&target_fid));
+                                    } else {
+                                        let _ = app.db.move_request(&data.id, Some(&target_fid));
+                                    }
+                                }
+                                drop_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                                cx.notify(drop_eid);
+                            })
                             .children([
                                 div().w(px(d as f32 * 16.0)).flex_shrink_0().into_any_element(),
                                 div()
@@ -171,33 +227,45 @@ pub fn render_collection_panel(
                                     })
                                     .child(truncate_name(&fname, 24usize.saturating_sub(d * 2)))
                                     .into_any_element(),
-                                div()
-                                    .flex_shrink_0()
-                                    .w(px(24.0)).h(px(24.0))
-                                    .flex().items_center().justify_center()
-                                    .rounded_sm()
-                                    .cursor_pointer()
-                                    .hover(|s| s.bg(theme.muted_background))
-                                    .on_mouse_down(MouseButton::Left, {
-                                        let target_id = fid.clone();
-                                        cx.listener(move |this, e: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
-                                            cx.stop_propagation();
-                                            this.context_menu_pos = Some((e.position.x.into(), e.position.y.into()));
-                                            this.context_menu_target = if this.context_menu_target.as_ref() == Some(&target_id) {
-                                                None
-                                            } else {
-                                                Some(target_id.clone())
-                                            };
-                                            cx.notify();
-                                        })
-                                    })
-                                    .child(Icon::new(IconName::Ellipsis).xsmall().text_color(theme.muted_foreground))
-                                    .into_any_element(),
                                 div().into_any_element(),
                             ])
+                            // ...按钮绝对定位固定右侧
+                            .child(
+                                div()
+                                    .absolute()
+                                    .right(px(0.0))
+                                    .top(px(0.0))
+                                    .h_full()
+                                    .flex().items_center()
+                                    .bg(theme.background)
+                                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                                    .child(
+                                        div()
+                                            .w(px(24.0)).h(px(24.0))
+                                            .flex().items_center().justify_center()
+                                            .rounded_sm()
+                                            .cursor_pointer()
+                                            .hover(|s| s.bg(theme.muted_background))
+                                            .on_mouse_down(MouseButton::Left, {
+                                                let target_id = fid.clone();
+                                                cx.listener(move |this, e: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
+                                                    cx.stop_propagation();
+                                                    this.context_menu_pos = Some((e.position.x.into(), e.position.y.into()));
+                                                    this.context_menu_target = if this.context_menu_target.as_ref() == Some(&target_id) {
+                                                        None
+                                                    } else {
+                                                        Some(target_id.clone())
+                                                    };
+                                                    cx.notify();
+                                                })
+                                            })
+                                            .child(Icon::new(IconName::Ellipsis).xsmall().text_color(theme.foreground)),
+                                    ),
+                            )
+                            .child(div().into_any_element())
                             .into_any_element(),
                         if expanded && !child_items.is_empty() {
-                            div().child(render_collection_panel(&child_items, context_menu_target, hovered_item_name, cx, theme)).into_any_element()
+                            div().child(render_collection_panel(&child_items, context_menu_target, hovered_item_name, cx, theme, app_state, needs_drop_refresh.clone())).into_any_element()
                         } else {
                             div().into_any_element()
                         },
@@ -212,6 +280,7 @@ pub fn render_collection_panel(
                 let d = *depth;
                 let method_clr = method_color(&rmethod);
                 let menu_open = menu_target.as_ref() == Some(&rid);
+                let req_drag = DragItem { id: rid.clone(), is_folder: false, name: rname.clone() };
 
                 div()
                     .w_full()
@@ -221,10 +290,15 @@ pub fn render_collection_panel(
                     .items_center()
                     .py_1()
                     .px_1()
+                    .pr(px(30.0))
                     .gap(px(2.0))
                     .rounded_sm()
                     .cursor_pointer()
                     .hover(|s| s.bg(theme.code_background))
+                    .id(ElementId::from(format!("req-{}", rid)))
+                    .on_drag(req_drag, |data: &DragItem, _offset, window, cx| {
+                        cx.new(|_| DragPreview { label: data.name.clone().into() })
+                    })
                     .children([
                         div().w(px(d as f32 * 16.0)).flex_shrink_0().into_any_element(),
                         div().w(px(16.0)).flex_shrink_0().into_any_element(),
@@ -261,30 +335,40 @@ pub fn render_collection_panel(
                             })
                             .child(truncate_name(&rname, 24usize.saturating_sub(d * 2)))
                             .into_any_element(),
-                        div()
-                            .flex_shrink_0()
-                            .w(px(24.0)).h(px(24.0))
-                            .flex().items_center().justify_center()
-                            .rounded_sm()
-                            .cursor_pointer()
-                            .hover(|s| s.bg(theme.muted_background))
-                            .on_mouse_down(MouseButton::Left, {
-                                let target_id = rid.clone();
-                                cx.listener(move |this, e: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
-                                    cx.stop_propagation();
-                                    this.context_menu_pos = Some((e.position.x.into(), e.position.y.into()));
-                                    this.context_menu_target = if this.context_menu_target.as_ref() == Some(&target_id) {
-                                        None
-                                    } else {
-                                        Some(target_id.clone())
-                                    };
-                                    cx.notify();
-                                })
-                            })
-                            .child(Icon::new(IconName::Ellipsis).xsmall().text_color(theme.muted_foreground))
-                            .into_any_element(),
                         div().into_any_element(),
                     ])
+                    .child(
+                        div()
+                            .absolute()
+                            .right(px(0.0))
+                            .top(px(0.0))
+                            .h_full()
+                            .flex().items_center()
+                            .bg(theme.background)
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .child(
+                                div()
+                                    .w(px(24.0)).h(px(24.0))
+                                    .flex().items_center().justify_center()
+                                    .rounded_sm()
+                                    .cursor_pointer()
+                                    .hover(|s| s.bg(theme.muted_background))
+                                    .on_mouse_down(MouseButton::Left, {
+                                        let target_id = rid.clone();
+                                        cx.listener(move |this, e: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
+                                            cx.stop_propagation();
+                                            this.context_menu_pos = Some((e.position.x.into(), e.position.y.into()));
+                                            this.context_menu_target = if this.context_menu_target.as_ref() == Some(&target_id) {
+                                                None
+                                            } else {
+                                                Some(target_id.clone())
+                                            };
+                                            cx.notify();
+                                        })
+                                    })
+                                    .child(Icon::new(IconName::Ellipsis).xsmall().text_color(theme.foreground)),
+                            ),
+                    )
                     .into_any_element()
             }
         };
@@ -347,13 +431,25 @@ pub fn render_folder_context_menu(
 
 pub fn render_request_context_menu(
     request_id: &str,
+    request_name: &str,
     cx: &mut Context<MainView>,
     theme: &Theme,
 ) -> gpui::Div {
     let rid = request_id.to_string();
+    let rname = request_name.to_string();
 
     popup_panel(theme)
         .min_w(px(120.0))
+        .child(menu_item("重命名", IconName::Replace, theme, cx, {
+            let rename_id = rid.clone();
+            let rename_name = rname.clone();
+            move |this, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<MainView>| {
+                this.context_menu_target = None;
+                this.open_request_rename_dialog(&rename_id, &rename_name, window, cx);
+                cx.notify();
+            }
+        }))
+        .child(div().w_full().h(px(1.0)).bg(theme.muted_background))
         .child(menu_item("移动到...", IconName::ArrowRight, theme, cx, {
             let move_id = rid.clone();
             move |this, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<MainView>| {
