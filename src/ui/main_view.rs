@@ -123,7 +123,6 @@ pub struct MainView {
     pub(crate) response_tab: ResponseTab,
     pub(crate) body_view_mode: BodyViewMode,
     pub(crate) is_loading: bool,
-    pub(crate) loading_frame: u64,
     pub(crate) error_message: Option<String>,
     pub(crate) sidebar_collapsed: bool,
     pub(crate) sidebar_tab: SidebarTab,
@@ -443,7 +442,6 @@ impl MainView {
             response_tab: ResponseTab::Body,
             body_view_mode: BodyViewMode::Pretty,
             is_loading: false,
-            loading_frame: 0,
             error_message: None,
             sidebar_collapsed: false,
             sidebar_tab: SidebarTab::Collections,
@@ -515,7 +513,6 @@ impl MainView {
         }
 
         self.is_loading = true;
-        self.loading_frame = 1;
         self.error_message = None;
         let eid = cx.entity_id();
         window.on_next_frame(move |_, cx| { cx.notify(eid); });
@@ -701,7 +698,6 @@ impl MainView {
                     }
 
                     this.is_loading = false;
-                    this.loading_frame = 0;
                     cx.notify();
             }).ok();
         }).detach();
@@ -2042,11 +2038,6 @@ impl Render for MainView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let sidebar_width = if self.sidebar_collapsed { px(48.0) } else { px(280.0) };
         let is_loading = self.is_loading;
-        if is_loading {
-            self.loading_frame += 1;
-            let eid = cx.entity_id();
-            _window.on_next_frame(move |_, cx| { cx.notify(eid); });
-        }
         let response = self.response.clone();
         let error_message = self.error_message.clone();
         let history = self.history.clone();
@@ -3336,29 +3327,20 @@ impl Render for MainView {
             )
             .child(
                 if is_loading {
-                    let f = self.loading_frame;
-                    let active = (f / 10) % 3; // 每10帧切换活跃点
-                    let dot = |i: u64| -> (f32, f32) {
-                        if i == active { (1.0, 15.0) } else { (0.3, 8.0) }
-                    };
-                    let dot_color = |(p, _): (f32, f32)| -> u32 {
-                        let r = (80.0 + 175.0 * p) as u32;
-                        let g = (130.0 + 125.0 * p) as u32;
-                        let b = (220.0 + 35.0 * p) as u32;
-                        r << 24 | g << 16 | b << 8 | 0xff
-                    };
-                    let (p1, s1) = dot(0); let (p2, s2) = dot(1); let (p3, s3) = dot(2);
                     div()
                         .absolute().top_0().left_0().right_0().bottom_0()
                         .bg(rgba(0x00000055))
-                        .flex().items_center().justify_center()
+                        .flex().items_center().justify_center().flex_col().gap_4()
                         .occlude()
                         .child(
-                            div().flex().flex_row().gap_3().items_center()
-                                .child(div().w(px(s1)).h(px(s1)).rounded_full().bg(rgba(dot_color((p1, s1)))))
-                                .child(div().w(px(s2)).h(px(s2)).rounded_full().bg(rgba(dot_color((p2, s2)))))
-                                .child(div().w(px(s3)).h(px(s3)).rounded_full().bg(rgba(dot_color((p3, s3)))))
+                            div()
+                                .w(px(48.0)).h(px(48.0))
+                                .border_2().border_color(theme.accent)
+                                .rounded_full()
+                                .flex().items_center().justify_center()
+                                .child(div().w(px(8.0)).h(px(8.0)).rounded_full().bg(theme.accent))
                         )
+                        .child(div().text_sm().text_color(theme.muted_foreground).child(self.t("ui.sending")))
                         .into_any_element()
                 } else {
                     div().into_any_element()
