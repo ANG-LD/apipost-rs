@@ -116,11 +116,11 @@ impl HttpClient {
 
         // 替换URL中的环境变量
         let url = self.env_manager.replace_variables(&request.url);
-        log::info!("=== HTTP请求详情 ===");
-        log::info!("方法: {}", request.method);
-        log::info!("原始URL: {}", request.url);
+        log::debug!("=== HTTP请求详情 ===");
+        log::debug!("方法: {}", request.method);
+        log::debug!("原始URL: {}", request.url);
         if request.url != url {
-            log::info!("替换后URL: {}", url);
+            log::debug!("替换后URL: {}", url);
         }
 
         // 构建请求头
@@ -130,18 +130,18 @@ impl HttpClient {
         let body = request.body.as_ref().map(|b| {
             let replaced = self.env_manager.replace_variables(b);
             if b != &replaced {
-                log::info!("请求体已替换环境变量 (原始长度: {}, 替换后长度: {})", b.len(), replaced.len());
+                log::debug!("请求体已替换环境变量 (原始长度: {}, 替换后长度: {})", b.len(), replaced.len());
             }
             replaced
         });
 
-        log::info!("请求头 ({} 项):", request.headers.len());
+        log::debug!("请求头 ({} 项):", request.headers.len());
         for (name, value) in &request.headers {
             let resolved = self.env_manager.replace_variables(value);
             if *value != resolved {
-                log::info!("  {}: {} -> {}", name, value, resolved);
+                log::debug!("  {}: {} -> {}", name, value, resolved);
             } else {
-                log::info!("  {}: {}", name, value);
+                log::debug!("  {}: {}", name, value);
             }
         }
         if let Some(ref body_content) = body {
@@ -150,9 +150,9 @@ impl HttpClient {
             } else {
                 body_content.clone()
             };
-            log::info!("请求体: {}", preview);
+            log::debug!("请求体: {}", preview);
         }
-        log::info!("===================");
+        log::debug!("===================");
 
         // 解析HTTP方法
         let method = Method::try_from(request.method.to_uppercase().as_str())

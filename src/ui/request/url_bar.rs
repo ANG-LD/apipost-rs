@@ -106,6 +106,7 @@ pub fn render_url_bar(
                                     this.url = url;
                                     this.method = method.to_string();
                                     this.send_request(window, cx);
+                                    cx.notify();
                                 },
                             ),
                         ),

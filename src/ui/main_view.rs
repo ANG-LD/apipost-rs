@@ -123,6 +123,7 @@ pub struct MainView {
     pub(crate) response_tab: ResponseTab,
     pub(crate) body_view_mode: BodyViewMode,
     pub(crate) is_loading: bool,
+    pub(crate) loading_frame: u64,
     pub(crate) error_message: Option<String>,
     pub(crate) sidebar_collapsed: bool,
     pub(crate) sidebar_tab: SidebarTab,
@@ -442,6 +443,7 @@ impl MainView {
             response_tab: ResponseTab::Body,
             body_view_mode: BodyViewMode::Pretty,
             is_loading: false,
+            loading_frame: 0,
             error_message: None,
             sidebar_collapsed: false,
             sidebar_tab: SidebarTab::Collections,
@@ -513,7 +515,10 @@ impl MainView {
         }
 
         self.is_loading = true;
+        self.loading_frame = 1;
         self.error_message = None;
+        let eid = cx.entity_id();
+        window.on_next_frame(move |_, cx| { cx.notify(eid); });
 
         // 0. 同步 params 到 URL（确保最新修改反映到 URL bar）
         self.sync_params_to_url(window, cx);
@@ -629,10 +634,26 @@ impl MainView {
             file_fields,
         };
 
-        // 使用 cx.spawn_in 异步发送请求，不阻塞 UI 线程
-        cx.spawn_in(window, async move |this: WeakEntity<MainView>, cx| {
+        // 在后台线程发送请求，避免 block_on 阻塞主线程渲染
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().unwrap();
             let result = rt.block_on(app_state.lock().unwrap().send_request(request));
+            let _ = tx.send(result);
+        });
+
+        cx.spawn_in(window, async move |this: WeakEntity<MainView>, cx| {
+            let result = loop {
+                match rx.try_recv() {
+                    Ok(r) => break r,
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        cx.background_executor().timer(std::time::Duration::from_millis(100)).await;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        break Err("请求线程异常退出".to_string());
+                    }
+                }
+            };
 
             this.update_in(cx, |this, window, cx| {
                     match result {
@@ -680,6 +701,7 @@ impl MainView {
                     }
 
                     this.is_loading = false;
+                    this.loading_frame = 0;
                     cx.notify();
             }).ok();
         }).detach();
@@ -710,7 +732,7 @@ impl MainView {
     /// 切换侧边栏标签
     #[allow(dead_code)]
     pub fn set_sidebar_tab(&mut self, tab: SidebarTab, cx: &mut Context<Self>) {
-        log::info!("set_sidebar_tab: 切换到标签页 {:?}", tab);
+        log::debug!("set_sidebar_tab: 切换到标签页 {:?}", tab);
         self.sidebar_tab = tab;
         if tab == SidebarTab::Collections {
             self.needs_collections_refresh = true;
@@ -2020,6 +2042,11 @@ impl Render for MainView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let sidebar_width = if self.sidebar_collapsed { px(48.0) } else { px(280.0) };
         let is_loading = self.is_loading;
+        if is_loading {
+            self.loading_frame += 1;
+            let eid = cx.entity_id();
+            _window.on_next_frame(move |_, cx| { cx.notify(eid); });
+        }
         let response = self.response.clone();
         let error_message = self.error_message.clone();
         let history = self.history.clone();
@@ -2045,6 +2072,7 @@ impl Render for MainView {
         let theme = Theme::from_str(&self.app_state.lock().unwrap().theme_name);
 
         div()
+            .relative()
             .size_full()
             .flex()
             .flex_col()
@@ -3304,6 +3332,36 @@ impl Render for MainView {
                                     )
                             )
                     )
+                }
+            )
+            .child(
+                if is_loading {
+                    let f = self.loading_frame;
+                    let active = (f / 10) % 3; // 每10帧切换活跃点
+                    let dot = |i: u64| -> (f32, f32) {
+                        if i == active { (1.0, 15.0) } else { (0.3, 8.0) }
+                    };
+                    let dot_color = |(p, _): (f32, f32)| -> u32 {
+                        let r = (80.0 + 175.0 * p) as u32;
+                        let g = (130.0 + 125.0 * p) as u32;
+                        let b = (220.0 + 35.0 * p) as u32;
+                        r << 24 | g << 16 | b << 8 | 0xff
+                    };
+                    let (p1, s1) = dot(0); let (p2, s2) = dot(1); let (p3, s3) = dot(2);
+                    div()
+                        .absolute().top_0().left_0().right_0().bottom_0()
+                        .bg(rgba(0x00000055))
+                        .flex().items_center().justify_center()
+                        .occlude()
+                        .child(
+                            div().flex().flex_row().gap_3().items_center()
+                                .child(div().w(px(s1)).h(px(s1)).rounded_full().bg(rgba(dot_color((p1, s1)))))
+                                .child(div().w(px(s2)).h(px(s2)).rounded_full().bg(rgba(dot_color((p2, s2)))))
+                                .child(div().w(px(s3)).h(px(s3)).rounded_full().bg(rgba(dot_color((p3, s3)))))
+                        )
+                        .into_any_element()
+                } else {
+                    div().into_any_element()
                 }
             )
     }
