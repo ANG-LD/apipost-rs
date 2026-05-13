@@ -123,6 +123,7 @@ pub struct MainView {
     pub(crate) response_tab: ResponseTab,
     pub(crate) body_view_mode: BodyViewMode,
     pub(crate) is_loading: bool,
+    pub(crate) loading_frame: u64,
     pub(crate) error_message: Option<String>,
     pub(crate) sidebar_collapsed: bool,
     pub(crate) sidebar_tab: SidebarTab,
@@ -442,6 +443,7 @@ impl MainView {
             response_tab: ResponseTab::Body,
             body_view_mode: BodyViewMode::Pretty,
             is_loading: false,
+            loading_frame: 0,
             error_message: None,
             sidebar_collapsed: false,
             sidebar_tab: SidebarTab::Collections,
@@ -513,6 +515,7 @@ impl MainView {
         }
 
         self.is_loading = true;
+        self.loading_frame = 1;
         self.error_message = None;
         let eid = cx.entity_id();
         window.on_next_frame(move |_, cx| { cx.notify(eid); });
@@ -698,6 +701,7 @@ impl MainView {
                     }
 
                     this.is_loading = false;
+                    this.loading_frame = 0;
                     cx.notify();
             }).ok();
         }).detach();
@@ -2038,6 +2042,12 @@ impl Render for MainView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let sidebar_width = if self.sidebar_collapsed { px(48.0) } else { px(280.0) };
         let is_loading = self.is_loading;
+        if is_loading {
+            self.loading_frame += 1;
+            let eid = cx.entity_id();
+            _window.on_next_frame(move |_, cx| { cx.notify(eid); });
+        }
+        let loading_angle = self.loading_frame as f32 * 0.15;
         let response = self.response.clone();
         let error_message = self.error_message.clone();
         let history = self.history.clone();
@@ -3332,14 +3342,7 @@ impl Render for MainView {
                         .bg(rgba(0x00000055))
                         .flex().items_center().justify_center().flex_col().gap_4()
                         .occlude()
-                        .child(
-                            div()
-                                .w(px(48.0)).h(px(48.0))
-                                .border_2().border_color(theme.accent)
-                                .rounded_full()
-                                .flex().items_center().justify_center()
-                                .child(div().w(px(8.0)).h(px(8.0)).rounded_full().bg(theme.accent))
-                        )
+                        .child(Icon::new(IconName::Loader).text_color(theme.accent).rotate(radians(loading_angle)))
                         .child(div().text_sm().text_color(theme.muted_foreground).child(self.t("ui.sending")))
                         .into_any_element()
                 } else {
