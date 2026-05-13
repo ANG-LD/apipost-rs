@@ -515,196 +515,174 @@ impl MainView {
         }
 
         self.is_loading = true;
-        self.loading_frame = 1;
+        self.loading_frame = 0;
         self.error_message = None;
-        let eid = cx.entity_id();
-        window.on_next_frame(move |_, cx| { cx.notify(eid); });
+        cx.notify();
 
-        // 0. 同步 params 到 URL（确保最新修改反映到 URL bar）
+        // 同步 params 到 URL（必须同步完成）
         self.sync_params_to_url(window, cx);
 
-        // 1. 获取认证头
+        // 克隆请求所需数据，其余全部移入异步任务避免阻塞 rendering
+        let method = self.method.clone();
+        let url = self.url.clone();
         let auth_headers = self.auth_state.to_headers(cx);
-
-        // 2. 获取用户定义的 Headers
         let user_headers: Vec<(String, String)> = self.headers.iter()
             .filter(|h| h.enabled)
             .filter_map(|h| {
                 let key = h.key.read(cx).value().to_string();
                 let value = h.value.read(cx).value().to_string();
-                if key.is_empty() {
-                    None
-                } else {
-                    Some((key, value))
-                }
+                if key.is_empty() { None } else { Some((key, value)) }
             })
             .collect();
-
-        // 3. 合并 Headers（认证头优先）
-        let mut all_headers: Vec<(String, String)> = auth_headers;
+        let mut all_headers = auth_headers;
         all_headers.extend(user_headers);
-
-        // 4. 获取 Content-Type
         let content_type = self.body_state.content_type();
-
-        // 5. 如果有 content_type 但不在 headers 中，添加它
         if let Some(ref ct) = content_type {
             if !all_headers.iter().any(|(k, _)| k.to_lowercase() == "content-type") {
                 all_headers.push(("Content-Type".to_string(), ct.clone()));
             }
         }
-
-        // 6. 构建完整URL（先替换环境变量再检查scheme，避免变量值含http导致重复添加）
-        let resolved_url = self.app_state.lock().unwrap().env_manager.replace_variables(&self.url);
-        let url_with_scheme = if !resolved_url.starts_with("http://") && !resolved_url.starts_with("https://") {
-            format!("http://{}", resolved_url)
-        } else {
-            resolved_url
-        };
-
-        let base_url = if let Some(query_start) = url_with_scheme.find('?') {
-            url_with_scheme[..query_start].to_string()
-        } else {
-            url_with_scheme
-        };
-
-        let params: Vec<(String, String, bool)> = self.params.iter().map(|p| {
-            let key = p.key.read(cx).value().to_string();
-            let value = p.value.read(cx).value().to_string();
-            (key, value, p.enabled)
-        }).collect();
-
-        let enabled_params: Vec<&(String, String, bool)> = params.iter().filter(|p| p.2 && !p.0.is_empty()).collect();
-
-        let mut full_url = if enabled_params.is_empty() {
-            base_url
-        } else {
-            let query_string: String = enabled_params
-                .iter()
-                .map(|(key, value, _)| format!("{}={}", urlencoding::encode(key), urlencoding::encode(value)))
-                .collect::<Vec<_>>()
-                .join("&");
-            format!("{}?{}", base_url, query_string)
-        };
-
-        // 7. API Key query 参数
-        if let Some((key, value)) = self.auth_state.to_query_params(cx) {
-            let encoded_key = urlencoding::encode(&key);
-            let encoded_value = urlencoding::encode(&value);
-            if full_url.contains('?') {
-                full_url = format!("{}&{}={}", full_url, encoded_key, encoded_value);
-            } else {
-                full_url = format!("{}?{}={}", full_url, encoded_key, encoded_value);
-            }
-        }
-
-        // 8. 获取 Body
-        let body = self.body_state.to_body(cx);
-
-        // 9. 获取 form-data 字段
-        let text_fields = self.body_state.get_form_data_text_fields(cx);
-        let file_fields_raw = self.body_state.get_form_data_file_fields(cx);
-        let file_fields: Vec<crate::http::FileField> = file_fields_raw
-            .into_iter()
-            .map(|(field_name, file_path, content_type)| crate::http::FileField {
-                field_name,
-                file_path,
-                content_type,
-            })
-            .collect();
-
-        let headers_text_for_history: String = all_headers
-            .iter()
+        let headers_text_for_history: String = all_headers.iter()
             .map(|(k, v)| format!("{}: {}", k, v))
             .collect::<Vec<_>>()
             .join("\n");
-
+        let body = self.body_state.to_body(cx);
         let body_for_history = body.clone();
-        let method = self.method.clone();
-        let url = self.url.clone();
+        let resolved_url = self.app_state.lock().unwrap().env_manager.replace_variables(&self.url);
         let app_state = self.app_state.clone();
 
-        let request = HttpRequest {
-            method: method.clone(),
-            url: full_url,
-            headers: all_headers,
-            body,
-            content_type,
-            text_fields,
-            file_fields,
-        };
-
-        // 在后台线程发送请求，避免 block_on 阻塞主线程渲染
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            let result = rt.block_on(app_state.lock().unwrap().send_request(request));
-            let _ = tx.send(result);
-        });
-
-        cx.spawn_in(window, async move |this: WeakEntity<MainView>, cx| {
-            let result = loop {
-                match rx.try_recv() {
-                    Ok(r) => break r,
-                    Err(std::sync::mpsc::TryRecvError::Empty) => {
-                        cx.background_executor().timer(std::time::Duration::from_millis(100)).await;
-                    }
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                        break Err("请求线程异常退出".to_string());
+        // 请求构造与发送放到下一帧，确保当前帧先渲染 loading overlay
+        cx.on_next_frame(window, move |this, window, cx| {
+                // 构建完整 URL
+                let url_with_scheme = if !resolved_url.starts_with("http://") && !resolved_url.starts_with("https://") {
+                    format!("http://{}", resolved_url)
+                } else {
+                    resolved_url
+                };
+                let base_url = if let Some(query_start) = url_with_scheme.find('?') {
+                    url_with_scheme[..query_start].to_string()
+                } else {
+                    url_with_scheme
+                };
+                let params: Vec<(String, String, bool)> = this.params.iter().map(|p| {
+                    let key = p.key.read(cx).value().to_string();
+                    let value = p.value.read(cx).value().to_string();
+                    (key, value, p.enabled)
+                }).collect();
+                let enabled_params: Vec<&(String, String, bool)> = params.iter().filter(|p| p.2 && !p.0.is_empty()).collect();
+                let mut full_url = if enabled_params.is_empty() {
+                    base_url
+                } else {
+                    let query_string: String = enabled_params.iter()
+                        .map(|(key, value, _)| format!("{}={}", urlencoding::encode(key), urlencoding::encode(value)))
+                        .collect::<Vec<_>>()
+                        .join("&");
+                    format!("{}?{}", base_url, query_string)
+                };
+                if let Some((key, value)) = this.auth_state.to_query_params(cx) {
+                    let encoded_key = urlencoding::encode(&key);
+                    let encoded_value = urlencoding::encode(&value);
+                    if full_url.contains('?') {
+                        full_url = format!("{}&{}={}", full_url, encoded_key, encoded_value);
+                    } else {
+                        full_url = format!("{}?{}={}", full_url, encoded_key, encoded_value);
                     }
                 }
-            };
+                let body = this.body_state.to_body(cx);
+                let text_fields = this.body_state.get_form_data_text_fields(cx);
+                let file_fields_raw = this.body_state.get_form_data_file_fields(cx);
+                let file_fields: Vec<crate::http::FileField> = file_fields_raw.into_iter()
+                    .map(|(field_name, file_path, content_type)| crate::http::FileField {
+                        field_name, file_path, content_type,
+                    })
+                    .collect();
+                let body_for_history = body.clone();
+                let all_headers = all_headers.clone();
+                let method = method.clone();
+                let url = url.clone();
+                let app_state = app_state.clone();
 
-            this.update_in(cx, |this, window, cx| {
-                    match result {
-                        Ok(response) => {
-                            let history_entry = CreateHistoryEntry {
-                                method: method.clone(),
-                                url: url.clone(),
-                                headers: Some(headers_text_for_history),
-                                body: body_for_history,
-                                response_status: Some(response.status as i32),
-                                response_headers: Some(serde_json::to_string(&response.headers).unwrap_or_default()),
-                                response_body: Some(response.body.clone()),
-                                response_time_ms: Some(response.time_ms),
-                                response_size: Some(response.size_bytes),
-                            };
+                let request = HttpRequest {
+                    method: method.clone(),
+                    url: full_url,
+                    headers: all_headers.clone(),
+                    body,
+                    content_type,
+                    text_fields,
+                    file_fields,
+                };
 
-                            if let Err(e) = this.app_state.lock().unwrap().db.add_history(&history_entry.into_history_entry()) {
-                                log::error!("保存历史记录失败: {}", e);
+                let (tx, rx) = std::sync::mpsc::channel();
+                let http_client = {
+                    let state = app_state.lock().unwrap();
+                    state.http_client.clone()
+                }; // 立即释放 app_state 锁，避免阻塞 UI 渲染
+                std::thread::spawn(move || {
+                    let rt = tokio::runtime::Runtime::new().unwrap();
+                    let result = rt.block_on(http_client.send_request(&request));
+                    let _ = tx.send(result);
+                });
+
+                cx.spawn_in(window, async move |this: WeakEntity<MainView>, cx| {
+                    let result = loop {
+                        match rx.try_recv() {
+                            Ok(r) => break r,
+                            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                                cx.background_executor().timer(std::time::Duration::from_millis(100)).await;
                             }
-
-                            this.response = Some(response.clone());
-                            let content_type = response.detect_content_type();
-                            this.response_raw_format = RawFormat::detect(content_type.as_deref(), &response.body);
-                            let json_body = RawFormat::Json.format_body(&response.body);
-                            this.response_input.update(cx, |state, cx| {
-                                state.set_value(&json_body, window, cx);
-                            });
-                            this.response_xml_input.update(cx, |state, cx| {
-                                state.set_value(&response.body, window, cx);
-                            });
-                            this.response_text_input.update(cx, |state, cx| {
-                                state.set_value(&response.body, window, cx);
-                            });
-                            this.response_html_input.update(cx, |state, cx| {
-                                state.set_value(&response.body, window, cx);
-                            });
-                            this.rebuild_response_header_inputs(&response.headers, window, cx);
-                            if let Ok(hist) = this.app_state.lock().unwrap().db.get_history(50, 0) {
-                                this.history = hist;
+                            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                                break Err(anyhow::anyhow!("请求线程异常退出"));
                             }
                         }
-                        Err(e) => {
-                            this.error_message = Some(e);
+                    };
+                    this.update_in(cx, |this, window, cx| {
+                        match result {
+                            Ok(response) => {
+                                let history_entry = CreateHistoryEntry {
+                                    method: method.clone(),
+                                    url: url.clone(),
+                                    headers: Some(headers_text_for_history),
+                                    body: body_for_history,
+                                    response_status: Some(response.status as i32),
+                                    response_headers: Some(serde_json::to_string(&response.headers).unwrap_or_default()),
+                                    response_body: Some(response.body.clone()),
+                                    response_time_ms: Some(response.time_ms),
+                                    response_size: Some(response.size_bytes),
+                                };
+                                if let Err(e) = this.app_state.lock().unwrap().db.add_history(&history_entry.into_history_entry()) {
+                                    log::error!("保存历史记录失败: {}", e);
+                                }
+                                this.response = Some(response.clone());
+                                let content_type = response.detect_content_type();
+                                this.response_raw_format = RawFormat::detect(content_type.as_deref(), &response.body);
+                                let json_body = RawFormat::Json.format_body(&response.body);
+                                this.response_input.update(cx, |state, cx| {
+                                    state.set_value(&json_body, window, cx);
+                                });
+                                this.response_xml_input.update(cx, |state, cx| {
+                                    state.set_value(&response.body, window, cx);
+                                });
+                                this.response_text_input.update(cx, |state, cx| {
+                                    state.set_value(&response.body, window, cx);
+                                });
+                                this.response_html_input.update(cx, |state, cx| {
+                                    state.set_value(&response.body, window, cx);
+                                });
+                                this.rebuild_response_header_inputs(&response.headers, window, cx);
+                                if let Ok(hist) = this.app_state.lock().unwrap().db.get_history(50, 0) {
+                                    this.history = hist;
+                                }
+                            }
+                            Err(e) => {
+                                this.error_message = Some(e.to_string());
+                            }
                         }
-                    }
-
-                    this.is_loading = false;
-                    this.loading_frame = 0;
-                    cx.notify();
-            }).ok();
-        }).detach();
+                        this.is_loading = false;
+                        this.loading_frame = 0;
+                        cx.notify();
+                    }).ok();
+                }).detach();
+        });
     }
 
     /// 从历史记录加载请求
@@ -2039,15 +2017,9 @@ fn toggle_switch(
 }
 
 impl Render for MainView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let sidebar_width = if self.sidebar_collapsed { px(48.0) } else { px(280.0) };
         let is_loading = self.is_loading;
-        if is_loading {
-            self.loading_frame += 1;
-            let eid = cx.entity_id();
-            _window.on_next_frame(move |_, cx| { cx.notify(eid); });
-        }
-        let loading_angle = self.loading_frame as f32 * 0.15;
         let response = self.response.clone();
         let error_message = self.error_message.clone();
         let history = self.history.clone();
@@ -2736,7 +2708,7 @@ impl Render for MainView {
                                     .overflow_hidden()
                                     .bg(theme.background)
                                     .children([
-                                        crate::ui::request::render_url_bar(self, _window, cx).into_any_element(),
+                                        crate::ui::request::render_url_bar(self, window, cx).into_any_element(),
                                         // 标签页（全部可点击）
                                         div()
                                             .flex()
@@ -2755,12 +2727,12 @@ impl Render for MainView {
                                             .into_any_element(),
                                         // 各标签页内容 — 使用提取的组件
                                         match builder_tab {
-                                            BuilderTab::Params => crate::ui::request::render_params_panel(self, _window, cx).into_any_element(),
-                                            BuilderTab::Authorization => crate::ui::request::render_auth_panel(self, _window, cx).into_any_element(),
-                                            BuilderTab::Headers => crate::ui::request::render_headers_panel(self, _window, cx).into_any_element(),
-                                            BuilderTab::Body => crate::ui::request::render_body_panel(self, _window, cx).into_any_element(),
-                                            BuilderTab::PreRequest => crate::ui::request::render_pre_request_panel(self, _window, cx).into_any_element(),
-                                            BuilderTab::Tests => crate::ui::request::render_tests_panel(self, _window, cx).into_any_element(),
+                                            BuilderTab::Params => crate::ui::request::render_params_panel(self, window, cx).into_any_element(),
+                                            BuilderTab::Authorization => crate::ui::request::render_auth_panel(self, window, cx).into_any_element(),
+                                            BuilderTab::Headers => crate::ui::request::render_headers_panel(self, window, cx).into_any_element(),
+                                            BuilderTab::Body => crate::ui::request::render_body_panel(self, window, cx).into_any_element(),
+                                            BuilderTab::PreRequest => crate::ui::request::render_pre_request_panel(self, window, cx).into_any_element(),
+                                            BuilderTab::Tests => crate::ui::request::render_tests_panel(self, window, cx).into_any_element(),
                                             BuilderTab::Settings => crate::ui::request::render_settings_panel(self, cx).into_any_element(),
                                         }
                                     ]),
@@ -3342,7 +3314,18 @@ impl Render for MainView {
                         .bg(rgba(0x00000055))
                         .flex().items_center().justify_center().flex_col().gap_4()
                         .occlude()
-                        .child(Icon::new(IconName::Loader).text_color(theme.accent).rotate(radians(loading_angle)))
+                        .child(
+                            svg()
+                                .path("icons/loader.svg")
+                                .flex_none()
+                                .size_4()
+                                .text_color(theme.accent)
+                                .with_animation(
+                                    ElementId::Name("loading-spinner".into()),
+                                    Animation::new(std::time::Duration::from_millis(1200)).repeat(),
+                                    |svg, delta| svg.with_transformation(Transformation::rotate(radians(delta * 2.0 * std::f32::consts::PI)))
+                                )
+                        )
                         .child(div().text_sm().text_color(theme.muted_foreground).child(self.t("ui.sending")))
                         .into_any_element()
                 } else {
