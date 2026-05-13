@@ -13,16 +13,28 @@ use reqwest::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Read;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use reqwest::multipart;
 
 /// HTTP客户端管理器
-#[derive(Clone)]
 pub struct HttpClient {
-    /// reqwest客户端
+    /// 默认 reqwest 客户端
     client: Client,
     /// 环境变量管理器引用
     env_manager: EnvironmentManager,
+    /// 自定义客户端缓存，按配置键索引
+    custom_clients: Mutex<HashMap<ClientCacheKey, Client>>,
+}
+
+impl Clone for HttpClient {
+    fn clone(&self) -> Self {
+        Self {
+            client: self.client.clone(),
+            env_manager: self.env_manager.clone(),
+            custom_clients: Mutex::new(HashMap::new()),
+        }
+    }
 }
 
 /// 请求设置
@@ -49,55 +61,85 @@ impl Default for RequestOptions {
     }
 }
 
+/// Cache key for custom HTTP client configurations
+#[derive(Hash, PartialEq, Eq)]
+struct ClientCacheKey {
+    timeout_secs: u64,
+    follow_redirects: bool,
+    verify_ssl: bool,
+}
+
+impl ClientCacheKey {
+    fn from_options(opts: &RequestOptions) -> Self {
+        Self {
+            timeout_secs: opts.timeout_secs,
+            follow_redirects: opts.follow_redirects,
+            verify_ssl: opts.verify_ssl,
+        }
+    }
+}
+
 impl HttpClient {
     /// 创建新的HTTP客户端
     pub fn new(env_manager: EnvironmentManager) -> Result<Self> {
-        let client = Client::builder()
-            .no_brotli()
-            .no_gzip()
-            .no_deflate()
-            .timeout(Duration::from_secs(30))
-            .build()
-            .context("创建HTTP客户端失败")?;
-
+        let client = Self::build_default_client(30, None)?;
         Ok(Self {
             client,
             env_manager,
+            custom_clients: Mutex::new(HashMap::new()),
         })
     }
 
     /// 创建带有自定义超时的HTTP客户端
     pub fn with_timeout(timeout_secs: u64, env_manager: EnvironmentManager) -> Result<Self> {
-        let client = Client::builder()
-            .no_brotli()
-            .no_gzip()
-            .no_deflate()
-            .timeout(Duration::from_secs(timeout_secs))
-            .build()
-            .context("创建HTTP客户端失败")?;
-
+        let client = Self::build_default_client(timeout_secs, None)?;
         Ok(Self {
             client,
             env_manager,
+            custom_clients: Mutex::new(HashMap::new()),
         })
     }
 
     /// 创建带有代理的HTTP客户端
     pub fn with_proxy(proxy_url: &str, env_manager: EnvironmentManager) -> Result<Self> {
         let proxy = Proxy::all(proxy_url).context("代理URL无效")?;
-        let client = Client::builder()
-            .no_brotli()
-            .no_gzip()
-            .no_deflate()
-            .proxy(proxy)
-            .timeout(Duration::from_secs(30))
-            .build()
-            .context("创建HTTP客户端失败")?;
-
+        let client = Self::build_default_client(30, Some(proxy))?;
         Ok(Self {
             client,
             env_manager,
+            custom_clients: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// 构建默认客户端（可带代理）
+    fn build_default_client(timeout_secs: u64, proxy: Option<Proxy>) -> Result<Client> {
+        let mut builder = Client::builder()
+            .no_brotli()
+            .no_gzip()
+            .no_deflate()
+            .timeout(Duration::from_secs(timeout_secs));
+        if let Some(p) = proxy {
+            builder = builder.proxy(p);
+        }
+        builder.build().context("创建HTTP客户端失败")
+    }
+
+    /// 构建自定义配置的客户端（用于缓存）
+    fn build_custom_client(opts: &RequestOptions) -> Result<Client> {
+        let mut builder = Client::builder()
+            .no_brotli()
+            .no_gzip()
+            .no_deflate()
+            .timeout(Duration::from_secs(opts.timeout_secs))
+            .redirect(if opts.follow_redirects {
+                reqwest::redirect::Policy::default()
+            } else {
+                reqwest::redirect::Policy::none()
+            });
+        if !opts.verify_ssl {
+            builder = builder.danger_accept_invalid_certs(true);
+        }
+        builder.build().context("创建自定义HTTP客户端失败")
     }
 
     /// Update the environment manager (called when active environment changes)
@@ -158,62 +200,40 @@ impl HttpClient {
         let method = Method::try_from(request.method.to_uppercase().as_str())
             .with_context(|| format!("无效的HTTP方法: {}", request.method))?;
 
-        // 根据设置决定使用哪个客户端
-        let use_custom_client = options.timeout_secs != 30 || !options.follow_redirects || !options.verify_ssl;
-
-        log::debug!("开始发送请求，使用自定义客户端: {}", use_custom_client);
-
-let response = if use_custom_client {
-            // 构建自定义客户端
-            let mut builder = Client::builder()
-                .no_brotli()
-                .no_gzip()
-                .no_deflate()
-                .timeout(Duration::from_secs(options.timeout_secs))
-                .redirect(if options.follow_redirects {
-                    reqwest::redirect::Policy::default()
-                } else {
-                    reqwest::redirect::Policy::none()
-                });
-
-            if !options.verify_ssl {
-                builder = builder.danger_accept_invalid_certs(true);
+        // 根据设置选择或构建客户端（优先使用缓存）
+        let client = if options.timeout_secs != 30 || !options.follow_redirects || !options.verify_ssl {
+            let key = ClientCacheKey::from_options(&options);
+            let mut cache = self.custom_clients.lock().unwrap();
+            if let Some(cached) = cache.get(&key) {
+                log::debug!("使用缓存的自定义客户端");
+                cached.clone()
+            } else {
+                log::debug!("构建新的自定义客户端并缓存");
+                let new_client = Self::build_custom_client(&options)?;
+                cache.insert(key, new_client.clone());
+                new_client
             }
-
-            let custom_client = builder.build().context("创建自定义HTTP客户端失败")?;
-
-            let request_builder = custom_client
-                .request(method, &url)
-                .headers(headers);
-
-            // 根据是否有请求体决定发送方式
-            let request_builder = if let Some(ref body_content) = body {
-                request_builder.body(body_content.clone())
-            } else {
-                request_builder.multipart(self.build_multipart(request)?)
-            };
-
-            request_builder
-                .send()
-                .await
-                .context("请求发送失败")?
         } else {
-            let request_builder = self.client
-                .request(method, &url)
-                .headers(headers);
-
-            // 根据是否有请求体决定发送方式
-            let request_builder = if let Some(ref body_content) = body {
-                request_builder.body(body_content.clone())
-            } else {
-                request_builder.multipart(self.build_multipart(request)?)
-            };
-
-            request_builder
-                .send()
-                .await
-                .context("请求发送失败")?
+            self.client.clone()
         };
+
+        // 构建请求
+        let has_multipart = !request.text_fields.is_empty() || !request.file_fields.is_empty();
+        let mut request_builder = client
+            .request(method, &url)
+            .headers(headers);
+
+        // 设置请求体：优先 multipart，其次普通 body
+        if has_multipart {
+            request_builder = request_builder.multipart(self.build_multipart(request)?);
+        } else if let Some(body_content) = body {
+            request_builder = request_builder.body(body_content);
+        }
+
+        let response = request_builder
+            .send()
+            .await
+            .context("请求发送失败")?;
 
         let elapsed = start_time.elapsed();
         let status = response.status().as_u16();
