@@ -63,6 +63,13 @@ impl Database {
         let conn = self.conn.lock()
             .map_err(|_| anyhow::anyhow!("数据库锁中毒，无法获取连接"))?;
 
+        // 启用 WAL 模式以允许读写并发
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             PRAGMA busy_timeout=5000;
+             PRAGMA synchronous=NORMAL;"
+        )?;
+
         // 创建历史记录表
         conn.execute(
             "CREATE TABLE IF NOT EXISTS history (

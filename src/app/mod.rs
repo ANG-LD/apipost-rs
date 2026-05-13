@@ -25,8 +25,8 @@ pub struct AppState {
     pub config: AppConfig,
     /// 数据库
     pub db: Arc<Database>,
-    /// 环境变量管理器
-    pub env_manager: EnvironmentManager,
+    /// 环境变量管理器（与 HttpClient 共享同一实例）
+    pub env_manager: Arc<EnvironmentManager>,
     /// HTTP客户端
     pub http_client: HttpClient,
     /// 国际化管理器
@@ -45,8 +45,8 @@ impl AppState {
         let db = Arc::new(Database::new(&config.database.path)
             .map_err(|e| anyhow::anyhow!("数据库初始化失败: {}", e))?);
 
-        // 初始化环境变量管理器
-        let env_manager = EnvironmentManager::new();
+        // 初始化环境变量管理器（Arc 共享给 HttpClient）
+        let env_manager = Arc::new(EnvironmentManager::new());
 
         // 从数据库加载激活的环境
         if let Ok(Some(env)) = db.get_active_environment() {
@@ -62,19 +62,19 @@ impl AppState {
             }
         }
 
-        // 初始化HTTP客户端
+        // 初始化HTTP客户端（共享同一个 EnvironmentManager 实例）
         let http_client = match &config.proxy.enabled {
             true => {
-                HttpClient::with_proxy(&config.proxy.url, env_manager.clone())
+                HttpClient::with_proxy(&config.proxy.url, Arc::clone(&env_manager))
                     .unwrap_or_else(|_| {
-                        HttpClient::with_timeout(config.general.timeout, env_manager.clone())
+                        HttpClient::with_timeout(config.general.timeout, Arc::clone(&env_manager))
                             .expect("HTTP客户端初始化失败")
                     })
             }
             false => {
-                HttpClient::with_timeout(config.general.timeout, env_manager.clone())
+                HttpClient::with_timeout(config.general.timeout, Arc::clone(&env_manager))
                     .unwrap_or_else(|_| {
-                        HttpClient::new(env_manager.clone())
+                        HttpClient::new(Arc::clone(&env_manager))
                             .expect("HTTP客户端初始化失败")
                     })
             }
@@ -130,7 +130,6 @@ impl AppState {
         }
 
         result.map_err(|e| {
-            // 返回完整的错误链
             e.chain().map(|c| c.to_string()).collect::<Vec<_>>().join(" -> ")
         })
     }
@@ -148,10 +147,7 @@ impl AppState {
             "dark" => "light".to_string(),
             _ => "dark".to_string(),
         };
-
         self.theme_name = self.config.general.theme.clone().into();
-
-        // 保存配置
         if let Err(e) = self.config.save() {
             log::error!("保存配置失败: {}", e);
         }
@@ -161,8 +157,6 @@ impl AppState {
     pub fn set_theme(&mut self, theme: &str) {
         self.config.general.theme = theme.to_string();
         self.theme_name = self.config.general.theme.clone().into();
-
-        // 保存配置
         if let Err(e) = self.config.save() {
             log::error!("保存配置失败: {}", e);
         }
@@ -172,7 +166,6 @@ impl AppState {
     pub fn switch_language(&mut self, language: &str) {
         self.config.general.language = language.to_string();
         self.i18n = I18nManager::new(language);
-
         if let Err(e) = self.config.save() {
             log::error!("保存配置失败: {}", e);
         }

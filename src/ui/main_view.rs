@@ -1533,7 +1533,7 @@ impl MainView {
     fn activate_environment(&mut self, env_id: &str, _window: &mut Window, cx: &mut Context<Self>) {
         // Single lock acquisition to avoid re-entrant deadlock
         {
-            let mut app = self.app_state.lock().unwrap();
+            let app = self.app_state.lock().unwrap();
             if let Err(e) = app.db.set_active_environment(env_id) {
                 log::error!("设置活跃环境失败: {}", e);
                 return;
@@ -1543,9 +1543,7 @@ impl MainView {
                     log::warn!("加载环境变量失败: {}", e);
                 }
             }
-            // Sync the HTTP client's env_manager so variable replacement uses current env
-            let updated_env = app.env_manager.clone();
-            app.http_client.set_env_manager(updated_env);
+            // env_manager 为 Arc 共享，更新即时对 HttpClient 可见
             self.environments = app.db.get_environments().unwrap_or_default();
             self.active_environment_name = self.environments.iter()
                 .find(|e| e.is_active)

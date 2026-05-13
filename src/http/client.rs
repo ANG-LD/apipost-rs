@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Read;
 use std::sync::Mutex;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use reqwest::multipart;
 
@@ -21,8 +22,8 @@ use reqwest::multipart;
 pub struct HttpClient {
     /// 默认 reqwest 客户端
     client: Client,
-    /// 环境变量管理器引用
-    env_manager: EnvironmentManager,
+    /// 环境变量管理器（与 AppState 共享同一实例）
+    env_manager: Arc<EnvironmentManager>,
     /// 自定义客户端缓存，按配置键索引
     custom_clients: Mutex<HashMap<ClientCacheKey, Client>>,
 }
@@ -31,7 +32,7 @@ impl Clone for HttpClient {
     fn clone(&self) -> Self {
         Self {
             client: self.client.clone(),
-            env_manager: self.env_manager.clone(),
+            env_manager: Arc::clone(&self.env_manager),
             custom_clients: Mutex::new(HashMap::new()),
         }
     }
@@ -81,7 +82,7 @@ impl ClientCacheKey {
 
 impl HttpClient {
     /// 创建新的HTTP客户端
-    pub fn new(env_manager: EnvironmentManager) -> Result<Self> {
+    pub fn new(env_manager: Arc<EnvironmentManager>) -> Result<Self> {
         let client = Self::build_default_client(30, None)?;
         Ok(Self {
             client,
@@ -91,7 +92,7 @@ impl HttpClient {
     }
 
     /// 创建带有自定义超时的HTTP客户端
-    pub fn with_timeout(timeout_secs: u64, env_manager: EnvironmentManager) -> Result<Self> {
+    pub fn with_timeout(timeout_secs: u64, env_manager: Arc<EnvironmentManager>) -> Result<Self> {
         let client = Self::build_default_client(timeout_secs, None)?;
         Ok(Self {
             client,
@@ -101,7 +102,7 @@ impl HttpClient {
     }
 
     /// 创建带有代理的HTTP客户端
-    pub fn with_proxy(proxy_url: &str, env_manager: EnvironmentManager) -> Result<Self> {
+    pub fn with_proxy(proxy_url: &str, env_manager: Arc<EnvironmentManager>) -> Result<Self> {
         let proxy = Proxy::all(proxy_url).context("代理URL无效")?;
         let client = Self::build_default_client(30, Some(proxy))?;
         Ok(Self {
@@ -140,11 +141,6 @@ impl HttpClient {
             builder = builder.danger_accept_invalid_certs(true);
         }
         builder.build().context("创建自定义HTTP客户端失败")
-    }
-
-    /// Update the environment manager (called when active environment changes)
-    pub fn set_env_manager(&mut self, env_manager: EnvironmentManager) {
-        self.env_manager = env_manager;
     }
 
     /// 发送HTTP请求
@@ -720,7 +716,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_simple_request() {
-        let env_manager = create_mock_env_manager();
+        let env_manager = Arc::new(create_mock_env_manager());
         let client = HttpClient::new(env_manager).unwrap();
 
         let request = HttpRequest::new(Method::GET, "https://httpbin.org/get".to_string());
