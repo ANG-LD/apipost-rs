@@ -202,8 +202,9 @@ impl CurlParser {
 
             Ok(CurlOption { name, value })
         } else {
-            let name = self.input[self.pos..].chars().next().unwrap().to_string();
-            self.pos += 1;
+            let ch = self.current_char();
+            let name = ch.to_string();
+            self.pos = self.snap_to_char_boundary(self.pos) + ch.len_utf8();
             self.skip_whitespace();
 
             let value = if self.pos < self.input.len() {
@@ -240,22 +241,22 @@ impl CurlParser {
 
     /// 解析带引号的字符串
     fn parse_quoted_string(&mut self, quote: char) -> Result<String> {
-        self.pos += 1;
+        self.pos += 1; // skip opening quote (ASCII)
         let mut result = String::new();
 
         while self.pos < self.input.len() && self.current_char() != quote {
             let ch = self.current_char();
             if ch == '\\' && self.pos + 1 < self.input.len() {
-                self.pos += 1;
+                self.pos += 1; // skip backslash (ASCII)
                 result.push(self.current_char());
             } else {
                 result.push(ch);
             }
-            self.pos += 1;
+            self.advance_char();
         }
 
         if self.pos < self.input.len() {
-            self.pos += 1;
+            self.pos += 1; // skip closing quote (ASCII)
         }
 
         Ok(result)
@@ -263,15 +264,15 @@ impl CurlParser {
 
     /// 解析普通单词
     fn parse_word(&mut self) -> String {
-        let start = self.pos;
+        let start = self.snap_to_char_boundary(self.pos);
         while self.pos < self.input.len() {
             let ch = self.current_char();
             if ch.is_whitespace() || ch == '\'' || ch == '"' || ch == '=' {
                 break;
             }
-            self.pos += 1;
+            self.advance_char();
         }
-        self.input[start..self.pos].to_string()
+        self.input.get(start..self.pos).unwrap_or("").to_string()
     }
 
     /// 解析选项值
@@ -288,12 +289,13 @@ impl CurlParser {
             } else if ch.is_whitespace() {
                 break;
             } else if ch == '\\' && self.pos + 1 < self.input.len() {
-                self.pos += 1;
+                self.pos += 1; // skip backslash (ASCII)
                 value.push(self.current_char());
+                self.advance_char();
             } else {
                 value.push(ch);
+                self.advance_char();
             }
-            self.pos += 1;
         }
 
         value
@@ -306,19 +308,47 @@ impl CurlParser {
         }
     }
 
-    /// 获取当前位置的字符
+    /// 获取当前位置的字符（安全处理非字符边界位置）
     fn current_char(&self) -> char {
-        self.input[self.pos..].chars().next().unwrap_or('\0')
+        if self.pos >= self.input.len() {
+            return '\0';
+        }
+        let pos = self.snap_to_char_boundary(self.pos);
+        self.input[pos..].chars().next().unwrap_or('\0')
     }
 
-    /// 查看下一个字符
+    /// 查看下一个字符（安全处理非字符边界位置）
     fn peek_char(&self) -> char {
-        let next_pos = self.pos + 1;
-        if next_pos < self.input.len() {
-            self.input[next_pos..].chars().next().unwrap_or('\0')
-        } else {
-            '\0'
+        let pos = self.snap_to_char_boundary(self.pos);
+        if pos < self.input.len() {
+            if let Some(c) = self.input[pos..].chars().next() {
+                let next_pos = pos + c.len_utf8();
+                if next_pos < self.input.len() {
+                    return self.input[next_pos..].chars().next().unwrap_or('\0');
+                }
+            }
         }
+        '\0'
+    }
+
+    /// 前进一个字符（正确处理多字节 UTF-8 字符）
+    fn advance_char(&mut self) {
+        if self.pos >= self.input.len() {
+            return;
+        }
+        let pos = self.snap_to_char_boundary(self.pos);
+        if let Some(c) = self.input[pos..].chars().next() {
+            self.pos = pos + c.len_utf8();
+        }
+    }
+
+    /// 将字节索引对齐到最近的合法字符边界
+    fn snap_to_char_boundary(&self, pos: usize) -> usize {
+        let mut p = pos;
+        while p < self.input.len() && !self.input.is_char_boundary(p) {
+            p += 1;
+        }
+        p
     }
 }
 
