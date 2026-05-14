@@ -2576,6 +2576,7 @@ impl Render for MainView {
                             ]),
                         // ==================== 主工作区 ====================
                         div()
+                            .relative()
                             .flex_1()
                             .flex()
                             .flex_col()
@@ -3044,6 +3045,29 @@ impl Render for MainView {
                                                 },
                                             ]),
                                     ]),
+                            // 请求发送中的 loading 遮罩（覆盖主工作区）
+                            if is_loading {
+                                div()
+                                    .absolute().top_0().left_0().right_0().bottom_0()
+                                    .bg(rgba(0x00000055))
+                                    .flex().items_center().justify_center().flex_col().gap_4()
+                                    .occlude()
+                                    .child(
+                                        svg()
+                                            .path("icons/loader.svg")
+                                            .flex_none()
+                                            .size_4()
+                                            .text_color(theme.accent)
+                                            .with_animation(
+                                                ElementId::Name("loading-spinner".into()),
+                                                Animation::new(std::time::Duration::from_millis(1200)).repeat(),
+                                                |svg, delta| svg.with_transformation(Transformation::rotate(radians(delta * 2.0 * std::f32::consts::PI)))
+                                            )
+                                    )
+                                    .child(div().text_sm().text_color(theme.muted_foreground).child(self.t("ui.sending")))
+                            } else {
+                                div()
+                            },
                             ]),
                     ]),
                 // ==================== 底部状态栏 ====================
@@ -3303,31 +3327,6 @@ impl Render for MainView {
                                     )
                             )
                     )
-                }
-            )
-            .child(
-                if is_loading {
-                    div()
-                        .absolute().top_0().left_0().right_0().bottom_0()
-                        .bg(rgba(0x00000055))
-                        .flex().items_center().justify_center().flex_col().gap_4()
-                        .occlude()
-                        .child(
-                            svg()
-                                .path("icons/loader.svg")
-                                .flex_none()
-                                .size_4()
-                                .text_color(theme.accent)
-                                .with_animation(
-                                    ElementId::Name("loading-spinner".into()),
-                                    Animation::new(std::time::Duration::from_millis(1200)).repeat(),
-                                    |svg, delta| svg.with_transformation(Transformation::rotate(radians(delta * 2.0 * std::f32::consts::PI)))
-                                )
-                        )
-                        .child(div().text_sm().text_color(theme.muted_foreground).child(self.t("ui.sending")))
-                        .into_any_element()
-                } else {
-                    div().into_any_element()
                 }
             )
     }
