@@ -372,7 +372,7 @@ pub fn generate_code(request: &HttpRequest, language: &str) -> String {
 
 /// 生成Python代码
 fn generate_python(request: &HttpRequest) -> String {
-    let method = request.method.to_string();
+    let method_lower = request.method.to_lowercase();
     let url = &request.url;
     let headers: Vec<String> = request
         .headers
@@ -393,13 +393,12 @@ fn generate_python(request: &HttpRequest) -> String {
 
     format!(
         "import requests\n\nurl = '{}'\nheaders = {{\n{}\n{}}}\ndata = {}\n\nresponse = requests.{}(\n    url,\n    headers=headers{}\n)\nprint(response.status_code)\nprint(response.text)\n",
-        url, headers_str, body_str, data_val, method.to_lowercase(), extra_arg
+        url, headers_str, body_str, data_val, method_lower, extra_arg
     )
 }
 
 /// 生成JavaScript代码
 fn generate_javascript(request: &HttpRequest) -> String {
-    let method = request.method.to_string();
     let url = &request.url;
     let headers: Vec<String> = request
         .headers
@@ -418,13 +417,12 @@ fn generate_javascript(request: &HttpRequest) -> String {
 
     format!(
         "const options = {{\n  method: '{}',\n  headers: {{\n{}\n  }},\n{}}};\n\nfetch('{}', options)\n  .then(response => response.json())\n  .then(data => console.log(data))\n  .catch(error => console.error('Error:', error));\n",
-        method, url, headers_str, body_part
+        request.method, url, headers_str, body_part
     )
 }
 
 /// 生成Go代码
 fn generate_go(request: &HttpRequest) -> String {
-    let method = request.method.to_string();
     let url = &request.url;
     let headers: Vec<String> = request
         .headers
@@ -448,13 +446,13 @@ fn generate_go(request: &HttpRequest) -> String {
 
     format!(
         "package main\n\nimport (\n    \"fmt\"\n    \"net/http\"{}\n)\n\nfunc main() {{\n{}\n{}\n    req, err := http.NewRequest(\"{}\", \"{}\", {})\n    if err != nil {{\n        panic(err)\n    }}\n\n{}\n    resp, err := http.DefaultClient.Do(req)\n    if err != nil {{\n        panic(err)\n    }}\n    defer resp.Body.Close()\n\n    fmt.Println(\"Response status:\", resp.Status)\n}}\n",
-        body_import, url, body_decl, method, url, body_arg, headers_code
+        body_import, url, body_decl, request.method, url, body_arg, headers_code
     )
 }
 
 /// 生成Rust代码
 fn generate_rust(request: &HttpRequest) -> String {
-    let method = request.method.to_string();
+    let method_lower = request.method.to_lowercase();
     let url = &request.url;
     let headers: Vec<String> = request
         .headers
@@ -473,14 +471,13 @@ fn generate_rust(request: &HttpRequest) -> String {
 
     format!(
         "use reqwest::Client;\n\n#[tokio::main]\nasync fn main() -> Result<(), reqwest::Error> {{\n    let client = Client::new();\n\n    let response = client.{}()\n        (\"{}\"\n    ){}\n{}\n        .await?;\n\n    println!(\"Status: {{}}\", response.status());\n    println!(\"Body: {{}}\", response.text().await?);\n    Ok(())\n}}\n",
-        method.to_lowercase(), url, headers_str, body_code
+        method_lower, url, headers_str, body_code
     )
 }
 
 /// 生成Java代码
 #[allow(unused_variables)]
 fn generate_java(request: &HttpRequest) -> String {
-    let method = request.method.to_string();
     let url = &request.url;
     let headers_code: String = request
         .headers
@@ -499,13 +496,12 @@ fn generate_java(request: &HttpRequest) -> String {
 
     format!(
         "import org.apache.http.client.methods.CloseableHttpResponse;\nimport org.apache.http.client.methods.Http{};\nimport org.apache.http.impl.client.CloseableHttpClient;\nimport org.apache.http.impl.client.HttpClients;\nimport org.apache.http.util.EntityUtils;\n\npublic class ApiRequest {{\n    public static void main(String[] args) throws Exception {{\n        CloseableHttpClient client = HttpClients.createDefault();\n        Http{{}} request = new Http{{}}(\"{}\");\n{}\n{}\n        try (CloseableHttpResponse response = client.execute(request)) {{\n            System.out.println(\"Status: \" + response.getStatusLine().getStatusCode());\n            System.out.println(\"Body: \" + EntityUtils.toString(response.getEntity()));\n        }}\n    }}\n}}\n",
-        method, url, headers_code, body_code
+        request.method, url, headers_code, body_code
     )
 }
 
 /// 生成PHP代码
 fn generate_php(request: &HttpRequest) -> String {
-    let method = request.method.to_string();
     let url = &request.url;
     let headers: Vec<String> = request
         .headers
@@ -524,7 +520,7 @@ fn generate_php(request: &HttpRequest) -> String {
 
     format!(
         "<?php\n\n$curl = curl_init();\n\ncurl_setopt_array($curl, [\n    CURLOPT_URL => \"{}\",\n    CURLOPT_RETURNTRANSFER => true,\n    CURLOPT_ENCODING => \"\",\n    CURLOPT_MAXREDIRS => 10,\n    CURLOPT_TIMEOUT => 30,\n    CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,\n    CURLOPT_CUSTOMREQUEST => \"{}\",\n    CURLOPT_HTTPHEADER => [\n{}\n    ],{}\n]);\n\n$response = curl_exec($curl);\n$err = curl_error($curl);\n\ncurl_close($curl);\n\nif ($err) {{\n    echo \"Error: \" . $err;\n}} else {{\n    echo $response;\n}}\n",
-        url, method, headers_str, body_part
+        url, request.method, headers_str, body_part
     )
 }
 

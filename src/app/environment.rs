@@ -7,7 +7,7 @@ use anyhow::Result;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 /// 环境变量管理器
 pub struct EnvironmentManager {
@@ -15,8 +15,8 @@ pub struct EnvironmentManager {
     global_variables: RwLock<HashMap<String, String>>,
     /// 当前环境的变量
     current_variables: RwLock<HashMap<String, String>>,
-    /// 变量替换正则
-    variable_pattern: Regex,
+    /// 变量替换正则（Arc 共享，Clone 时无需重新编译）
+    variable_pattern: Arc<Regex>,
 }
 
 impl Clone for EnvironmentManager {
@@ -24,7 +24,7 @@ impl Clone for EnvironmentManager {
         Self {
             global_variables: RwLock::new(self.global_variables.read().unwrap().clone()),
             current_variables: RwLock::new(self.current_variables.read().unwrap().clone()),
-            variable_pattern: Regex::new(r"\{\{([^}]+)\}\}").unwrap(),
+            variable_pattern: Arc::clone(&self.variable_pattern),
         }
     }
 }
@@ -41,8 +41,7 @@ impl EnvironmentManager {
         Self {
             global_variables: RwLock::new(HashMap::new()),
             current_variables: RwLock::new(HashMap::new()),
-            // 匹配 {{variable_name}} 格式的变量
-            variable_pattern: Regex::new(r"\{\{([^}]+)\}\}").unwrap(),
+            variable_pattern: Arc::new(Regex::new(r"\{\{([^}]+)\}\}").unwrap()),
         }
     }
 

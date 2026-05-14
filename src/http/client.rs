@@ -161,7 +161,7 @@ impl HttpClient {
             log::debug!("替换后URL: {}", url);
         }
 
-        // 构建请求头
+        // 构建请求头（内部完成变量替换 + 日志）
         let headers = self.build_headers(&request.headers)?;
 
         // 替换请求体中的环境变量
@@ -173,22 +173,12 @@ impl HttpClient {
             replaced
         });
 
-        log::debug!("请求头 ({} 项):", request.headers.len());
-        for (name, value) in &request.headers {
-            let resolved = self.env_manager.replace_variables(value);
-            if *value != resolved {
-                log::debug!("  {}: {} -> {}", name, value, resolved);
-            } else {
-                log::debug!("  {}: {}", name, value);
-            }
-        }
         if let Some(ref body_content) = body {
-            let preview = if body_content.len() > 500 {
-                format!("{}...(截断, 总长度: {})", &body_content[..500], body_content.len())
+            if body_content.len() > 500 {
+                log::debug!("请求体: {}...(截断, 总长度: {})", &body_content[..500], body_content.len());
             } else {
-                body_content.clone()
-            };
-            log::debug!("请求体: {}", preview);
+                log::debug!("请求体: {}", body_content);
+            }
         }
         log::debug!("===================");
 
@@ -284,19 +274,27 @@ impl HttpClient {
     fn build_headers(&self, headers: &[(String, String)]) -> Result<HeaderMap> {
         let mut header_map = HeaderMap::new();
 
-        // 添加 Accept-Encoding 以接收 gzip 压缩数据（如果用户没有自定义）
+        // 仅声明 gzip 支持（手动解压只处理了 gzip，br/deflate 未实现）
         if !headers.iter().any(|(k, _)| k.to_lowercase() == "accept-encoding") {
-            header_map.insert(ACCEPT_ENCODING, HeaderValue::from_static("gzip, deflate, br"));
+            header_map.insert(ACCEPT_ENCODING, HeaderValue::from_static("gzip"));
         }
 
+        log::debug!("请求头 ({} 项):", headers.len());
         for (name, value) in headers {
             // 替换头部值中的环境变量
-            let value = self.env_manager.replace_variables(value);
+            let resolved = self.env_manager.replace_variables(value);
+
+            // 变量替换日志（仅此一处，避免重复正则匹配）
+            if *value != resolved {
+                log::debug!("  {}: {} -> {}", name, value, resolved);
+            } else {
+                log::debug!("  {}: {}", name, value);
+            }
 
             let header_name = HeaderName::try_from(name.as_str())
                 .with_context(|| format!("无效的请求头名称: {}", name))?;
-            let header_value = HeaderValue::from_str(&value)
-                .with_context(|| format!("无效的请求头值: {}", value))?;
+            let header_value = HeaderValue::from_str(&resolved)
+                .with_context(|| format!("无效的请求头值: {}", resolved))?;
 
             header_map.insert(header_name, header_value);
         }
@@ -320,16 +318,16 @@ impl HttpClient {
 
         // 添加文件字段
         for file_field in &request.file_fields {
-            let file_path = file_field.file_path.clone();
+            let file_path = &file_field.file_path;
             log::debug!("添加文件字段: {} -> {}", file_field.field_name, file_path);
-            if std::path::Path::new(&file_path).exists() {
-                let file_name = std::path::Path::new(&file_path)
+            if std::path::Path::new(file_path).exists() {
+                let file_name = std::path::Path::new(file_path)
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| "file".to_string());
 
                 // 读取文件内容
-                let file_content = std::fs::read(&file_path)
+                let file_content = std::fs::read(file_path)
                     .map_err(|e| anyhow::anyhow!("无法读取文件 {}: {}", file_path, e))?;
 
                 let part = multipart::Part::bytes(file_content)
