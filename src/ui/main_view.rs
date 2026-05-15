@@ -2194,6 +2194,7 @@ impl Render for MainView {
                                                 } else {
                                                     div()
                                                         .id("history-list")
+                                                        .w_full()
                                                         .flex_col()
                                                         .gap_1()
                                                         .overflow_y_scroll()
@@ -2210,6 +2211,7 @@ impl Render for MainView {
                                                             let display_method = entry.method.clone();
                                                             let display_url = entry.url.clone();
                                                             div()
+                                                                .w_full()
                                                                 .flex_col()
                                                                 .gap_1()
                                                                 .p_2()

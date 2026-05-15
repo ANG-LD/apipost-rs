@@ -43,6 +43,7 @@ pub fn render_history_panel(
                 let display_url = entry.url.clone();
 
                 div()
+                    .w_full()
                     .flex_col()
                     .gap_1()
                     .p_2()
