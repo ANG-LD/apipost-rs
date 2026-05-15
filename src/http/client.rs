@@ -2,6 +2,14 @@
 //!
 //! 负责发送HTTP请求并处理响应
 //! 支持各种HTTP方法和配置选项
+//!
+//! ## 设计要点
+//!
+//! - **懒加载**: reqwest::Client 通过 `OnceLock` 延迟到首次 `send_request` 时才构建，
+//!   避免应用启动时即加载 TLS 证书、初始化连接池的开销。
+//! - **连接池可配置**: 通过 `PoolConfig` 控制 `pool_max_idle_per_host`、`pool_idle_timeout`。
+//! - **并发控制**: 通过 tokio `Semaphore` 限制同时进行中的 HTTP 请求数量，
+//!   防止短时间内发起过多连接耗尽系统资源。
 
 use crate::app::environment::EnvironmentManager;
 use anyhow::{Context, Result};
@@ -13,30 +21,167 @@ use reqwest::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Read;
-use std::sync::Mutex;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use reqwest::multipart;
+use tokio::sync::Semaphore;
+
+// ============================================================================
+// 连接池配置
+// ============================================================================
+
+/// 连接池与并发控制配置
+///
+/// 控制底层 reqwest 连接池行为以及应用层的请求并发数。
+/// 所有字段为 0 表示使用默认值（不限制）。
+#[derive(Debug, Clone)]
+pub struct PoolConfig {
+    /// 每个 host 最大空闲连接数
+    ///
+    /// 对应 reqwest 的 `pool_max_idle_per_host`。
+    /// 设为 0 表示使用 reqwest 内置默认值（当前为 `usize::MAX`，即不限制）。
+    pub max_idle_per_host: usize,
+
+    /// 空闲连接超时（秒）
+    ///
+    /// 连接在连接池中保持空闲的最大时长。超时后连接被关闭回收。
+    /// 对应 reqwest 的 `pool_idle_timeout`。
+    /// 设为 0 表示使用 reqwest 内置默认值（当前为 90 秒）。
+    pub idle_timeout_secs: u64,
+
+    /// 最大并发请求数
+    ///
+    /// 同时进行中的 HTTP 请求数量上限。通过 tokio `Semaphore` 实现，
+    /// 超出限制的请求会排队等待。
+    /// 设为 0 表示不限制并发数。
+    pub max_concurrent_requests: usize,
+
+    /// TCP keepalive 间隔（秒）
+    ///
+    /// 空闲连接上发送 TCP keepalive 探测包的间隔。
+    /// 防止防火墙/NAT/代理因长时间无数据而断开连接。
+    /// 设为 0 使用系统默认（通常 7200s，即 2 小时）。
+    /// 推荐值：60。
+    pub tcp_keepalive_secs: u64,
+
+    /// 连接超时（秒）
+    ///
+    /// 建立 TCP 连接的最大等待时间，独立于请求整体超时。
+    /// 设为 0 表示使用请求超时（`timeout_secs`）作为连接超时。
+    /// 推荐值：10。
+    pub connect_timeout_secs: u64,
+}
+
+impl Default for PoolConfig {
+    fn default() -> Self {
+        Self {
+            max_idle_per_host: 0,
+            idle_timeout_secs: 0,
+            max_concurrent_requests: 0,
+            tcp_keepalive_secs: 0,
+            connect_timeout_secs: 0,
+        }
+    }
+}
+
+impl PoolConfig {
+    /// 创建一个限制并发请求数的配置
+    ///
+    /// 适用于需要控制资源使用的场景（如嵌入式设备、代理环境）。
+    pub fn with_concurrency_limit(max_concurrent: usize, max_idle_per_host: usize) -> Self {
+        Self {
+            max_idle_per_host,
+            idle_timeout_secs: 90,
+            max_concurrent_requests: max_concurrent,
+            tcp_keepalive_secs: 0,
+            connect_timeout_secs: 0,
+        }
+    }
+
+    /// 推荐配置：针对频繁请求优化连接复用
+    ///
+    /// - TCP keepalive 每 60s 探测一次，防止中间设备断开空闲连接
+    /// - 连接超时 10s，避免 DNS/网络问题阻塞过久
+    /// - 每 host 保留最多 8 个空闲连接
+    /// - 空闲连接 90s 后回收
+    pub fn recommended() -> Self {
+        Self {
+            max_idle_per_host: 8,
+            idle_timeout_secs: 90,
+            max_concurrent_requests: 0,
+            tcp_keepalive_secs: 60,
+            connect_timeout_secs: 10,
+        }
+    }
+}
+
+// ============================================================================
+// HTTP 客户端
+// ============================================================================
 
 /// HTTP客户端管理器
+///
+/// 持有懒加载的 reqwest `Client` 实例、环境变量管理器，
+/// 并提供连接池配置与并发控制能力。
+///
+/// ## Clone 语义
+///
+/// `HttpClient` 的 clone 开销极低：所有 clone 共享同一个底层
+/// `Arc<OnceLock<Client>>`（懒加载只执行一次）和同一个 `Semaphore`
+///（并发上限在所有 clone 之间共享）。
 pub struct HttpClient {
-    /// 默认 reqwest 客户端
-    client: Client,
+    /// 默认超时（秒），构造时设定，懒加载用
+    default_timeout_secs: u64,
+
+    /// 默认代理 URL（None = 无代理），构造时设定，懒加载用
+    default_proxy_url: Option<String>,
+
+    /// 懒加载的默认 reqwest 客户端
+    ///
+    /// `Arc` 保证所有 clone 共享同一实例，`OnceLock` 保证只构建一次。
+    /// 首次 `send_request` 时触发初始化。
+    /// 存储 `Result<Client, String>`：构建成功为 `Ok`，失败则缓存错误信息，
+    /// 后续调用直接返回相同错误。（String 用作 Err 变体以保证 Clone）
+    default_client: Arc<OnceLock<Result<Client, String>>>,
+
     /// 环境变量管理器（与 AppState 共享同一实例）
     env_manager: Arc<EnvironmentManager>,
+
     /// 自定义客户端缓存，按配置键索引
+    ///
+    /// 缓存那些 timeout / redirect / SSL 配置不同于默认值的 reqwest Client。
+    /// 避免为相同配置重复构建。
     custom_clients: Mutex<HashMap<ClientCacheKey, Client>>,
+
+    /// 连接池配置（控制 idle 连接数、超时等）
+    pool_config: PoolConfig,
+
+    /// 请求并发信号量
+    ///
+    /// `None` 表示不限制并发。`Some(Arc<Semaphore>)` 时，
+    /// 每次 `send_request` 需先获取许可，请求完成后自动释放。
+    request_semaphore: Option<Arc<Semaphore>>,
 }
 
 impl Clone for HttpClient {
     fn clone(&self) -> Self {
         Self {
-            client: self.client.clone(),
+            default_timeout_secs: self.default_timeout_secs,
+            default_proxy_url: self.default_proxy_url.clone(),
+            default_client: Arc::clone(&self.default_client),
             env_manager: Arc::clone(&self.env_manager),
+            // 每个 clone 拥有独立的 custom_clients 缓存
             custom_clients: Mutex::new(HashMap::new()),
+            pool_config: self.pool_config.clone(),
+            // 信号量在所有 clone 间共享（并发上限全局生效）
+            request_semaphore: self.request_semaphore.clone(),
         }
     }
 }
+
+// ============================================================================
+// 请求 / 响应 / 辅助类型
+// ============================================================================
 
 /// 请求设置
 #[derive(Debug, Clone)]
@@ -77,271 +222,6 @@ impl ClientCacheKey {
             follow_redirects: opts.follow_redirects,
             verify_ssl: opts.verify_ssl,
         }
-    }
-}
-
-impl HttpClient {
-    /// 创建新的HTTP客户端
-    pub fn new(env_manager: Arc<EnvironmentManager>) -> Result<Self> {
-        let client = Self::build_default_client(30, None)?;
-        Ok(Self {
-            client,
-            env_manager,
-            custom_clients: Mutex::new(HashMap::new()),
-        })
-    }
-
-    /// 创建带有自定义超时的HTTP客户端
-    pub fn with_timeout(timeout_secs: u64, env_manager: Arc<EnvironmentManager>) -> Result<Self> {
-        let client = Self::build_default_client(timeout_secs, None)?;
-        Ok(Self {
-            client,
-            env_manager,
-            custom_clients: Mutex::new(HashMap::new()),
-        })
-    }
-
-    /// 创建带有代理的HTTP客户端
-    pub fn with_proxy(proxy_url: &str, env_manager: Arc<EnvironmentManager>) -> Result<Self> {
-        let proxy = Proxy::all(proxy_url).context("代理URL无效")?;
-        let client = Self::build_default_client(30, Some(proxy))?;
-        Ok(Self {
-            client,
-            env_manager,
-            custom_clients: Mutex::new(HashMap::new()),
-        })
-    }
-
-    /// 构建默认客户端（可带代理）
-    fn build_default_client(timeout_secs: u64, proxy: Option<Proxy>) -> Result<Client> {
-        let mut builder = Client::builder()
-            .no_brotli()
-            .no_gzip()
-            .no_deflate()
-            .timeout(Duration::from_secs(timeout_secs));
-        if let Some(p) = proxy {
-            builder = builder.proxy(p);
-        }
-        builder.build().context("创建HTTP客户端失败")
-    }
-
-    /// 构建自定义配置的客户端（用于缓存）
-    fn build_custom_client(opts: &RequestOptions) -> Result<Client> {
-        let mut builder = Client::builder()
-            .no_brotli()
-            .no_gzip()
-            .no_deflate()
-            .timeout(Duration::from_secs(opts.timeout_secs))
-            .redirect(if opts.follow_redirects {
-                reqwest::redirect::Policy::default()
-            } else {
-                reqwest::redirect::Policy::none()
-            });
-        if !opts.verify_ssl {
-            builder = builder.danger_accept_invalid_certs(true);
-        }
-        builder.build().context("创建自定义HTTP客户端失败")
-    }
-
-    /// 发送HTTP请求
-    pub async fn send_request(&self, request: &HttpRequest) -> Result<HttpResponse> {
-        self.send_request_with_settings(request, RequestOptions::default()).await
-    }
-
-    /// 发送HTTP请求（带设置）
-    pub async fn send_request_with_settings(&self, request: &HttpRequest, options: RequestOptions) -> Result<HttpResponse> {
-        let start_time = Instant::now();
-
-        // 替换URL中的环境变量
-        let url = self.env_manager.replace_variables(&request.url);
-        log::debug!("=== HTTP请求详情 ===");
-        log::debug!("方法: {}", request.method);
-        log::debug!("原始URL: {}", request.url);
-        if request.url != url {
-            log::debug!("替换后URL: {}", url);
-        }
-
-        // 构建请求头（内部完成变量替换 + 日志）
-        let headers = self.build_headers(&request.headers)?;
-
-        // 替换请求体中的环境变量
-        let body = request.body.as_ref().map(|b| {
-            let replaced = self.env_manager.replace_variables(b);
-            if b != &replaced {
-                log::debug!("请求体已替换环境变量 (原始长度: {}, 替换后长度: {})", b.len(), replaced.len());
-            }
-            replaced
-        });
-
-        if let Some(ref body_content) = body {
-            if body_content.len() > 500 {
-                log::debug!("请求体: {}...(截断, 总长度: {})", &body_content[..500], body_content.len());
-            } else {
-                log::debug!("请求体: {}", body_content);
-            }
-        }
-        log::debug!("===================");
-
-        // 解析HTTP方法
-        let method = Method::try_from(request.method.to_uppercase().as_str())
-            .with_context(|| format!("无效的HTTP方法: {}", request.method))?;
-
-        // 根据设置选择或构建客户端（优先使用缓存）
-        let client = if options.timeout_secs != 30 || !options.follow_redirects || !options.verify_ssl {
-            let key = ClientCacheKey::from_options(&options);
-            let mut cache = self.custom_clients.lock().unwrap();
-            if let Some(cached) = cache.get(&key) {
-                log::debug!("使用缓存的自定义客户端");
-                cached.clone()
-            } else {
-                log::debug!("构建新的自定义客户端并缓存");
-                let new_client = Self::build_custom_client(&options)?;
-                cache.insert(key, new_client.clone());
-                new_client
-            }
-        } else {
-            self.client.clone()
-        };
-
-        // 构建请求
-        let has_multipart = !request.text_fields.is_empty() || !request.file_fields.is_empty();
-        let mut request_builder = client
-            .request(method, &url)
-            .headers(headers);
-
-        // 设置请求体：优先 multipart，其次普通 body
-        if has_multipart {
-            request_builder = request_builder.multipart(self.build_multipart(request)?);
-        } else if let Some(body_content) = body {
-            request_builder = request_builder.body(body_content);
-        }
-
-        let response = request_builder
-            .send()
-            .await
-            .context("请求发送失败")?;
-
-        let elapsed = start_time.elapsed();
-        let status = response.status().as_u16();
-        let response_headers: HashMap<String, String> = response
-            .headers()
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
-            .collect();
-
-        // 解析Set-Cookie头
-        let mut cookies = Vec::new();
-        for (name, value) in &response_headers {
-            if name.to_lowercase() == "set-cookie" {
-                if let Some(cookie) = Cookie::from_set_cookie_header(value) {
-                    cookies.push(cookie);
-                }
-            }
-        }
-
-        let body_bytes = response
-            .bytes()
-            .await
-            .context("读取响应体失败")?;
-
-        // 记录网络传输的压缩大小
-        let compressed_size = body_bytes.len() as i64;
-
-        // 如果是 gzip 压缩数据，先解压用于渲染
-        let is_gzip = body_bytes.len() >= 2 && body_bytes[0] == 0x1f && body_bytes[1] == 0x8b;
-        let body_text = if is_gzip {
-            let mut decoder = GzDecoder::new(&body_bytes[..]);
-            let mut decompressed = Vec::new();
-            match decoder.read_to_end(&mut decompressed) {
-                Ok(_) => String::from_utf8_lossy(&decompressed).to_string(),
-                Err(_) => String::from_utf8_lossy(&body_bytes).to_string(),
-            }
-        } else {
-            String::from_utf8_lossy(&body_bytes).to_string()
-        };
-
-        Ok(HttpResponse {
-            status,
-            headers: response_headers,
-            body: body_text,
-            time_ms: elapsed.as_millis() as i64,
-            size_bytes: compressed_size,
-            cookies,
-        })
-    }
-
-    /// 构建HTTP请求头
-    fn build_headers(&self, headers: &[(String, String)]) -> Result<HeaderMap> {
-        let mut header_map = HeaderMap::new();
-
-        // 仅声明 gzip 支持（手动解压只处理了 gzip，br/deflate 未实现）
-        if !headers.iter().any(|(k, _)| k.to_lowercase() == "accept-encoding") {
-            header_map.insert(ACCEPT_ENCODING, HeaderValue::from_static("gzip"));
-        }
-
-        log::debug!("请求头 ({} 项):", headers.len());
-        for (name, value) in headers {
-            // 替换头部值中的环境变量
-            let resolved = self.env_manager.replace_variables(value);
-
-            // 变量替换日志（仅此一处，避免重复正则匹配）
-            if *value != resolved {
-                log::debug!("  {}: {} -> {}", name, value, resolved);
-            } else {
-                log::debug!("  {}: {}", name, value);
-            }
-
-            let header_name = HeaderName::try_from(name.as_str())
-                .with_context(|| format!("无效的请求头名称: {}", name))?;
-            let header_value = HeaderValue::from_str(&resolved)
-                .with_context(|| format!("无效的请求头值: {}", resolved))?;
-
-            header_map.insert(header_name, header_value);
-        }
-
-        Ok(header_map)
-    }
-
-    /// 构建multipart表单
-    fn build_multipart(&self, request: &HttpRequest) -> Result<multipart::Form> {
-        log::debug!("构建multipart表单: text_fields={}, file_fields={}",
-            request.text_fields.len(), request.file_fields.len());
-
-        let mut form = multipart::Form::new();
-
-        // 添加文本字段
-        for (name, value) in &request.text_fields {
-            let value = self.env_manager.replace_variables(value);
-            log::debug!("添加文本字段: {}={}", name, value);
-            form = form.text(name.clone(), value);
-        }
-
-        // 添加文件字段
-        for file_field in &request.file_fields {
-            let file_path = &file_field.file_path;
-            log::debug!("添加文件字段: {} -> {}", file_field.field_name, file_path);
-            if std::path::Path::new(file_path).exists() {
-                let file_name = std::path::Path::new(file_path)
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "file".to_string());
-
-                // 读取文件内容
-                let file_content = std::fs::read(file_path)
-                    .map_err(|e| anyhow::anyhow!("无法读取文件 {}: {}", file_path, e))?;
-
-                let part = multipart::Part::bytes(file_content)
-                    .file_name(file_name)
-                    .mime_str(&file_field.content_type)
-                    .map_err(|e| anyhow::anyhow!("无法创建文件部分: {}", e))?;
-
-                form = form.part(file_field.field_name.clone(), part);
-            } else {
-                log::warn!("文件不存在: {}", file_path);
-            }
-        }
-
-        Ok(form)
     }
 }
 
@@ -560,11 +440,437 @@ impl HttpResponse {
     }
 }
 
+// ============================================================================
+// HttpClient 实现
+// ============================================================================
+
+impl HttpClient {
+    // ------------------------------------------------------------------
+    // 构造函数
+    // ------------------------------------------------------------------
+
+    /// 创建新的HTTP客户端（默认 30s 超时，无代理，懒加载）
+    ///
+    /// 注意：此方法不构建底层 reqwest `Client` —
+    /// 实际构建延迟到首次 [`send_request`] 调用。
+    pub fn new(env_manager: Arc<EnvironmentManager>) -> Result<Self> {
+        Ok(Self {
+            default_timeout_secs: 30,
+            default_proxy_url: None,
+            default_client: Arc::new(OnceLock::new()),
+            env_manager,
+            custom_clients: Mutex::new(HashMap::new()),
+            pool_config: PoolConfig::recommended(),
+            request_semaphore: None,
+        })
+    }
+
+    /// 创建带有自定义超时的HTTP客户端（懒加载）
+    pub fn with_timeout(timeout_secs: u64, env_manager: Arc<EnvironmentManager>) -> Result<Self> {
+        Ok(Self {
+            default_timeout_secs: timeout_secs,
+            default_proxy_url: None,
+            default_client: Arc::new(OnceLock::new()),
+            env_manager,
+            custom_clients: Mutex::new(HashMap::new()),
+            pool_config: PoolConfig::recommended(),
+            request_semaphore: None,
+        })
+    }
+
+    /// 创建带有代理的HTTP客户端（懒加载）
+    ///
+    /// 代理 URL 在此处记录，实际 Proxy 对象在首次请求时构建。
+    /// 若代理 URL 格式错误，错误将在 [`send_request`] 时返回。
+    pub fn with_proxy(proxy_url: &str, env_manager: Arc<EnvironmentManager>) -> Result<Self> {
+        Ok(Self {
+            default_timeout_secs: 30,
+            default_proxy_url: Some(proxy_url.to_string()),
+            default_client: Arc::new(OnceLock::new()),
+            env_manager,
+            custom_clients: Mutex::new(HashMap::new()),
+            pool_config: PoolConfig::recommended(),
+            request_semaphore: None,
+        })
+    }
+
+    /// 设置连接池与并发控制配置（构建器模式）
+    ///
+    /// # 示例
+    /// ```ignore
+    /// let client = HttpClient::new(env)?
+    ///     .with_pool_config(PoolConfig::with_concurrency_limit(10, 32));
+    /// ```
+    pub fn with_pool_config(mut self, config: PoolConfig) -> Self {
+        self.request_semaphore = if config.max_concurrent_requests > 0 {
+            Some(Arc::new(Semaphore::new(config.max_concurrent_requests)))
+        } else {
+            None
+        };
+        self.pool_config = config;
+        self
+    }
+
+    /// 获取当前连接池配置的只读引用
+    pub fn pool_config(&self) -> &PoolConfig {
+        &self.pool_config
+    }
+
+    // ------------------------------------------------------------------
+    // 公共 API：发送请求
+    // ------------------------------------------------------------------
+
+    /// 发送HTTP请求（使用默认设置）
+    pub async fn send_request(&self, request: &HttpRequest) -> Result<HttpResponse> {
+        self.send_request_with_settings(request, RequestOptions::default()).await
+    }
+
+    /// 发送HTTP请求（带设置）
+    ///
+    /// 首次调用时触发默认 reqwest `Client` 的懒加载构建。
+    /// 若配置了 `max_concurrent_requests > 0`，会先获取信号量许可。
+    pub async fn send_request_with_settings(
+        &self,
+        request: &HttpRequest,
+        options: RequestOptions,
+    ) -> Result<HttpResponse> {
+        // 1. 获取并发信号量许可（如果配置了限制）
+        let _permit = self.acquire_permit().await?;
+
+        let start_time = Instant::now();
+
+        // 2. 替换URL中的环境变量
+        let url = self.env_manager.replace_variables(&request.url);
+        log::debug!("=== HTTP请求详情 ===");
+        log::debug!("方法: {}", request.method);
+        log::debug!("原始URL: {}", request.url);
+        if request.url != url {
+            log::debug!("替换后URL: {}", url);
+        }
+
+        // 3. 构建请求头（内部完成变量替换 + 日志）
+        let headers = self.build_headers(&request.headers)?;
+
+        // 4. 替换请求体中的环境变量
+        let body = request.body.as_ref().map(|b| {
+            let replaced = self.env_manager.replace_variables(b);
+            if b != &replaced {
+                log::debug!(
+                    "请求体已替换环境变量 (原始长度: {}, 替换后长度: {})",
+                    b.len(),
+                    replaced.len()
+                );
+            }
+            replaced
+        });
+
+        if let Some(ref body_content) = body {
+            if body_content.len() > 500 {
+                log::debug!(
+                    "请求体: {}...(截断, 总长度: {})",
+                    &body_content[..500],
+                    body_content.len()
+                );
+            } else {
+                log::debug!("请求体: {}", body_content);
+            }
+        }
+        log::debug!("===================");
+
+        // 5. 解析HTTP方法
+        let method = Method::try_from(request.method.to_uppercase().as_str())
+            .with_context(|| format!("无效的HTTP方法: {}", request.method))?;
+
+        // 6. 选择或构建客户端（懒加载默认客户端，或使用缓存的自定义客户端）
+        let client = self.get_client_for_options(&options)?;
+
+        // 7. 构建请求
+        let has_multipart = !request.text_fields.is_empty() || !request.file_fields.is_empty();
+        let mut request_builder = client.request(method, &url).headers(headers);
+
+        if has_multipart {
+            request_builder = request_builder.multipart(self.build_multipart(request)?);
+        } else if let Some(body_content) = body {
+            request_builder = request_builder.body(body_content);
+        }
+
+        let response = request_builder.send().await.context("请求发送失败")?;
+
+        let elapsed = start_time.elapsed();
+        let status = response.status().as_u16();
+        let response_headers: HashMap<String, String> = response
+            .headers()
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+            .collect();
+
+        // 解析Set-Cookie头
+        let mut cookies = Vec::new();
+        for (name, value) in &response_headers {
+            if name.to_lowercase() == "set-cookie" {
+                if let Some(cookie) = Cookie::from_set_cookie_header(value) {
+                    cookies.push(cookie);
+                }
+            }
+        }
+
+        let body_bytes = response.bytes().await.context("读取响应体失败")?;
+
+        // 记录网络传输的压缩大小
+        let compressed_size = body_bytes.len() as i64;
+
+        // 如果是 gzip 压缩数据，先解压用于渲染
+        let is_gzip = body_bytes.len() >= 2 && body_bytes[0] == 0x1f && body_bytes[1] == 0x8b;
+        let body_text = if is_gzip {
+            let mut decoder = GzDecoder::new(&body_bytes[..]);
+            let mut decompressed = Vec::new();
+            match decoder.read_to_end(&mut decompressed) {
+                Ok(_) => String::from_utf8_lossy(&decompressed).to_string(),
+                Err(_) => String::from_utf8_lossy(&body_bytes).to_string(),
+            }
+        } else {
+            String::from_utf8_lossy(&body_bytes).to_string()
+        };
+
+        Ok(HttpResponse {
+            status,
+            headers: response_headers,
+            body: body_text,
+            time_ms: elapsed.as_millis() as i64,
+            size_bytes: compressed_size,
+            cookies,
+        })
+    }
+
+    // ------------------------------------------------------------------
+    // 内部方法
+    // ------------------------------------------------------------------
+
+    /// 获取并发信号量许可
+    ///
+    /// 若未配置 `max_concurrent_requests`（为 0），立即返回 `None`，
+    /// 不引入任何开销。
+    async fn acquire_permit(&self) -> Result<Option<tokio::sync::SemaphorePermit<'_>>> {
+        match &self.request_semaphore {
+            Some(sem) => {
+                let permit = sem
+                    .acquire()
+                    .await
+                    .map_err(|_| anyhow::anyhow!("请求并发信号量已关闭"))?;
+                Ok(Some(permit))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// 根据 RequestOptions 选择合适的 reqwest Client
+    ///
+    /// - 若 options 与默认配置一致 → 使用懒加载的默认 client
+    /// - 若 options 不同 → 从 custom_clients 缓存查找或新建
+    fn get_client_for_options(&self, options: &RequestOptions) -> Result<Client> {
+        let is_default = options.timeout_secs == self.default_timeout_secs
+            && options.follow_redirects
+            && options.verify_ssl;
+
+        if is_default {
+            self.get_or_init_default_client()
+        } else {
+            let key = ClientCacheKey::from_options(options);
+            let mut cache = self.custom_clients.lock().unwrap();
+            if let Some(cached) = cache.get(&key) {
+                log::debug!("使用缓存的自定义客户端");
+                Ok(cached.clone())
+            } else {
+                log::debug!("构建新的自定义客户端并缓存");
+                let new_client = Self::build_custom_client(options, &self.pool_config)?;
+                cache.insert(key, new_client.clone());
+                Ok(new_client)
+            }
+        }
+    }
+
+    /// 懒加载获取默认 reqwest Client
+    ///
+    /// 首次调用时构建 Client（包含 TLS 初始化、连接池配置），
+    /// 后续调用直接返回已缓存的实例。
+    /// 所有通过 `Clone` 派生的 `HttpClient` 共享同一个底层 Client。
+    fn get_or_init_default_client(&self) -> Result<Client> {
+        self.default_client
+            .get_or_init(|| {
+                log::info!(
+                    "懒加载: 构建默认 reqwest Client (timeout={}s, proxy={})",
+                    self.default_timeout_secs,
+                    self.default_proxy_url
+                        .as_deref()
+                        .unwrap_or("none")
+                );
+                Self::build_default_client(
+                    self.default_timeout_secs,
+                    self.default_proxy_url.as_deref(),
+                    &self.pool_config,
+                )
+                .map_err(|e| format!("{:#}", e))
+            })
+            .clone()
+            .map_err(|s| anyhow::anyhow!("{}", s))
+    }
+
+    /// 构建默认客户端
+    ///
+    /// 合并超时、代理、连接池配置，构造 reqwest `Client`。
+    fn build_default_client(
+        timeout_secs: u64,
+        proxy_url: Option<&str>,
+        pool_config: &PoolConfig,
+    ) -> Result<Client> {
+        let mut builder = Client::builder()
+            .no_brotli()
+            .no_gzip()
+            .no_deflate()
+            .timeout(Duration::from_secs(timeout_secs));
+
+        if let Some(url) = proxy_url {
+            let proxy = Proxy::all(url).context("代理URL无效")?;
+            builder = builder.proxy(proxy);
+        }
+
+        Self::apply_pool_config(&mut builder, pool_config);
+
+        builder.build().context("创建HTTP客户端失败")
+    }
+
+    /// 构建自定义配置的客户端（用于非默认 RequestOptions）
+    fn build_custom_client(opts: &RequestOptions, pool_config: &PoolConfig) -> Result<Client> {
+        let mut builder = Client::builder()
+            .no_brotli()
+            .no_gzip()
+            .no_deflate()
+            .timeout(Duration::from_secs(opts.timeout_secs))
+            .redirect(if opts.follow_redirects {
+                reqwest::redirect::Policy::default()
+            } else {
+                reqwest::redirect::Policy::none()
+            });
+
+        if !opts.verify_ssl {
+            builder = builder.danger_accept_invalid_certs(true);
+        }
+
+        Self::apply_pool_config(&mut builder, pool_config);
+
+        builder.build().context("创建自定义HTTP客户端失败")
+    }
+
+    /// 将 PoolConfig 应用到 ClientBuilder
+    fn apply_pool_config(builder: &mut reqwest::ClientBuilder, config: &PoolConfig) {
+        if config.max_idle_per_host > 0 {
+            *builder = std::mem::take(builder)
+                .pool_max_idle_per_host(config.max_idle_per_host);
+        }
+        if config.idle_timeout_secs > 0 {
+            let b = std::mem::take(builder);
+            *builder = b.pool_idle_timeout(Duration::from_secs(config.idle_timeout_secs));
+        }
+        if config.tcp_keepalive_secs > 0 {
+            let b = std::mem::take(builder);
+            *builder = b.tcp_keepalive(Some(Duration::from_secs(config.tcp_keepalive_secs)));
+        }
+        if config.connect_timeout_secs > 0 {
+            let b = std::mem::take(builder);
+            *builder = b.connect_timeout(Duration::from_secs(config.connect_timeout_secs));
+        }
+    }
+
+    /// 构建HTTP请求头
+    fn build_headers(&self, headers: &[(String, String)]) -> Result<HeaderMap> {
+        let mut header_map = HeaderMap::new();
+
+        // 仅声明 gzip 支持（手动解压只处理了 gzip，br/deflate 未实现）
+        if !headers.iter().any(|(k, _)| k.to_lowercase() == "accept-encoding") {
+            header_map.insert(ACCEPT_ENCODING, HeaderValue::from_static("gzip"));
+        }
+
+        log::debug!("请求头 ({} 项):", headers.len());
+        for (name, value) in headers {
+            // 替换头部值中的环境变量
+            let resolved = self.env_manager.replace_variables(value);
+
+            if *value != resolved {
+                log::debug!("  {}: {} -> {}", name, value, resolved);
+            } else {
+                log::debug!("  {}: {}", name, value);
+            }
+
+            let header_name = HeaderName::try_from(name.as_str())
+                .with_context(|| format!("无效的请求头名称: {}", name))?;
+            let header_value = HeaderValue::from_str(&resolved)
+                .with_context(|| format!("无效的请求头值: {}", resolved))?;
+
+            header_map.insert(header_name, header_value);
+        }
+
+        Ok(header_map)
+    }
+
+    /// 构建multipart表单
+    fn build_multipart(&self, request: &HttpRequest) -> Result<multipart::Form> {
+        log::debug!(
+            "构建multipart表单: text_fields={}, file_fields={}",
+            request.text_fields.len(),
+            request.file_fields.len()
+        );
+
+        let mut form = multipart::Form::new();
+
+        // 添加文本字段
+        for (name, value) in &request.text_fields {
+            let value = self.env_manager.replace_variables(value);
+            log::debug!("添加文本字段: {}={}", name, value);
+            form = form.text(name.clone(), value);
+        }
+
+        // 添加文件字段
+        for file_field in &request.file_fields {
+            let file_path = &file_field.file_path;
+            log::debug!("添加文件字段: {} -> {}", file_field.field_name, file_path);
+            if std::path::Path::new(file_path).exists() {
+                let file_name = std::path::Path::new(file_path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "file".to_string());
+
+                let file_content = std::fs::read(file_path)
+                    .map_err(|e| anyhow::anyhow!("无法读取文件 {}: {}", file_path, e))?;
+
+                let part = multipart::Part::bytes(file_content)
+                    .file_name(file_name)
+                    .mime_str(&file_field.content_type)
+                    .map_err(|e| anyhow::anyhow!("无法创建文件部分: {}", e))?;
+
+                form = form.part(file_field.field_name.clone(), part);
+            } else {
+                log::warn!("文件不存在: {}", file_path);
+            }
+        }
+
+        Ok(form)
+    }
+}
+
+// ============================================================================
+// JSON 格式化工具
+// ============================================================================
+
 /// 带折叠的 JSON 格式化
 pub fn format_json_folded(json_str: &str, max_depth: usize, indent_size: usize) -> String {
     let indent = |d: usize| " ".repeat(d * indent_size);
 
-    fn format_value(value: &serde_json::Value, current_depth: usize, max_depth: usize, indent_size: usize) -> String {
+    fn format_value(
+        value: &serde_json::Value,
+        current_depth: usize,
+        max_depth: usize,
+        indent_size: usize,
+    ) -> String {
         let ind = " ".repeat(current_depth * indent_size);
         let next_ind = " ".repeat((current_depth + 1) * indent_size);
 
@@ -579,7 +885,10 @@ pub fn format_json_folded(json_str: &str, max_depth: usize, indent_size: usize) 
                 let mut s = String::from("{\n");
                 for (i, (k, v)) in map.iter().enumerate() {
                     let comma = if i < map.len() - 1 { "," } else { "" };
-                    s.push_str(&format!("{next_ind}\"{k}\": {}", format_value(v, current_depth + 1, max_depth, indent_size)));
+                    s.push_str(&format!(
+                        "{next_ind}\"{k}\": {}",
+                        format_value(v, current_depth + 1, max_depth, indent_size)
+                    ));
                     s.push_str(comma);
                     s.push('\n');
                 }
@@ -597,7 +906,10 @@ pub fn format_json_folded(json_str: &str, max_depth: usize, indent_size: usize) 
                 let mut s = String::from("[\n");
                 for (i, v) in arr.iter().enumerate() {
                     let comma = if i < arr.len() - 1 { "," } else { "" };
-                    s.push_str(&format!("{next_ind}{}", format_value(v, current_depth + 1, max_depth, indent_size)));
+                    s.push_str(&format!(
+                        "{next_ind}{}",
+                        format_value(v, current_depth + 1, max_depth, indent_size)
+                    ));
                     s.push_str(comma);
                     s.push('\n');
                 }
@@ -634,6 +946,10 @@ pub fn format_json_folded(json_str: &str, max_depth: usize, indent_size: usize) 
         json_str.to_string()
     }
 }
+
+// ============================================================================
+// 测试
+// ============================================================================
 
 #[cfg(test)]
 mod tests {
@@ -712,6 +1028,94 @@ mod tests {
         assert!(formatted.contains("test"));
     }
 
+    // --- 懒加载测试 ---
+
+    #[test]
+    fn test_lazy_client_not_built_on_construction() {
+        let env_manager = Arc::new(create_mock_env_manager());
+        let client = HttpClient::new(env_manager).unwrap();
+        // 构造后 default_client OnceLock 应为空
+        assert!(client.default_client.get().is_none());
+    }
+
+    #[test]
+    fn test_lazy_client_built_on_first_request() {
+        let env_manager = Arc::new(create_mock_env_manager());
+        let client = HttpClient::new(env_manager).unwrap();
+        assert!(client.default_client.get().is_none());
+
+        // 触发懒加载（不实际发网络请求，仅验证 Client 被构建）
+        let result = client.get_or_init_default_client();
+        assert!(result.is_ok());
+        // OnceLock 现在包含 Ok(Client)
+        assert!(client.default_client.get().is_some());
+    }
+
+    #[test]
+    fn test_lazy_client_shared_across_clones() {
+        let env_manager = Arc::new(create_mock_env_manager());
+        let client1 = HttpClient::new(env_manager).unwrap();
+        let client2 = client1.clone();
+
+        // 在 clone 上触发懒加载
+        let _ = client2.get_or_init_default_client();
+
+        // 原始实例也应可见（OnceLock 内有值）
+        assert!(client1.default_client.get().is_some());
+        assert!(client2.default_client.get().is_some());
+    }
+
+    // --- 连接池配置测试 ---
+
+    #[test]
+    fn test_pool_config_default() {
+        let config = PoolConfig::default();
+        assert_eq!(config.max_idle_per_host, 0);
+        assert_eq!(config.idle_timeout_secs, 0);
+        assert_eq!(config.max_concurrent_requests, 0);
+    }
+
+    #[test]
+    fn test_pool_config_with_concurrency_limit() {
+        let config = PoolConfig::with_concurrency_limit(10, 32);
+        assert_eq!(config.max_concurrent_requests, 10);
+        assert_eq!(config.max_idle_per_host, 32);
+        assert_eq!(config.idle_timeout_secs, 90);
+    }
+
+    #[test]
+    fn test_with_pool_config_creates_semaphore() {
+        let env_manager = Arc::new(create_mock_env_manager());
+        let client = HttpClient::new(env_manager)
+            .unwrap()
+            .with_pool_config(PoolConfig::with_concurrency_limit(5, 10));
+
+        assert!(client.request_semaphore.is_some());
+        assert_eq!(client.pool_config.max_concurrent_requests, 5);
+    }
+
+    #[test]
+    fn test_pool_config_recommended() {
+        let config = PoolConfig::recommended();
+        assert_eq!(config.max_idle_per_host, 8);
+        assert_eq!(config.idle_timeout_secs, 90);
+        assert_eq!(config.max_concurrent_requests, 0);
+        assert_eq!(config.tcp_keepalive_secs, 60);
+        assert_eq!(config.connect_timeout_secs, 10);
+    }
+
+    #[test]
+    fn test_with_pool_config_no_semaphore_when_zero() {
+        let env_manager = Arc::new(create_mock_env_manager());
+        let client = HttpClient::new(env_manager)
+            .unwrap()
+            .with_pool_config(PoolConfig::default());
+
+        assert!(client.request_semaphore.is_none());
+    }
+
+    // --- 网络测试（需要外网） ---
+
     #[tokio::test]
     async fn test_send_simple_request() {
         let env_manager = Arc::new(create_mock_env_manager());
@@ -720,7 +1124,6 @@ mod tests {
         let request = HttpRequest::new(Method::GET, "https://httpbin.org/get".to_string());
         let response = client.send_request(&request).await;
 
-        // 由于网络问题可能失败，我们只检查不panic
         if response.is_ok() {
             let resp = response.unwrap();
             assert_eq!(resp.status, 200);

@@ -5,5 +5,8 @@
 mod client;
 mod curl_parser;
 
-pub use client::{Cookie, HttpClient, HttpRequest, HttpResponse, RequestOptions, FileField, format_json_folded};
-pub use curl_parser::{generate_curl, generate_code, parse_curl};
+pub use client::{
+    format_json_folded, Cookie, FileField, HttpClient, HttpRequest, HttpResponse, PoolConfig,
+    RequestOptions,
+};
+pub use curl_parser::{generate_code, generate_curl, parse_curl};

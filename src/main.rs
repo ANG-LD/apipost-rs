@@ -55,6 +55,19 @@ fn main() {
 
     info!("ApiPost-Rs 启动中, 日志文件: {:?}", log_path);
 
+    // 创建持久 tokio runtime（leak 到 'static，保证连接池存活至进程退出）
+    // 注意：不能依赖 application().run() 闭包的生命周期 — 闭包在初始化后即被丢弃，
+    // 但 event loop 仍在运行。通过 Box::leak 使 runtime 达到 'static 生命周期。
+    let rt: &'static tokio::runtime::Runtime = Box::leak(Box::new(
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(4)
+            .enable_all()
+            .build()
+            .expect("创建 tokio runtime 失败")
+    ));
+    let rt_handle = rt.handle().clone();
+    info!("tokio runtime 已创建 (leaked to static), worker_threads=4");
+
     // 加载应用配置
     let config = AppConfig::load().unwrap_or_default();
     info!("配置加载完成: 语言={}, 主题={}", config.general.language, config.general.theme);
@@ -72,8 +85,8 @@ fn main() {
         };
         gpui_component::theme::Theme::change(theme_mode, None, cx);
 
-        // 初始化应用状态
-        let app_state = AppState::try_new(config.clone())
+        // 初始化应用状态（传入持久 runtime handle）
+        let app_state = AppState::try_new(config.clone(), rt_handle)
             .expect("应用初始化失败");
 
         app_state.init();

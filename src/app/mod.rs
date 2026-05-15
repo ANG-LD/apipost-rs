@@ -25,6 +25,8 @@ pub struct AppState {
     pub config: AppConfig,
     /// 数据库
     pub db: Arc<Database>,
+    /// tokio runtime handle（持久化，避免每次请求重建 runtime）
+    pub rt_handle: tokio::runtime::Handle,
     /// 环境变量管理器（与 HttpClient 共享同一实例）
     pub env_manager: Arc<EnvironmentManager>,
     /// HTTP客户端
@@ -40,7 +42,7 @@ impl AppState {
     ///
     /// # 错误
     /// 返回数据库初始化失败或HTTP客户端创建失败
-    pub fn try_new(config: AppConfig) -> anyhow::Result<Self> {
+    pub fn try_new(config: AppConfig, rt_handle: tokio::runtime::Handle) -> anyhow::Result<Self> {
         // 初始化数据库
         let db = Arc::new(Database::new(&config.database.path)
             .map_err(|e| anyhow::anyhow!("数据库初始化失败: {}", e))?);
@@ -89,17 +91,12 @@ impl AppState {
         Ok(Self {
             config,
             db,
+            rt_handle,
             env_manager,
             http_client,
             i18n,
             theme_name,
         })
-    }
-
-    /// 创建新的应用状态（简化版）
-    #[deprecated(since = "0.1.0", note = "请使用 try_new")]
-    pub fn new(config: AppConfig) -> Self {
-        Self::try_new(config).expect("应用初始化失败")
     }
 
     /// 初始化应用

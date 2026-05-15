@@ -617,9 +617,12 @@ impl MainView {
                     let state = app_state.lock().unwrap();
                     state.http_client.clone()
                 }; // 立即释放 app_state 锁，避免阻塞 UI 渲染
+                let rt_handle = {
+                    let state = app_state.lock().unwrap();
+                    state.rt_handle.clone()
+                };
                 std::thread::spawn(move || {
-                    let rt = tokio::runtime::Runtime::new().unwrap();
-                    let result = rt.block_on(http_client.send_request(&request));
+                    let result = rt_handle.block_on(http_client.send_request(&request));
                     let _ = tx.send(result);
                 });
 
