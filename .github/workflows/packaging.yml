@@ -37,7 +37,7 @@ jobs:
         run: cargo build --release
 
       - name: Package deb
-        run: l
+        run: cargo packager -c packager.toml -f deb --release
 
       - uses: actions/upload-artifact@v4
         with:
