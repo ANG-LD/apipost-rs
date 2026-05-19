@@ -19,10 +19,17 @@ use gpui::SharedString;
 use std::sync::Arc;
 
 /// 应用状态
+///
+/// ## 所有权设计
+///
+/// - `config` 和 `i18n` 使用 `Arc` 包裹，使 `AppState::clone()` 仅增加引用计数，
+///   避免深拷贝配置数据和翻译字典（~10KB）。
+/// - `db`、`env_manager` 使用 `Arc` 在 `HttpClient` 和 `AppState` 间共享。
+/// - `HttpClient` 内部使用 `Arc<OnceLock<Client>>` 实现懒加载共享。
 #[derive(Clone)]
 pub struct AppState {
     /// 应用配置
-    pub config: AppConfig,
+    pub config: Arc<AppConfig>,
     /// 数据库
     pub db: Arc<Database>,
     /// tokio runtime handle（持久化，避免每次请求重建 runtime）
@@ -32,7 +39,7 @@ pub struct AppState {
     /// HTTP客户端
     pub http_client: HttpClient,
     /// 国际化管理器
-    pub i18n: I18nManager,
+    pub i18n: Arc<I18nManager>,
     /// 主题名称
     pub theme_name: SharedString,
 }
@@ -42,7 +49,7 @@ impl AppState {
     ///
     /// # 错误
     /// 返回数据库初始化失败或HTTP客户端创建失败
-    pub fn try_new(config: AppConfig, rt_handle: tokio::runtime::Handle) -> anyhow::Result<Self> {
+    pub fn try_new(config: Arc<AppConfig>, rt_handle: tokio::runtime::Handle) -> anyhow::Result<Self> {
         // 初始化数据库
         let db = Arc::new(Database::new(&config.database.path)
             .map_err(|e| anyhow::anyhow!("数据库初始化失败: {}", e))?);
@@ -83,7 +90,7 @@ impl AppState {
         };
 
         // 初始化国际化
-        let i18n = I18nManager::new(&config.general.language);
+        let i18n = Arc::new(I18nManager::new(&config.general.language));
 
         // 确定主题
         let theme_name: SharedString = config.general.theme.clone().into();
@@ -136,15 +143,25 @@ impl AppState {
         self.http_client.send_request_with_settings(&request, options).await.map_err(|e| e.to_string())
     }
 
+    /// 获取配置的只读引用
+    ///
+    /// 需要可变访问时，使用 `Arc::make_mut` 或直接修改后重新赋值。
+    pub fn config(&self) -> &AppConfig {
+        &self.config
+    }
+
     /// 切换主题
     pub fn toggle_theme(&mut self) {
-        let current = self.config.general.theme.as_str();
-        self.config.general.theme = match current {
+        let new_theme = match self.config.general.theme.as_str() {
             "light" => "dark".to_string(),
             "dark" => "light".to_string(),
             _ => "dark".to_string(),
         };
-        self.theme_name = self.config.general.theme.clone().into();
+        self.theme_name = new_theme.clone().into();
+        // 使用 Arc::make_mut 模式安全地修改共享配置
+        if let Some(config) = Arc::get_mut(&mut self.config) {
+            config.general.theme = new_theme;
+        }
         if let Err(e) = self.config.save() {
             log::error!("保存配置失败: {}", e);
         }
@@ -152,8 +169,13 @@ impl AppState {
 
     /// 设置主题
     pub fn set_theme(&mut self, theme: &str) {
-        self.config.general.theme = theme.to_string();
-        self.theme_name = self.config.general.theme.clone().into();
+        let new_theme = theme.to_string();
+        self.theme_name = new_theme.clone().into();
+        if let Some(config) = Arc::get_mut(&mut self.config) {
+            config.general.theme = new_theme;
+        } else {
+            log::warn!("无法修改配置：config 被多处共享，主题未持久化");
+        }
         if let Err(e) = self.config.save() {
             log::error!("保存配置失败: {}", e);
         }
@@ -161,8 +183,10 @@ impl AppState {
 
     /// 切换语言
     pub fn switch_language(&mut self, language: &str) {
-        self.config.general.language = language.to_string();
-        self.i18n = I18nManager::new(language);
+        if let Some(config) = Arc::get_mut(&mut self.config) {
+            config.general.language = language.to_string();
+        }
+        self.i18n = Arc::new(I18nManager::new(language));
         if let Err(e) = self.config.save() {
             log::error!("保存配置失败: {}", e);
         }

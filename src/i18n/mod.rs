@@ -3,14 +3,15 @@
 //! 支持中文和英文界面切换
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// 国际化管理器
 #[derive(Clone)]
 pub struct I18nManager {
     /// 当前语言
     language: String,
-    /// 翻译字典
-    translations: HashMap<String, String>,
+    /// 翻译字典（Arc 共享，Clone 零分配）
+    translations: Arc<HashMap<String, String>>,
 }
 
 impl I18nManager {
@@ -23,7 +24,7 @@ impl I18nManager {
 
         Self {
             language: language.to_string(),
-            translations,
+            translations: Arc::new(translations),
         }
     }
 
@@ -43,10 +44,10 @@ impl I18nManager {
     /// 设置语言
     pub fn set_language(&mut self, language: &str) {
         self.language = language.to_string();
-        self.translations = match language {
+        self.translations = Arc::new(match language {
             "en-US" | "en" => Self::english(),
             _ => Self::chinese(),
-        };
+        });
     }
 
     /// 中文翻译字典

@@ -547,7 +547,6 @@ impl MainView {
             .collect::<Vec<_>>()
             .join("\n");
         let body = self.body_state.to_body(cx);
-        let body_for_history = body.clone();
         let resolved_url = self.app_state.lock().unwrap().env_manager.replace_variables(&self.url);
         let app_state = self.app_state.clone();
 
@@ -597,15 +596,15 @@ impl MainView {
                     })
                     .collect();
                 let body_for_history = body.clone();
-                let all_headers = all_headers.clone();
-                let method = method.clone();
-                let url = url.clone();
+                // 为 spawn_in 异步闭包克隆需要的值（其余直接 move 到 request 中）
+                let method_for_history = method.clone();
+                let url_for_history = url.clone();
                 let app_state = app_state.clone();
 
                 let request = HttpRequest {
-                    method: method.clone(),
+                    method,         // move（on_next_frame 捕获的 method）
                     url: full_url,
-                    headers: all_headers.clone(),
+                    headers: all_headers,  // move（不再 clone）
                     body,
                     content_type,
                     text_fields,
@@ -642,8 +641,8 @@ impl MainView {
                         match result {
                             Ok(response) => {
                                 let history_entry = CreateHistoryEntry {
-                                    method: method.clone(),
-                                    url: url.clone(),
+                                    method: method_for_history,
+                                    url: url_for_history,
                                     headers: Some(headers_text_for_history),
                                     body: body_for_history,
                                     response_status: Some(response.status as i32),
@@ -1933,8 +1932,9 @@ fn settings_popover(
                     toggle_switch("auto-save", auto_save, theme, cx,
                         |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
                             let new_val = !this.app_state.lock().unwrap().config.general.auto_save;
-                            this.app_state.lock().unwrap().config.general.auto_save = new_val;
-                            let _ = this.app_state.lock().unwrap().config.save();
+                            let mut state = this.app_state.lock().unwrap();
+                            Arc::make_mut(&mut state.config).general.auto_save = new_val;
+                            let _ = state.config.save();
                             cx.notify();
                         },
                     ),
@@ -1955,8 +1955,9 @@ fn settings_popover(
                     toggle_switch("proxy-enabled", proxy_enabled, theme, cx,
                         |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
                             let new_val = !this.app_state.lock().unwrap().config.proxy.enabled;
-                            this.app_state.lock().unwrap().config.proxy.enabled = new_val;
-                            let _ = this.app_state.lock().unwrap().config.save();
+                            let mut state = this.app_state.lock().unwrap();
+                            Arc::make_mut(&mut state.config).proxy.enabled = new_val;
+                            let _ = state.config.save();
                             cx.notify();
                         },
                     ),

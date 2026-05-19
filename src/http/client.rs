@@ -151,7 +151,7 @@ pub struct HttpClient {
     ///
     /// 缓存那些 timeout / redirect / SSL 配置不同于默认值的 reqwest Client。
     /// 避免为相同配置重复构建。
-    custom_clients: Mutex<HashMap<ClientCacheKey, Client>>,
+    custom_clients: Arc<Mutex<HashMap<ClientCacheKey, Client>>>,
 
     /// 连接池配置（控制 idle 连接数、超时等）
     pool_config: PoolConfig,
@@ -170,8 +170,8 @@ impl Clone for HttpClient {
             default_proxy_url: self.default_proxy_url.clone(),
             default_client: Arc::clone(&self.default_client),
             env_manager: Arc::clone(&self.env_manager),
-            // 每个 clone 拥有独立的 custom_clients 缓存
-            custom_clients: Mutex::new(HashMap::new()),
+            // 所有 clone 共享同一份 custom_clients 缓存
+            custom_clients: Arc::clone(&self.custom_clients),
             pool_config: self.pool_config.clone(),
             // 信号量在所有 clone 间共享（并发上限全局生效）
             request_semaphore: self.request_semaphore.clone(),
@@ -459,7 +459,7 @@ impl HttpClient {
             default_proxy_url: None,
             default_client: Arc::new(OnceLock::new()),
             env_manager,
-            custom_clients: Mutex::new(HashMap::new()),
+            custom_clients: Arc::new(Mutex::new(HashMap::new())),
             pool_config: PoolConfig::recommended(),
             request_semaphore: None,
         })
@@ -472,7 +472,7 @@ impl HttpClient {
             default_proxy_url: None,
             default_client: Arc::new(OnceLock::new()),
             env_manager,
-            custom_clients: Mutex::new(HashMap::new()),
+            custom_clients: Arc::new(Mutex::new(HashMap::new())),
             pool_config: PoolConfig::recommended(),
             request_semaphore: None,
         })
@@ -488,7 +488,7 @@ impl HttpClient {
             default_proxy_url: Some(proxy_url.to_string()),
             default_client: Arc::new(OnceLock::new()),
             env_manager,
-            custom_clients: Mutex::new(HashMap::new()),
+            custom_clients: Arc::new(Mutex::new(HashMap::new())),
             pool_config: PoolConfig::recommended(),
             request_semaphore: None,
         })

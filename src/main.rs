@@ -71,6 +71,8 @@ fn main() {
     // 加载应用配置
     let config = AppConfig::load().unwrap_or_default();
     info!("配置加载完成: 语言={}, 主题={}", config.general.language, config.general.theme);
+    // 使用 Arc 包裹配置，使 AppState::clone() 仅增加引用计数
+    let config = Arc::new(config);
 
     // 构建并运行应用
     application().with_assets(Assets).run(move |cx: &mut App| {
@@ -85,8 +87,8 @@ fn main() {
         };
         gpui_component::theme::Theme::change(theme_mode, None, cx);
 
-        // 初始化应用状态（传入持久 runtime handle）
-        let app_state = AppState::try_new(config.clone(), rt_handle)
+        // 初始化应用状态（传入持久 runtime handle，config 所有权移入 AppState）
+        let app_state = AppState::try_new(config, rt_handle)
             .expect("应用初始化失败");
 
         app_state.init();
