@@ -614,22 +614,41 @@ impl HttpClient {
             }
         }
 
+        // 读取原始响应体（reqwest 禁用自动解压，返回原始压缩数据）
         let body_bytes = response.bytes().await.context("读取响应体失败")?;
+        // body_bytes.len() 即为网络传输的压缩大小
+        let size_bytes = body_bytes.len() as i64;
 
-        // 记录网络传输的压缩大小
-        let compressed_size = body_bytes.len() as i64;
-
-        // 如果是 gzip 压缩数据，先解压用于渲染
-        let is_gzip = body_bytes.len() >= 2 && body_bytes[0] == 0x1f && body_bytes[1] == 0x8b;
-        let body_text = if is_gzip {
-            let mut decoder = GzDecoder::new(&body_bytes[..]);
-            let mut decompressed = Vec::new();
-            match decoder.read_to_end(&mut decompressed) {
-                Ok(_) => String::from_utf8_lossy(&decompressed).to_string(),
-                Err(_) => String::from_utf8_lossy(&body_bytes).to_string(),
+        // 根据 Content-Encoding 响应头解压
+        let content_encoding = response_headers
+            .get("content-encoding")
+            .map(|v| v.to_lowercase());
+        let body_text = match content_encoding.as_deref() {
+            Some("gzip") | Some("x-gzip") => {
+                let mut d = GzDecoder::new(&body_bytes[..]);
+                let mut decompressed = Vec::new();
+                d.read_to_end(&mut decompressed)
+                    .map(|_| String::from_utf8_lossy(&decompressed).to_string())
+                    .unwrap_or_else(|_| String::from_utf8_lossy(&body_bytes).to_string())
             }
-        } else {
-            String::from_utf8_lossy(&body_bytes).to_string()
+            Some("br") => {
+                let mut decompressed = Vec::new();
+                brotli::Decompressor::new(&body_bytes[..], 4096)
+                    .read_to_end(&mut decompressed)
+                    .map(|_| String::from_utf8_lossy(&decompressed).to_string())
+                    .unwrap_or_else(|_| String::from_utf8_lossy(&body_bytes).to_string())
+            }
+            Some("deflate") => {
+                let mut d = flate2::read::ZlibDecoder::new(&body_bytes[..]);
+                let mut decompressed = Vec::new();
+                d.read_to_end(&mut decompressed)
+                    .map(|_| String::from_utf8_lossy(&decompressed).to_string())
+                    .unwrap_or_else(|_| String::from_utf8_lossy(&body_bytes).to_string())
+            }
+            _ => {
+                // 无压缩或未知编码，直接使用原始字节
+                String::from_utf8_lossy(&body_bytes).to_string()
+            }
         };
 
         Ok(HttpResponse {
@@ -637,7 +656,7 @@ impl HttpClient {
             headers: response_headers,
             body: body_text,
             time_ms: elapsed.as_millis() as i64,
-            size_bytes: compressed_size,
+            size_bytes,
             cookies,
         })
     }
@@ -785,9 +804,12 @@ impl HttpClient {
     fn build_headers(&self, headers: &[(String, String)]) -> Result<HeaderMap> {
         let mut header_map = HeaderMap::new();
 
-        // 仅声明 gzip 支持（手动解压只处理了 gzip，br/deflate 未实现）
+        // 声明支持的压缩编码（reqwest 已禁用自动解压，手动处理）
         if !headers.iter().any(|(k, _)| k.to_lowercase() == "accept-encoding") {
-            header_map.insert(ACCEPT_ENCODING, HeaderValue::from_static("gzip"));
+            header_map.insert(
+                ACCEPT_ENCODING,
+                HeaderValue::from_static("gzip, br, deflate"),
+            );
         }
 
         log::debug!("请求头 ({} 项):", headers.len());
