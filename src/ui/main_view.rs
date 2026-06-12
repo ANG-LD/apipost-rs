@@ -8,7 +8,7 @@ use crate::http::HttpRequest;
 use crate::app::history::CreateHistoryEntry;
 use crate::ui::{
     count_lines, json_editor, ApiKeyLocation, AuthState, AuthType, BodyState, BodyType,
-    HeaderEntry, RawFormat, RequestSettings, ScriptState,
+    FormDataParamType, HeaderEntry, RawFormat, RequestSettings, ScriptState,
     SettingsInputs, Theme,
 };
 use crate::ui::dialogs::{EnvDialogState, FolderDialogState, MoveDialogState, render_env_dialog_overlay, render_folder_dialog_overlay, render_move_dialog_overlay};
@@ -20,7 +20,7 @@ use gpui::prelude::*;
 use gpui::*;
 use gpui::InteractiveElement;
 use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_component::select::{Select, SelectState};
+use gpui_component::select::{Select, SelectEvent, SelectState};
 use gpui_component::button::Button;
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::scroll::Scrollable;
@@ -63,6 +63,61 @@ pub struct RequestTab {
     pub method: String,
     pub url: String,
     pub name: String,
+    pub tab_state: TabState,
+}
+
+/// 每个标签页的完整状态快照（纯数据，不含 Entity 引用）
+#[derive(Clone)]
+pub struct TabState {
+    pub body_type: BodyType,
+    pub raw_format: RawFormat,
+    pub raw_json: String,
+    pub raw_xml: String,
+    pub raw_text: String,
+    pub raw_html: String,
+    pub headers: Vec<(String, String, bool)>,
+    pub params: Vec<(String, String, bool)>,
+    pub auth_type_index: usize,
+    pub bearer_token: String,
+    pub basic_username: String,
+    pub basic_password: String,
+    pub api_key_name: String,
+    pub api_key_value: String,
+    pub api_key_location: ApiKeyLocation,
+    pub settings: RequestSettings,
+    pub response: Option<HttpResponse>,
+    pub response_raw_format: RawFormat,
+    pub builder_tab: BuilderTab,
+    pub timeout_secs: String,
+    pub retry_count: String,
+}
+
+impl Default for TabState {
+    fn default() -> Self {
+        Self {
+            body_type: BodyType::None,
+            raw_format: RawFormat::Json,
+            raw_json: r#"{"key": "value"}"#.to_string(),
+            raw_xml: r#"<root></root>"#.to_string(),
+            raw_text: String::new(),
+            raw_html: String::new(),
+            headers: Vec::new(),
+            params: Vec::new(),
+            auth_type_index: 0,
+            bearer_token: String::new(),
+            basic_username: String::new(),
+            basic_password: String::new(),
+            api_key_name: String::new(),
+            api_key_value: String::new(),
+            api_key_location: ApiKeyLocation::Header,
+            settings: RequestSettings::default(),
+            response: None,
+            response_raw_format: RawFormat::Json,
+            builder_tab: BuilderTab::Params,
+            timeout_secs: "30".to_string(),
+            retry_count: "0".to_string(),
+        }
+    }
 }
 
 /// 请求构造器标签页
@@ -151,6 +206,7 @@ pub struct MainView {
     pub(crate) _url_change_sub: gpui::Subscription,
     pub(crate) _param_input_subs: Vec<gpui::Subscription>,
     pub(crate) _header_subs: Vec<gpui::Subscription>,
+    pub(crate) _form_data_type_subs: Vec<gpui::Subscription>,
     pub(crate) method_select: Entity<SelectState<Vec<gpui::SharedString>>>,
     pub(crate) builder_tab: BuilderTab,
     pub(crate) params: Vec<ParamEntry>,
@@ -437,6 +493,7 @@ impl MainView {
                 method: "GET".to_string(),
                 url: String::new(),
                 name: default_tab_name,
+                tab_state: TabState::default(),
             }],
             active_tab: 0,
             response: None,
@@ -475,6 +532,7 @@ impl MainView {
             _url_change_sub,
             _param_input_subs: Vec::new(),
             _header_subs: Vec::new(),
+            _form_data_type_subs: Vec::new(),
             method_select,
             builder_tab: BuilderTab::Params,
             params,
@@ -956,11 +1014,13 @@ impl MainView {
     /// 添加 form-data 条目
     pub fn add_form_data_entry(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.body_state.add_form_data_entry(window, cx);
+        self.rebuild_form_data_type_subscriptions(window, cx);
     }
 
     /// 删除 form-data 条目
-    pub fn remove_form_data_entry(&mut self, index: usize) {
+    pub fn remove_form_data_entry(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.body_state.remove_form_data_entry(index);
+        self.rebuild_form_data_type_subscriptions(window, cx);
     }
 
     /// 切换 form-data 条目启用状态
@@ -1146,6 +1206,28 @@ impl MainView {
         }
     }
 
+    /// 重建所有 form-data 条目的类型选择订阅
+    pub(crate) fn rebuild_form_data_type_subscriptions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self._form_data_type_subs.clear();
+        for (idx, entry) in self.body_state.form_data.iter().enumerate() {
+            let type_select = entry.type_select.clone();
+            let sub = cx.subscribe_in(&type_select, window, move |this, _state, event, _window, cx| {
+                if let SelectEvent::Confirm(Some(value)) = event {
+                    let param_type = match value.as_ref() {
+                        "Text" => FormDataParamType::Text,
+                        "Boolean" => FormDataParamType::Boolean,
+                        "Number" => FormDataParamType::Number,
+                        "File" => FormDataParamType::File,
+                        "Array" => FormDataParamType::Array,
+                        _ => return,
+                    };
+                    this.set_form_data_param_type(idx, param_type, _window, cx);
+                }
+            });
+            self._form_data_type_subs.push(sub);
+        }
+    }
+
     /// 根据 Content-Type header 自动切换 Body 类型
     pub(crate) fn auto_detect_body_type_from_headers(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let content_type = self.headers.iter().find_map(|h| {
@@ -1294,6 +1376,7 @@ impl MainView {
             method: "GET".to_string(),
             url: String::new(),
             name: self.t("sidebar.new_request"),
+            tab_state: TabState::default(),
         });
         let new_idx = self.request_tabs.len() - 1;
         self.active_tab = new_idx;
@@ -1352,21 +1435,61 @@ impl MainView {
 
     /// 将当前表单的 URL / 方法写回当前标签元数据
     fn save_current_tab_meta(&mut self, cx: &mut Context<Self>) {
-        if self.active_tab < self.request_tabs.len() {
-            let url = self.url_input.read(cx).value().to_string();
-            let method = self.method_select.read(cx)
-                .selected_value()
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "GET".to_string());
-            let short = if url.len() > 30 { format!("{}…", &url[..30]) } else { url.clone() };
-            self.request_tabs[self.active_tab].url = url;
-            self.request_tabs[self.active_tab].method = method;
-            self.request_tabs[self.active_tab].name = if short.is_empty() {
-                self.t("sidebar.new_request")
-            } else {
-                short
-            };
+        if self.active_tab >= self.request_tabs.len() {
+            return;
         }
+        let url = self.url_input.read(cx).value().to_string();
+        let method = self.method_select.read(cx)
+            .selected_value()
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "GET".to_string());
+        let short = if url.len() > 30 { format!("{}…", &url[..30]) } else { url.clone() };
+        self.request_tabs[self.active_tab].url = url;
+        self.request_tabs[self.active_tab].method = method;
+        self.request_tabs[self.active_tab].name = if short.is_empty() {
+            self.t("sidebar.new_request")
+        } else {
+            short
+        };
+
+        // 提取认证状态数据
+        let (auth_type_index, bearer_token, basic_username, basic_password, api_key_name, api_key_value, api_key_location) =
+            match &self.auth_state {
+                AuthState::NoAuth => (0, String::new(), String::new(), String::new(), String::new(), String::new(), ApiKeyLocation::Header),
+                AuthState::Bearer(a) => (1, a.token.read(cx).value().to_string(), String::new(), String::new(), String::new(), String::new(), ApiKeyLocation::Header),
+                AuthState::Basic(a) => (2, String::new(), a.username.read(cx).value().to_string(), a.password.read(cx).value().to_string(), String::new(), String::new(), ApiKeyLocation::Header),
+                AuthState::ApiKey(a) => (3, String::new(), String::new(), String::new(), a.key.read(cx).value().to_string(), a.value.read(cx).value().to_string(), a.location_value),
+            };
+
+        // 保存完整标签状态
+        let state = TabState {
+            body_type: self.body_state.body_type,
+            raw_format: self.body_state.raw_format,
+            raw_json: self.body_state.raw_content.read(cx).value().to_string(),
+            raw_xml: self.body_state.raw_content_xml.read(cx).value().to_string(),
+            raw_text: self.body_state.raw_content_text.read(cx).value().to_string(),
+            raw_html: self.body_state.raw_content_html.read(cx).value().to_string(),
+            headers: self.headers.iter().map(|h| {
+                (h.key.read(cx).value().to_string(), h.value.read(cx).value().to_string(), h.enabled)
+            }).collect(),
+            params: self.params.iter().map(|p| {
+                (p.key.read(cx).value().to_string(), p.value.read(cx).value().to_string(), p.enabled)
+            }).collect(),
+            auth_type_index,
+            bearer_token,
+            basic_username,
+            basic_password,
+            api_key_name,
+            api_key_value,
+            api_key_location,
+            settings: self.settings.clone(),
+            response: self.response.clone(),
+            response_raw_format: self.response_raw_format,
+            builder_tab: self.builder_tab,
+            timeout_secs: self.settings_inputs.timeout_input.read(cx).value().to_string(),
+            retry_count: self.settings_inputs.retry_input.read(cx).value().to_string(),
+        };
+        self.request_tabs[self.active_tab].tab_state = state;
     }
 
     /// 将标签元数据加载到表单控件
@@ -1374,12 +1497,23 @@ impl MainView {
         self.method = tab.method.clone();
         self.url = tab.url.clone();
         self.params.clear();
-        self.response = None;
+        self.headers.clear();
         self.error_message = None;
+        self.response_header_inputs.clear();
 
+        // 先清除订阅，防止 set_value 触发 Change 事件导致错误的同步
+        self._param_input_subs.clear();
+        self._header_subs.clear();
+
+        let state = &tab.tab_state;
+
+        // 恢复响应
+        self.response = state.response.clone();
+        self.response_raw_format = state.response_raw_format;
+
+        // URL 和方法
         let url = tab.url.clone();
         let method = tab.method.clone();
-
         let method_idx = ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]
             .iter()
             .position(|&m| m == method.to_uppercase().as_str())
@@ -1393,6 +1527,121 @@ impl MainView {
             state.set_selected_index(Some(IndexPath::new(method_idx)), window, cx);
         });
         self.is_importing_curl = false;
+
+        // 恢复 Body 状态
+        self.body_state.body_type = state.body_type;
+        self.body_state.raw_format = state.raw_format;
+        self.body_state.raw_content.update(cx, |s, cx| {
+            s.set_value(&state.raw_json, window, cx);
+        });
+        self.body_state.raw_content_xml.update(cx, |s, cx| {
+            s.set_value(&state.raw_xml, window, cx);
+        });
+        self.body_state.raw_content_text.update(cx, |s, cx| {
+            s.set_value(&state.raw_text, window, cx);
+        });
+        self.body_state.raw_content_html.update(cx, |s, cx| {
+            s.set_value(&state.raw_html, window, cx);
+        });
+        self.body_type_select.update(cx, |s, cx| {
+            s.set_selected_index(Some(IndexPath::new(state.body_type.to_index())), window, cx);
+        });
+        self.raw_format_select.update(cx, |s, cx| {
+            s.set_selected_index(Some(IndexPath::new(state.raw_format.to_index())), window, cx);
+        });
+
+        // 恢复 Params
+        for (key, value, enabled) in &state.params {
+            let key_input = cx.new(|cx| InputState::new(window, cx).default_value(key));
+            let value_input = cx.new(|cx| InputState::new(window, cx).default_value(value));
+            self.params.push(ParamEntry { key: key_input, value: value_input, enabled: *enabled });
+        }
+        self.rebuild_param_subscriptions(window, cx);
+
+        // 恢复 Headers
+        for (key, value, enabled) in &state.headers {
+            let key_input = cx.new(|cx| InputState::new(window, cx).default_value(key));
+            let value_input = cx.new(|cx| InputState::new(window, cx).default_value(value));
+            self.headers.push(HeaderEntry { key: key_input, value: value_input, enabled: *enabled });
+        }
+        self.rebuild_header_subscriptions(window, cx);
+
+        // 恢复 Auth 状态
+        self.auth_state = match state.auth_type_index {
+            1 => AuthState::Bearer(crate::ui::BearerTokenAuthData {
+                token: cx.new(|cx| InputState::new(window, cx).default_value(&state.bearer_token)),
+            }),
+            2 => AuthState::Basic(crate::ui::BasicAuthData {
+                username: cx.new(|cx| InputState::new(window, cx).default_value(&state.basic_username)),
+                password: cx.new(|cx| InputState::new(window, cx).default_value(&state.basic_password)),
+            }),
+            3 => AuthState::ApiKey(crate::ui::ApiKeyAuthData {
+                key: cx.new(|cx| InputState::new(window, cx).default_value(&state.api_key_name)),
+                value: cx.new(|cx| InputState::new(window, cx).default_value(&state.api_key_value)),
+                location: cx.new(|cx| {
+                    let items = ApiKeyLocation::all();
+                    SelectState::new(items, Some(IndexPath::new(state.api_key_location.to_index())), window, cx)
+                }),
+                location_value: state.api_key_location,
+            }),
+            _ => AuthState::NoAuth,
+        };
+        self.auth_type_select.update(cx, |s, cx| {
+            s.set_selected_index(Some(IndexPath::new(state.auth_type_index)), window, cx);
+        });
+
+        // 恢复设置
+        self.settings = state.settings.clone();
+        self.settings_inputs.timeout_input.update(cx, |s, cx| {
+            s.set_value(&state.timeout_secs, window, cx);
+        });
+        self.settings_inputs.retry_input.update(cx, |s, cx| {
+            s.set_value(&state.retry_count, window, cx);
+        });
+
+        // 恢复构建器标签
+        self.builder_tab = state.builder_tab;
+
+        // 恢复响应体展示
+        if let Some(ref resp) = self.response {
+            let json_body = RawFormat::Json.format_body(&resp.body);
+            let resp_body = resp.body.clone();
+            let resp_headers = resp.headers.clone();
+            self.response_input.update(cx, |s, cx| {
+                s.set_value(&json_body, window, cx);
+            });
+            self.response_xml_input.update(cx, |s, cx| {
+                s.set_value(&resp_body, window, cx);
+            });
+            self.response_text_input.update(cx, |s, cx| {
+                s.set_value(&resp_body, window, cx);
+            });
+            self.response_html_input.update(cx, |s, cx| {
+                s.set_value(&resp_body, window, cx);
+            });
+            self.rebuild_response_header_inputs(&resp_headers, window, cx);
+        } else {
+            self.response_input.update(cx, |s, cx| {
+                s.set_value("", window, cx);
+            });
+            self.response_xml_input.update(cx, |s, cx| {
+                s.set_value("", window, cx);
+            });
+            self.response_text_input.update(cx, |s, cx| {
+                s.set_value("", window, cx);
+            });
+            self.response_html_input.update(cx, |s, cx| {
+                s.set_value("", window, cx);
+            });
+        }
+
+        // 恢复响应 Raw 格式选择器
+        self.response_raw_format_select.update(cx, |s, cx| {
+            s.set_selected_index(Some(IndexPath::new(state.response_raw_format.to_index())), window, cx);
+        });
+
+        // 同步 last_synced_url
+        self.last_synced_url = self.url_input.read(cx).value().to_string();
 
         cx.notify();
     }

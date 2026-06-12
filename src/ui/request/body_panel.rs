@@ -5,6 +5,7 @@ use crate::ui::themes::Theme;
 use gpui::*;
 use gpui_component::button::Button;
 use gpui_component::input::Input;
+use gpui_component::select::Select;
 use gpui_component::{IconName, Sizable, StyledExt};
 
 pub fn render_body_panel(
@@ -356,8 +357,6 @@ fn render_key_value_editor(
                         }
                         crate::ui::body::FormDataValue::File(_, _) => None,
                     };
-                    let param_type_copy = entry.param_type;
-
                     div()
                         .mt_1()
                         .flex()
@@ -402,7 +401,7 @@ fn render_key_value_editor(
                                 div().flex_1().child(
                                     Input::new(&entry.key)
                                         .small()
-                                        .h(px(32.0))
+                                        .h(px(28.0))
                                         .bg(theme.code_background)
                                         .border_1()
                                         .border_color(theme.border)
@@ -414,71 +413,91 @@ fn render_key_value_editor(
                                 children.push(
                                     div()
                                         .w(px(90.0))
+                                        .child(
+                                            Select::new(&entry.type_select)
+                                                .small()
+                                                .h(px(28.0)),
+                                        ),
+                                );
+                            }
+
+                            if entry.param_type == FormDataParamType::Boolean {
+                                let val_entity =
+                                    entry.value.get_input_entity();
+                                let is_true = val_entity
+                                    .read(cx)
+                                    .value()
+                                    .to_string()
+                                    == "true";
+                                let toggle_entity = val_entity.clone();
+                                children.push(
+                                    div()
+                                        .flex_1()
                                         .h(px(28.0))
                                         .flex()
                                         .items_center()
                                         .justify_center()
-                                        .cursor_pointer()
                                         .rounded_sm()
-                                        .bg(theme.code_background)
-                                        .border_1()
-                                        .border_color(theme.border)
+                                        .bg(if is_true {
+                                            rgba(0x22c55e1f)
+                                        } else {
+                                            rgba(0xef44441f)
+                                        })
+                                        .text_color(if is_true {
+                                            rgb(0x22c55e)
+                                        } else {
+                                            rgb(0xef4444)
+                                        })
+                                        .text_sm()
+                                        .font_semibold()
+                                        .cursor_pointer()
                                         .on_mouse_down(
                                             MouseButton::Left,
                                             cx.listener(
                                                 move |this,
                                                       _: &MouseDownEvent,
-                                                      window:
+                                                      _window:
                                                           &mut Window,
                                                       cx:
                                                           &mut Context<
                                                           MainView,
                                                       >| {
-                                                    let next_type =
-                                                        match param_type_copy
+                                                    let new_val =
+                                                        if toggle_entity
+                                                            .read(cx)
+                                                            .value()
+                                                            .to_string()
+                                                            == "true"
                                                         {
-                                                            FormDataParamType::Text => FormDataParamType::Boolean,
-                                                            FormDataParamType::Boolean => FormDataParamType::Number,
-                                                            FormDataParamType::Number => FormDataParamType::File,
-                                                            FormDataParamType::File => FormDataParamType::Array,
-                                                            FormDataParamType::Array => FormDataParamType::Text,
+                                                            "false"
+                                                        } else {
+                                                            "true"
                                                         };
-                                                    this.set_form_data_param_type(
-                                                        idx,
-                                                        next_type,
-                                                        window,
+                                                    toggle_entity.update(
                                                         cx,
+                                                        move |state,
+                                                              cx| {
+                                                            state
+                                                                .set_value(
+                                                                    new_val,
+                                                                    _window,
+                                                                    cx,
+                                                                );
+                                                        },
                                                     );
+                                                    cx.notify();
                                                 },
                                             ),
                                         )
-                                        .children([
-                                            div()
-                                                .text_sm()
-                                                .text_color(rgb(
-                                                    0xe0e0e0,
-                                                ))
-                                                .child(
-                                                    match entry.param_type {
-                                                        FormDataParamType::Text => "Text",
-                                                        FormDataParamType::Boolean => "Boolean",
-                                                        FormDataParamType::Number => "Number",
-                                                        FormDataParamType::File => "File",
-                                                        FormDataParamType::Array => "Array",
-                                                    },
-                                                ),
-                                            div()
-                                                .h(px(24.0))
-                                                .text_sm()
-                                                .text_color(rgb(
-                                                    0x888888,
-                                                ))
-                                                .child("▼"),
-                                        ]),
+                                        .child(
+                                            if is_true {
+                                                "true"
+                                            } else {
+                                                "false"
+                                            },
+                                        ),
                                 );
-                            }
-
-                            if !is_file {
+                            } else if !is_file {
                                 children.push(div().flex_1().child(
                                     Input::new(
                                         &entry
@@ -486,7 +505,7 @@ fn render_key_value_editor(
                                             .get_input_entity(),
                                     )
                                     .small()
-                                    .h(px(32.0))
+                                    .h(px(28.0))
                                     .bg(theme.code_background)
                                     .border_1()
                                     .border_color(theme.border)
@@ -580,7 +599,7 @@ fn render_key_value_editor(
                                                           MainView,
                                                       >| {
                                                     if show_type_column {
-                                                        this.remove_form_data_entry(idx);
+                                                        this.remove_form_data_entry(idx, _window, cx);
                                                     } else {
                                                         this.remove_urlencoded_entry(idx);
                                                     }

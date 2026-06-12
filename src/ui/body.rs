@@ -6,6 +6,7 @@ use gpui_component::input::{Input, InputState};
 use gpui_component::select::{Select, SelectState};
 use gpui_component::{IndexPath, Sizable, StyledExt};
 use gpui::*;
+use regex;
 
 /// Body 类型枚举
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -513,9 +514,20 @@ impl BodyState {
         if index < self.form_data.len() {
             let entry = &mut self.form_data[index];
             entry.param_type = param_type;
+            // 同步 type_select 下拉框的选中项
+            entry.type_select.update(cx, |state, cx| {
+                state.set_selected_index(Some(IndexPath::new(param_type.to_index())), window, cx);
+            });
             entry.value = if param_type == FormDataParamType::File {
                 let input = cx.new(|cx| InputState::new(window, cx).default_value(""));
                 FormDataValue::File(input, String::new())
+            } else if param_type == FormDataParamType::Boolean {
+                let value = cx.new(|cx| InputState::new(window, cx).default_value("true"));
+                FormDataValue::Text(value)
+            } else if param_type == FormDataParamType::Number {
+                let num_pattern = regex::Regex::new(r"^-?[0-9]*\.?[0-9]*$").unwrap();
+                let value = cx.new(|cx| InputState::new(window, cx).default_value("").pattern(num_pattern));
+                FormDataValue::Text(value)
             } else {
                 let value = cx.new(|cx| InputState::new(window, cx).default_value(""));
                 FormDataValue::Text(value)
@@ -558,6 +570,13 @@ impl BodyState {
             entry.value = if param_type == FormDataParamType::File {
                 let input = cx.new(|cx| InputState::new(window, cx).default_value(""));
                 FormDataValue::File(input, String::new())
+            } else if param_type == FormDataParamType::Boolean {
+                let value = cx.new(|cx| InputState::new(window, cx).default_value("true"));
+                FormDataValue::Text(value)
+            } else if param_type == FormDataParamType::Number {
+                let num_pattern = regex::Regex::new(r"^-?[0-9]*\.?[0-9]*$").unwrap();
+                let value = cx.new(|cx| InputState::new(window, cx).default_value("").pattern(num_pattern));
+                FormDataValue::Text(value)
             } else {
                 let value = cx.new(|cx| InputState::new(window, cx).default_value(""));
                 FormDataValue::Text(value)
