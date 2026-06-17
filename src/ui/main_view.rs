@@ -3465,13 +3465,6 @@ impl Render for MainView {
                                                                 )
                                                         },
                                                         BodyViewMode::Raw => {
-                                                            let input_entity = match self.response_raw_format {
-                                                                RawFormat::Json => &self.response_input,
-                                                                RawFormat::Xml => &self.response_xml_input,
-                                                                RawFormat::Text => &self.response_text_input,
-                                                                RawFormat::Html => &self.response_html_input,
-                                                                _ => &self.response_text_input,
-                                                            };
                                                             div()
                                                                 .h_full()
                                                                 .flex_col()
@@ -3481,19 +3474,34 @@ impl Render for MainView {
                                                                 .border_color(theme.border)
                                                                 .rounded_md()
                                                                 .child(
-                                                                    Input::new(input_entity)
+                                                                    Input::new(&self.response_input)
                                                                         .w_full()
                                                                         .h_full(),
                                                                 )
                                                         },
                                                         BodyViewMode::Preview => {
-                                                            div()
-                                                                .flex_1()
-                                                                .flex()
-                                                                .items_center()
-                                                                .justify_center()
-                                                                .text_color(theme.muted_foreground)
-                                                                .child("Preview mode not implemented")
+                                                            if let Some(resp) = self.response.as_ref() {
+                                                                let ct = resp.detect_content_type();
+                                                                let t = |key: &str| self.t(key);
+                                                                div()
+                                                                    .h_full()
+                                                                    .flex_col()
+                                                                    .overflow_hidden()
+                                                                    .child(render_preview_body(
+                                                                        &resp.body,
+                                                                        ct.as_deref(),
+                                                                        &theme,
+                                                                        &t,
+                                                                    ))
+                                                            } else {
+                                                                div()
+                                                                    .flex_1()
+                                                                    .flex()
+                                                                    .items_center()
+                                                                    .justify_center()
+                                                                    .text_color(theme.muted_foreground)
+                                                                    .child(self.t("preview.not_available"))
+                                                            }
                                                         },
                                                         }
                                                     };
@@ -3504,7 +3512,7 @@ impl Render for MainView {
                                                             .flex_col()
                                                             .overflow_hidden()
                                                             .child(header_row);
-                                                        if self.body_view_mode == BodyViewMode::Raw {
+                                                        if self.body_view_mode == BodyViewMode::Pretty {
                                                             let is_json = self.response_raw_format == RawFormat::Json;
                                                             let is_xml = self.response_raw_format == RawFormat::Xml;
                                                             let is_text = self.response_raw_format == RawFormat::Text;
