@@ -715,9 +715,8 @@ impl MainView {
                                 this.response = Some(response.clone());
                                 let content_type = response.detect_content_type();
                                 this.response_raw_format = RawFormat::detect(content_type.as_deref(), &response.body);
-                                let json_body = RawFormat::Json.format_body(&response.body);
                                 this.response_input.update(cx, |state, cx| {
-                                    state.set_value(&json_body, window, cx);
+                                    state.set_value(&response.body, window, cx);
                                 });
                                 this.response_xml_input.update(cx, |state, cx| {
                                     state.set_value(&response.body, window, cx);
@@ -1604,11 +1603,10 @@ impl MainView {
 
         // 恢复响应体展示
         if let Some(ref resp) = self.response {
-            let json_body = RawFormat::Json.format_body(&resp.body);
             let resp_body = resp.body.clone();
             let resp_headers = resp.headers.clone();
             self.response_input.update(cx, |s, cx| {
-                s.set_value(&json_body, window, cx);
+                s.set_value(&resp_body, window, cx);
             });
             self.response_xml_input.update(cx, |s, cx| {
                 s.set_value(&resp_body, window, cx);
@@ -2496,9 +2494,8 @@ impl Render for MainView {
                                                                         };
                                                                         this.response = Some(response);
                                                                         this.response_raw_format = RawFormat::detect(content_type.as_deref(), &resp_body);
-                                                                        let json_body = RawFormat::Json.format_body(&resp_body);
                                                                         this.response_input.update(cx, |state, cx| {
-                                                                            state.set_value(&json_body, _window, cx);
+                                                                            state.set_value(&resp_body, _window, cx);
                                                                         });
                                                                         this.response_xml_input.update(cx, |state, cx| {
                                                                             state.set_value(&resp_body, _window, cx);
