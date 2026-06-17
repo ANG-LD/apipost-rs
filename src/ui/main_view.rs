@@ -273,6 +273,36 @@ impl SaveRequestDialog {
     }
 }
 
+/// Token 渲染：将 highlight_json 返回的 token 列表渲染为带颜色的文本行
+fn render_highlighted_tokens(tokens: &[(String, gpui::Rgba)]) -> Vec<AnyElement> {
+    let mut elements: Vec<AnyElement> = Vec::new();
+    let mut line_parts: Vec<AnyElement> = Vec::new();
+
+    for (text, color) in tokens {
+        for ch in text.chars() {
+            if ch == '\n' {
+                elements.push(
+                    div().flex().flex_row().children(std::mem::take(&mut line_parts)).into_any_element()
+                );
+            } else {
+                line_parts.push(
+                    div()
+                        .flex_none()
+                        .text_color(*color)
+                        .child(ch.to_string())
+                        .into_any_element()
+                );
+            }
+        }
+    }
+    if !line_parts.is_empty() {
+        elements.push(
+            div().flex().flex_row().children(std::mem::take(&mut line_parts)).into_any_element()
+        );
+    }
+    elements
+}
+
 impl MainView {
     /// 获取翻译文本
     pub(crate) fn t(&self, key: &str) -> String {
@@ -3195,6 +3225,17 @@ impl Render for MainView {
                                                     } else {
                                                         match self.body_view_mode {
                                                         BodyViewMode::Pretty => {
+                                                            let resp_body = self.response.as_ref().map(|r| r.body.as_str()).unwrap_or("");
+                                                            let format = self.response_raw_format;
+                                                            let formatted = match format {
+                                                                RawFormat::Json => {
+                                                                    serde_json::from_str::<serde_json::Value>(resp_body)
+                                                                        .ok()
+                                                                        .and_then(|v| serde_json::to_string_pretty(&v).ok())
+                                                                        .unwrap_or_else(|| resp_body.to_string())
+                                                                }
+                                                                _ => resp_body.to_string(),
+                                                            };
                                                             div()
                                                                 .h_full()
                                                                 .flex_col()
@@ -3204,9 +3245,22 @@ impl Render for MainView {
                                                                 .border_color(theme.border)
                                                                 .rounded_md()
                                                                 .child(
-                                                                    Input::new(&self.response_input)
+                                                                    div()
+                                                                        .h_full()
                                                                         .w_full()
-                                                                        .h_full(),
+                                                                        .overflow_y_scrollbar()
+                                                                        .p_3()
+                                                                        .text_sm()
+                                                                        .child(
+                                                                            div().flex_col().gap_px().children(
+                                                                                if format == RawFormat::Json {
+                                                                                    let tokens = crate::ui::highlight_json(&formatted, &theme);
+                                                                                    render_highlighted_tokens(&tokens)
+                                                                                } else {
+                                                                                    vec![div().text_color(theme.foreground).child(formatted.clone()).into_any_element()]
+                                                                                }
+                                                                            )
+                                                                        )
                                                                 )
                                                         },
                                                         BodyViewMode::Raw => {
