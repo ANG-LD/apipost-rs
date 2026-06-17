@@ -39,3 +39,4 @@ Thumbs.db
 # Claude todos
 .clawd-todos.json
 dist/
+.worktrees/
