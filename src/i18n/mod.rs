@@ -140,6 +140,10 @@ impl I18nManager {
         map.insert("response.preview".to_string(), "预览".to_string());
         map.insert("response.raw".to_string(), "原始".to_string());
         map.insert("response.formatted".to_string(), "格式化".to_string());
+        map.insert("preview.not_available".to_string(), "无法预览此内容类型".to_string());
+        map.insert("preview.open_in_browser".to_string(), "在浏览器中打开".to_string());
+        map.insert("preview.view_source".to_string(), "查看源码".to_string());
+        map.insert("preview.open_external".to_string(), "在外部程序中打开".to_string());
 
         // 历史记录
         map.insert("history.title".to_string(), "历史记录".to_string());
@@ -325,6 +329,10 @@ impl I18nManager {
         map.insert("response.preview".to_string(), "Preview".to_string());
         map.insert("response.raw".to_string(), "Raw".to_string());
         map.insert("response.formatted".to_string(), "Formatted".to_string());
+        map.insert("preview.not_available".to_string(), "Preview not available for this content type".to_string());
+        map.insert("preview.open_in_browser".to_string(), "Open in Browser".to_string());
+        map.insert("preview.view_source".to_string(), "View Source".to_string());
+        map.insert("preview.open_external".to_string(), "Open in External Program".to_string());
 
         // History
         map.insert("history.title".to_string(), "History".to_string());
