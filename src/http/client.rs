@@ -595,6 +595,23 @@ impl HttpClient {
             request_builder = request_builder.body(body_content);
         }
 
+        // DNS 解析日志（用于排查解析问题）
+        if let Ok(parsed) = url::Url::parse(&url) {
+            if let Some(host) = parsed.host_str() {
+                let port = parsed.port().unwrap_or(if parsed.scheme() == "https" { 443 } else { 80 });
+                let addr_str = format!("{}:{}", host, port);
+                match std::net::ToSocketAddrs::to_socket_addrs(&addr_str.as_str()) {
+                    Ok(addrs) => {
+                        let ips: Vec<String> = addrs.map(|a| a.ip().to_string()).collect();
+                        log::info!("DNS 解析: {} -> {:?}", host, ips);
+                    }
+                    Err(e) => {
+                        log::error!("DNS 解析失败: {} ({})", addr_str, e);
+                    }
+                }
+            }
+        }
+
         let response = request_builder.send().await
             .map_err(|e| {
                 let mut msg = format!("请求失败: {}", e);
