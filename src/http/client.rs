@@ -563,17 +563,15 @@ impl HttpClient {
         });
 
         if let Some(ref body_content) = body {
-            if body_content.len() > 500 {
-                log::debug!(
-                    "请求体: {}...(截断, 总长度: {})",
-                    &body_content[..500],
-                    body_content.len()
-                );
+            let preview = if body_content.len() > 500 {
+                format!("{}...(截断, 总长度: {})", &body_content[..500], body_content.len())
             } else {
-                log::debug!("请求体: {}", body_content);
-            }
+                body_content.clone()
+            };
+            log::info!("请求体 ({} bytes): {}", body_content.len(), preview);
+        } else if method == Method::POST || method == Method::PUT || method == Method::PATCH {
+            log::warn!("POST/PUT/PATCH 请求没有请求体！这可能导致 502");
         }
-        log::debug!("===================");
 
         // 5. 解析HTTP方法
         let method = Method::try_from(request.method.to_uppercase().as_str())
