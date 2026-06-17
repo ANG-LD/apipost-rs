@@ -541,15 +541,13 @@ impl HttpClient {
 
         // 2. 替换URL中的环境变量
         let url = self.env_manager.replace_variables(&request.url);
-        log::debug!("=== HTTP请求详情 ===");
-        log::debug!("方法: {}", request.method);
-        log::debug!("原始URL: {}", request.url);
-        if request.url != url {
-            log::debug!("替换后URL: {}", url);
-        }
+        log::info!("=== HTTP请求 ===");
+        log::info!("方法: {}  URL: {}", request.method, url);
 
         // 3. 构建请求头（内部完成变量替换 + 日志）
         let headers = self.build_headers(&request.headers)?;
+        log::info!("请求头 ({} 项): {:?}", headers.len(),
+            headers.iter().map(|(k,v)| format!("{}: {:?}", k, v)).collect::<Vec<_>>());
 
         // 4. 替换请求体中的环境变量
         let body = request.body.as_ref().map(|b| {
@@ -598,6 +596,8 @@ impl HttpClient {
 
         let elapsed = start_time.elapsed();
         let status = response.status().as_u16();
+        log::info!("=== HTTP响应 ===");
+        log::info!("状态码: {}  (耗时: {}ms)", status, elapsed.as_millis());
         let response_headers: HashMap<String, String> = response
             .headers()
             .iter()
@@ -614,6 +614,16 @@ impl HttpClient {
             }
         }
 
+        // 记录响应头
+        let content_type_val = response_headers.get("content-type").cloned()
+            .or_else(|| response_headers.get("Content-Type").cloned())
+            .unwrap_or_else(|| "unknown".to_string());
+        log::info!("Content-Type: {}", content_type_val);
+        if !status.to_string().starts_with('2') {
+            log::warn!("非2xx响应 (状态码: {}), 响应头: {:?}", status,
+                response_headers.iter().map(|(k,v)| format!("{}: {}", k, v)).collect::<Vec<_>>());
+        }
+
         // 读取原始响应体（reqwest 禁用自动解压，返回原始压缩数据）
         let body_bytes = response.bytes().await.context("读取响应体失败")?;
         // body_bytes.len() 即为网络传输的压缩大小
@@ -623,6 +633,9 @@ impl HttpClient {
         let content_encoding = response_headers
             .get("content-encoding")
             .map(|v| v.to_lowercase());
+        if let Some(ref enc) = content_encoding {
+            log::info!("Content-Encoding: {} (压缩大小: {} bytes)", enc, body_bytes.len());
+        }
         let body_text = match content_encoding.as_deref() {
             Some("gzip") | Some("x-gzip") => {
                 let mut d = GzDecoder::new(&body_bytes[..]);
@@ -650,6 +663,15 @@ impl HttpClient {
                 String::from_utf8_lossy(&body_bytes).to_string()
             }
         };
+
+        // 记录响应体预览（截断长内容）
+        let body_preview = if body_text.len() > 500 {
+            format!("{}...(截断, 总长度: {})", &body_text[..500], body_text.len())
+        } else {
+            body_text.clone()
+        };
+        log::info!("响应体: {}", body_preview);
+        log::info!("=== HTTP响应结束 (耗时: {}ms, 解压后大小: {} bytes) ===", elapsed.as_millis(), body_text.len());
 
         Ok(HttpResponse {
             status,

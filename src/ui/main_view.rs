@@ -964,7 +964,8 @@ impl MainView {
                                 }
                             }
                             Err(e) => {
-                                this.error_message = Some(e.to_string());
+                                log::error!("请求失败: {}", e);
+                                this.error_message = Some(format!("请求失败 -> {}", e));
                             }
                         }
                         this.is_loading = false;
