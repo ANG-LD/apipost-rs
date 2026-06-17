@@ -3264,6 +3264,13 @@ impl Render for MainView {
                                                                 )
                                                         },
                                                         BodyViewMode::Raw => {
+                                                            let input_entity = match self.response_raw_format {
+                                                                RawFormat::Json => &self.response_input,
+                                                                RawFormat::Xml => &self.response_xml_input,
+                                                                RawFormat::Text => &self.response_text_input,
+                                                                RawFormat::Html => &self.response_html_input,
+                                                                _ => &self.response_text_input,
+                                                            };
                                                             div()
                                                                 .h_full()
                                                                 .flex_col()
@@ -3273,7 +3280,7 @@ impl Render for MainView {
                                                                 .border_color(theme.border)
                                                                 .rounded_md()
                                                                 .child(
-                                                                    Input::new(&self.response_input)
+                                                                    Input::new(input_entity)
                                                                         .w_full()
                                                                         .h_full(),
                                                                 )
