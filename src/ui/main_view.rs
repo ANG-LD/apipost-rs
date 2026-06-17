@@ -303,6 +303,207 @@ fn render_highlighted_tokens(tokens: &[(String, gpui::Rgba)]) -> Vec<AnyElement>
     elements
 }
 
+/// 根据 Content-Type 智能选择预览渲染方式
+fn render_preview_body(
+    body: &str,
+    content_type: Option<&str>,
+    theme: &Theme,
+    t: &dyn Fn(&str) -> String,
+) -> AnyElement {
+    let ct = content_type.unwrap_or("").to_lowercase();
+
+    // 图片 — 当前 body 作为 String 存储，光栅图片无法直接从字符串还原
+    // 提示用户改用二进制响应格式
+    if ct.starts_with("image/") && ct != "image/svg+xml" {
+        return div()
+            .flex_1()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap_3()
+            .children([
+                div()
+                    .text_color(theme.muted_foreground)
+                    .child("Image response detected"),
+                div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(format!("Content-Type: {}", content_type.unwrap_or("unknown"))),
+            ])
+            .into_any_element();
+    }
+
+    // SVG — 作为 XML 源码显示
+    if ct == "image/svg+xml" {
+        return div()
+            .h_full()
+            .w_full()
+            .overflow_y_scrollbar()
+            .bg(theme.code_background)
+            .border_1()
+            .border_color(theme.border)
+            .rounded_md()
+            .p_3()
+            .text_sm()
+            .child(body.to_string())
+            .into_any_element();
+    }
+
+    // HTML — "在浏览器中打开"按钮 + 下方显示源码
+    if ct == "text/html" {
+        let body_owned = body.to_string();
+        let body_for_display = body.to_string();
+        return div()
+            .flex_1()
+            .flex_col()
+            .overflow_y_scrollbar()
+            .gap_3()
+            .children([
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_3()
+                    .children([
+                        div().text_color(theme.muted_foreground).text_sm().child("HTML Response"),
+                        div()
+                            .cursor_pointer()
+                            .px_3()
+                            .py_1()
+                            .rounded_md()
+                            .bg(theme.accent)
+                            .text_color(theme.accent_foreground)
+                            .text_sm()
+                            .child(t("preview.open_in_browser"))
+                            .on_mouse_down(MouseButton::Left, {
+                                let body = body_owned.clone();
+                                move |_event, _window, _cx| {
+                                    let tmp_path = std::env::temp_dir()
+                                        .join(format!("apipost-preview-{}.html", uuid::Uuid::new_v4()));
+                                    if let Err(e) = std::fs::write(&tmp_path, &body) {
+                                        log::error!("Failed to write temp HTML file: {}", e);
+                                        return;
+                                    }
+                                    let _ = std::process::Command::new("xdg-open")
+                                        .arg(tmp_path.to_string_lossy().to_string())
+                                        .spawn();
+                                }
+                            }),
+                    ]),
+                div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(t("preview.view_source")),
+                div()
+                    .w_full()
+                    .flex_1()
+                    .bg(theme.code_background)
+                    .border_1()
+                    .border_color(theme.border)
+                    .rounded_md()
+                    .child(
+                        div()
+                            .w_full()
+                            .h_full()
+                            .overflow_y_scrollbar()
+                            .p_3()
+                            .text_xs()
+                            .text_color(theme.foreground)
+                            .child(body_for_display),
+                    ),
+            ])
+            .into_any_element();
+    }
+
+    // JSON — 树形视图
+    if ct.contains("json") {
+        return div()
+            .h_full()
+            .w_full()
+            .overflow_y_scrollbar()
+            .bg(theme.code_background)
+            .border_1()
+            .border_color(theme.border)
+            .rounded_md()
+            .child(crate::ui::response::json_tree_viewer(body, theme))
+            .into_any_element();
+    }
+
+    // PDF — 在外部程序中打开
+    if ct == "application/pdf" {
+        let body_owned = body.to_string();
+        return div()
+            .flex_1()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap_3()
+            .children([
+                div().text_color(theme.muted_foreground).child("PDF Response"),
+                div()
+                    .cursor_pointer()
+                    .px_3()
+                    .py_2()
+                    .rounded_md()
+                    .bg(theme.accent)
+                    .text_color(theme.accent_foreground)
+                    .text_sm()
+                    .child(t("preview.open_external"))
+                    .on_mouse_down(MouseButton::Left, {
+                        move |_event, _window, _cx| {
+                            let tmp_path = std::env::temp_dir()
+                                .join(format!("apipost-preview-{}.pdf", uuid::Uuid::new_v4()));
+                            if let Err(e) = std::fs::write(&tmp_path, &body_owned) {
+                                log::error!("Failed to write temp PDF file: {}", e);
+                                return;
+                            }
+                            let _ = std::process::Command::new("xdg-open")
+                                .arg(tmp_path.to_string_lossy().to_string())
+                                .spawn();
+                        }
+                    }),
+            ])
+            .into_any_element();
+    }
+
+    // 文本类型及其他 — 尝试 JSON 语法高亮，否则纯文本
+    let formatted_body = if ct.contains("json")
+        || body.trim_start().starts_with('{')
+        || body.trim_start().starts_with('[')
+    {
+        serde_json::from_str::<serde_json::Value>(body)
+            .ok()
+            .and_then(|v| serde_json::to_string_pretty(&v).ok())
+            .unwrap_or_else(|| body.to_string())
+    } else {
+        body.to_string()
+    };
+
+    let is_json_like = ct.contains("json")
+        || body.trim_start().starts_with('{')
+        || body.trim_start().starts_with('[');
+
+    div()
+        .h_full()
+        .w_full()
+        .overflow_y_scrollbar()
+        .bg(theme.code_background)
+        .border_1()
+        .border_color(theme.border)
+        .rounded_md()
+        .p_3()
+        .text_sm()
+        .child(if is_json_like {
+            let tokens = crate::ui::highlight_json(&formatted_body, theme);
+            div().flex_col().children(render_highlighted_tokens(&tokens))
+        } else {
+            div().text_color(theme.foreground).child(formatted_body)
+        })
+        .into_any_element()
+}
+
 impl MainView {
     /// 获取翻译文本
     pub(crate) fn t(&self, key: &str) -> String {
