@@ -593,7 +593,13 @@ impl HttpClient {
         }
 
         let response = request_builder.send().await
-            .with_context(|| format!("请求发送失败: 连接到 {} 超时或被拒绝 (超时设置: {}s)", url, options.timeout_secs))?;
+            .map_err(|e| {
+                let mut msg = format!("请求失败: {}", e);
+                if url.starts_with("http://") {
+                    msg.push_str(&format!("\n提示: 服务器可能只接受 HTTPS，尝试将 URL 改为 https://"));
+                }
+                anyhow::anyhow!(msg)
+            })?;
 
         let elapsed = start_time.elapsed();
         let status = response.status().as_u16();
@@ -769,7 +775,8 @@ impl HttpClient {
             .no_brotli()
             .no_gzip()
             .no_deflate()
-            .timeout(Duration::from_secs(timeout_secs));
+            .timeout(Duration::from_secs(timeout_secs))
+            .connect_timeout(Duration::from_secs(10));
 
         if let Some(url) = proxy_url {
             let proxy = Proxy::all(url).context("代理URL无效")?;
@@ -788,6 +795,7 @@ impl HttpClient {
             .no_gzip()
             .no_deflate()
             .timeout(Duration::from_secs(opts.timeout_secs))
+            .connect_timeout(Duration::from_secs(10))
             .redirect(if opts.follow_redirects {
                 reqwest::redirect::Policy::default()
             } else {
