@@ -592,7 +592,8 @@ impl HttpClient {
             request_builder = request_builder.body(body_content);
         }
 
-        let response = request_builder.send().await.context("请求发送失败")?;
+        let response = request_builder.send().await
+            .with_context(|| format!("请求发送失败: 连接到 {} 超时或被拒绝 (超时设置: {}s)", url, options.timeout_secs))?;
 
         let elapsed = start_time.elapsed();
         let status = response.status().as_u16();
