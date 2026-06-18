@@ -571,7 +571,7 @@ impl HttpClient {
                 body_content.clone()
             };
             log::info!("请求体 ({} bytes): {}", body_content.len(), preview);
-        } else {
+        } else if request.text_fields.is_empty() && request.file_fields.is_empty() {
             let upper = request.method.to_uppercase();
             if upper == "POST" || upper == "PUT" || upper == "PATCH" {
                 log::warn!("{} 请求没有请求体！这可能导致服务器返回错误", upper);
@@ -587,7 +587,19 @@ impl HttpClient {
 
         // 7. 构建请求
         let has_multipart = !request.text_fields.is_empty() || !request.file_fields.is_empty();
-        let mut request_builder = client.request(method, &url).headers(headers);
+
+        // multipart 时去掉用户传入的 Content-Type，让 reqwest 自动生成正确的 boundary
+        let filtered_headers: HeaderMap = if has_multipart {
+            headers
+                .iter()
+                .filter(|(k, _)| k.as_str().to_lowercase() != "content-type")
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect()
+        } else {
+            headers
+        };
+
+        let mut request_builder = client.request(method, &url).headers(filtered_headers);
 
         if has_multipart {
             request_builder = request_builder.multipart(self.build_multipart(request)?);
