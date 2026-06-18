@@ -191,6 +191,7 @@ fn test_response_status() {
         time_ms: 100,
         size_bytes: 0,
         cookies: Vec::new(),
+        raw_body: None,
     };
     assert!(success_response.is_success());
     assert_eq!(success_response.status_text(), "OK");
@@ -202,6 +203,7 @@ fn test_response_status() {
         time_ms: 50,
         size_bytes: 0,
         cookies: Vec::new(),
+        raw_body: None,
     };
     assert!(!error_response.is_success());
     assert_eq!(error_response.status_text(), "Not Found");
@@ -217,6 +219,7 @@ fn test_response_format_body() {
         time_ms: 100,
         size_bytes: 0,
         cookies: Vec::new(),
+        raw_body: None,
     };
 
     let formatted = response.format_body();
@@ -233,6 +236,7 @@ fn test_response_format_non_json() {
         time_ms: 100,
         size_bytes: 0,
         cookies: Vec::new(),
+        raw_body: None,
     };
 
     let formatted = response.format_body();

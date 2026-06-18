@@ -28,8 +28,28 @@ use gpui_component::{Disableable, Icon, IconName, IndexPath, Sizable, StyledExt,
 use gpui_component::dialog::{Dialog, DialogHeader, DialogTitle};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
+use smallvec::smallvec;
 use std::sync::atomic::AtomicBool;
 use tokio;
+
+/// 净化文本用于安全渲染，移除会导致 cosmic-text Bidi 断言失败的问题字符。
+fn sanitize_display_text(text: &str) -> String {
+    text.chars()
+        .filter(|&c| {
+            !matches!(
+                c,
+                '\u{061C}'
+                | '\u{200E}'..='\u{200F}'
+                | '\u{202A}'..='\u{202E}'
+                | '\u{2066}'..='\u{2069}'
+                | '\u{2028}'
+                | '\u{2029}'
+                | '\u{FEFF}'
+                | '\u{2060}'
+            ) && (c >= ' ' || c == '\n' || c == '\r' || c == '\t')
+        })
+        .collect()
+}
 
 /// HTTP方法颜色
 fn method_color(method: &str) -> u32 {
@@ -304,17 +324,78 @@ fn render_highlighted_tokens(tokens: &[(String, gpui::Rgba)]) -> Vec<AnyElement>
 }
 
 /// 根据 Content-Type 智能选择预览渲染方式
+fn content_type_to_image_format(ct: &str) -> Option<ImageFormat> {
+    match ct {
+        "image/png" => Some(ImageFormat::Png),
+        "image/jpeg" | "image/jpg" => Some(ImageFormat::Jpeg),
+        "image/gif" => Some(ImageFormat::Gif),
+        "image/webp" => Some(ImageFormat::Webp),
+        "image/bmp" => Some(ImageFormat::Bmp),
+        "image/svg+xml" => Some(ImageFormat::Svg),
+        "image/tiff" => Some(ImageFormat::Tiff),
+        "image/x-icon" | "image/vnd.microsoft.icon" => Some(ImageFormat::Ico),
+        _ => None,
+    }
+}
+
+fn decode_image_bytes(raw: &[u8], format: ImageFormat) -> Option<Arc<RenderImage>> {
+    let img_format = match format {
+        ImageFormat::Png => image::ImageFormat::Png,
+        ImageFormat::Jpeg => image::ImageFormat::Jpeg,
+        ImageFormat::Gif => image::ImageFormat::Gif,
+        ImageFormat::Webp => image::ImageFormat::WebP,
+        ImageFormat::Bmp => image::ImageFormat::Bmp,
+        ImageFormat::Tiff => image::ImageFormat::Tiff,
+        ImageFormat::Ico => image::ImageFormat::Ico,
+        ImageFormat::Svg | ImageFormat::Pnm => return None,
+    };
+    let mut buffer = image::load_from_memory_with_format(raw, img_format).ok()?.into_rgba8();
+    for pixel in buffer.chunks_exact_mut(4) {
+        pixel.swap(0, 2);
+    }
+    let frame = image::Frame::new(buffer);
+    let render = RenderImage::new(smallvec::smallvec![frame]);
+    Some(Arc::new(render))
+}
+
 fn render_preview_body(
     body: &str,
     content_type: Option<&str>,
     theme: &Theme,
     t: &dyn Fn(&str) -> String,
+    raw_body: Option<&Vec<u8>>,
 ) -> AnyElement {
     let ct = content_type.unwrap_or("").to_lowercase();
 
-    // 图片 — 当前 body 作为 String 存储，光栅图片无法直接从字符串还原
-    // 提示用户改用二进制响应格式
+    // 光栅图片 — 有原始字节时预解码渲染+滚动，否则显示占位
     if ct.starts_with("image/") && ct != "image/svg+xml" {
+        if let (Some(raw), Some(format)) = (raw_body, content_type_to_image_format(&ct)) {
+            if let Some(render_image) = decode_image_bytes(raw, format) {
+                let img_size = render_image.size(0);
+                let w = px(img_size.width.0 as f32);
+                let h = px(img_size.height.0 as f32);
+                return div()
+                    .size_full()
+                    .flex_col()
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .overflow_scrollbar()
+                            .flex_1()
+                            .child(
+                                div()
+                                    .w(w)
+                                    .h(h)
+                                    .child(
+                                        img(ImageSource::Render(render_image))
+                                            .w(w)
+                                            .h(h),
+                                    ),
+                            ),
+                    )
+                    .into_any_element();
+            }
+        }
         return div()
             .flex_1()
             .flex()
@@ -432,7 +513,7 @@ fn render_preview_body(
 
     // PDF — 在外部程序中打开
     if ct == "application/pdf" {
-        let body_owned = body.to_string();
+        let pdf_bytes = raw_body.cloned();
         return div()
             .flex_1()
             .flex()
@@ -452,10 +533,12 @@ fn render_preview_body(
                     .text_sm()
                     .child(t("preview.open_external"))
                     .on_mouse_down(MouseButton::Left, {
+                        let pdf_bytes = pdf_bytes.clone();
                         move |_event, _window, _cx| {
                             let tmp_path = std::env::temp_dir()
                                 .join(format!("apipost-preview-{}.pdf", uuid::Uuid::new_v4()));
-                            if let Err(e) = std::fs::write(&tmp_path, &body_owned) {
+                            let data = pdf_bytes.as_deref().unwrap_or(b"");
+                            if let Err(e) = std::fs::write(&tmp_path, data) {
                                 log::error!("Failed to write temp PDF file: {}", e);
                                 return;
                             }
@@ -2720,6 +2803,7 @@ impl Render for MainView {
                                                                             status: status as u16,
                                                                             headers: resp_headers,
                                                                             body: resp_body.clone(),
+                                                                            raw_body: None,
                                                                             time_ms: entry_response_time_ms.unwrap_or(0),
                                                                             size_bytes: entry_response_size.unwrap_or(0),
                                                                             cookies: Vec::new(),
@@ -3493,6 +3577,7 @@ impl Render for MainView {
                                                                         ct.as_deref(),
                                                                         &theme,
                                                                         &t,
+                                                                        resp.raw_body.as_ref(),
                                                                     ))
                                                             } else {
                                                                 div()

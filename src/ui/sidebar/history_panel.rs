@@ -271,6 +271,7 @@ pub fn render_history_panel(
                                         status: status as u16,
                                         headers: resp_headers,
                                         body: resp_body.clone(),
+                                        raw_body: None,
                                         time_ms: entry_response_time_ms
                                             .unwrap_or(0),
                                         size_bytes: entry_response_size

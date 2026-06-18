@@ -380,8 +380,10 @@ pub struct HttpResponse {
     pub status: u16,
     /// 响应头
     pub headers: HashMap<String, String>,
-    /// 响应体
+    /// 响应体（文本形式，二进制类型为占位描述）
     pub body: String,
+    /// 响应体原始字节（仅二进制内容类型有值，用于图片/PDF等预览）
+    pub raw_body: Option<Vec<u8>>,
     /// 响应时间（毫秒）
     pub time_ms: i64,
     /// 响应大小（字节）
@@ -569,8 +571,11 @@ impl HttpClient {
                 body_content.clone()
             };
             log::info!("请求体 ({} bytes): {}", body_content.len(), preview);
-        } else if method == Method::POST || method == Method::PUT || method == Method::PATCH {
-            log::warn!("POST/PUT/PATCH 请求没有请求体！这可能导致 502");
+        } else {
+            let upper = request.method.to_uppercase();
+            if upper == "POST" || upper == "PUT" || upper == "PATCH" {
+                log::warn!("{} 请求没有请求体！这可能导致服务器返回错误", upper);
+            }
         }
 
         // 5. 解析HTTP方法
@@ -641,37 +646,69 @@ impl HttpClient {
         if let Some(ref enc) = content_encoding {
             log::info!("Content-Encoding: {} (压缩大小: {} bytes)", enc, body_bytes.len());
         }
-        let body_text = match content_encoding.as_deref() {
-            Some("gzip") | Some("x-gzip") => {
-                let mut d = GzDecoder::new(&body_bytes[..]);
-                let mut decompressed = Vec::new();
-                d.read_to_end(&mut decompressed)
-                    .map(|_| String::from_utf8_lossy(&decompressed).to_string())
-                    .unwrap_or_else(|_| String::from_utf8_lossy(&body_bytes).to_string())
-            }
-            Some("br") => {
-                let mut decompressed = Vec::new();
-                brotli::Decompressor::new(&body_bytes[..], 4096)
-                    .read_to_end(&mut decompressed)
-                    .map(|_| String::from_utf8_lossy(&decompressed).to_string())
-                    .unwrap_or_else(|_| String::from_utf8_lossy(&body_bytes).to_string())
-            }
-            Some("deflate") => {
-                let mut d = flate2::read::ZlibDecoder::new(&body_bytes[..]);
-                let mut decompressed = Vec::new();
-                d.read_to_end(&mut decompressed)
-                    .map(|_| String::from_utf8_lossy(&decompressed).to_string())
-                    .unwrap_or_else(|_| String::from_utf8_lossy(&body_bytes).to_string())
-            }
-            _ => {
-                // 无压缩或未知编码，直接使用原始字节
-                String::from_utf8_lossy(&body_bytes).to_string()
-            }
+        // 提取 MIME 类型（去掉 ; 后的参数）
+        let mime_type = content_type_val
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_lowercase();
+        let is_binary_ct = mime_type.starts_with("image/")
+            || mime_type.starts_with("audio/")
+            || mime_type.starts_with("video/")
+            || mime_type.starts_with("font/")
+            || mime_type == "application/octet-stream"
+            || mime_type == "application/pdf"
+            || mime_type == "application/zip"
+            || mime_type == "application/gzip"
+            || mime_type == "application/x-7z-compressed"
+            || mime_type == "application/x-rar-compressed"
+            || mime_type == "application/x-tar"
+            || mime_type == "application/x-bzip"
+            || mime_type == "application/x-bzip2"
+            || mime_type.starts_with("application/vnd.ms-excel")
+            || mime_type.starts_with("application/vnd.openxmlformats-officedocument.spreadsheetml")
+            || mime_type.starts_with("application/vnd.ms-powerpoint")
+            || mime_type.starts_with("application/vnd.openxmlformats-officedocument.presentationml")
+            || mime_type.starts_with("application/vnd.openxmlformats-officedocument.wordprocessingml")
+            || mime_type.starts_with("application/msword");
+
+        let (body_text, raw_body) = if is_binary_ct {
+            let raw = body_bytes.to_vec();
+            let placeholder = format!("[二进制内容: {}, {} bytes]", content_type_val, raw.len());
+            (placeholder, Some(raw))
+        } else {
+            let text = match content_encoding.as_deref() {
+                Some("gzip") | Some("x-gzip") => {
+                    let mut d = GzDecoder::new(&body_bytes[..]);
+                    let mut decompressed = Vec::new();
+                    d.read_to_end(&mut decompressed)
+                        .map(|_| String::from_utf8_lossy(&decompressed).to_string())
+                        .unwrap_or_else(|_| String::from_utf8_lossy(&body_bytes).to_string())
+                }
+                Some("br") => {
+                    let mut decompressed = Vec::new();
+                    brotli::Decompressor::new(&body_bytes[..], 4096)
+                        .read_to_end(&mut decompressed)
+                        .map(|_| String::from_utf8_lossy(&decompressed).to_string())
+                        .unwrap_or_else(|_| String::from_utf8_lossy(&body_bytes).to_string())
+                }
+                Some("deflate") => {
+                    let mut d = flate2::read::ZlibDecoder::new(&body_bytes[..]);
+                    let mut decompressed = Vec::new();
+                    d.read_to_end(&mut decompressed)
+                        .map(|_| String::from_utf8_lossy(&decompressed).to_string())
+                        .unwrap_or_else(|_| String::from_utf8_lossy(&body_bytes).to_string())
+                }
+                _ => String::from_utf8_lossy(&body_bytes).to_string(),
+            };
+            (text, None)
         };
 
-        // 记录响应体预览（截断长内容）
+        // 记录响应体预览（截断长内容，在有效字符边界处截断）
         let body_preview = if body_text.len() > 500 {
-            format!("{}...(截断, 总长度: {})", &body_text[..500], body_text.len())
+            let end = body_text.floor_char_boundary(500);
+            format!("{}...(截断, 总长度: {})", &body_text[..end], body_text.len())
         } else {
             body_text.clone()
         };
@@ -682,6 +719,7 @@ impl HttpClient {
             status,
             headers: response_headers,
             body: body_text,
+            raw_body,
             time_ms: elapsed.as_millis() as i64,
             size_bytes,
             cookies,
@@ -1046,6 +1084,7 @@ mod tests {
             body: String::new(),
             time_ms: 100,
             size_bytes: 0,
+            raw_body: None,
             cookies: Vec::new(),
         };
         assert_eq!(response.status_text(), "OK");
@@ -1057,6 +1096,7 @@ mod tests {
             body: String::new(),
             time_ms: 100,
             size_bytes: 0,
+            raw_body: None,
             cookies: Vec::new(),
         };
         assert_eq!(response.status_text(), "Not Found");
@@ -1071,6 +1111,7 @@ mod tests {
             body: r#"{"name":"test","value":123}"#.to_string(),
             time_ms: 100,
             size_bytes: 0,
+            raw_body: None,
             cookies: Vec::new(),
         };
 
