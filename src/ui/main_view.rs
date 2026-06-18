@@ -380,29 +380,15 @@ fn render_preview_body(
     // 光栅图片 — 有原始字节时预解码渲染+滚动，否则显示占位
     if ct.starts_with("image/") && ct != "image/svg+xml" {
         if let (Some(raw), Some(format)) = (raw_body, content_type_to_image_format(&ct)) {
-            if let Some(render_image) = decode_image_bytes(raw, format) {
-                let img_size = render_image.size(0);
-                let w = px(img_size.width.0 as f32);
-                let h = px(img_size.height.0 as f32);
+            // 图片渲染已在 BodyViewMode::Preview 分支处理，此处仅作 fallback
+            if raw_body.is_some() {
                 return div()
-                    .size_full()
-                    .flex_col()
-                    .overflow_hidden()
-                    .child(
-                        div()
-                            .overflow_scrollbar()
-                            .flex_1()
-                            .child(
-                                div()
-                                    .w(w)
-                                    .h(h)
-                                    .child(
-                                        img(ImageSource::Render(render_image))
-                                            .w(w)
-                                            .h(h),
-                                    ),
-                            ),
-                    )
+                    .flex_1()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_color(theme.muted_foreground)
+                    .child("Image response detected")
                     .into_any_element();
             }
         }
@@ -4090,8 +4076,82 @@ impl Render for MainView {
                                                             if let Some(resp) = self.response.as_ref() {
                                                                 let ct = resp.detect_content_type();
                                                                 let ct_str = ct.as_deref().unwrap_or("").to_lowercase();
+                                                                // 光栅图片：原生分辨率 + 双向滚动条
+                                                                if ct_str.starts_with("image/") && ct_str != "image/svg+xml" {
+                                                                    if let (Some(raw), Some(fmt)) = (resp.raw_body.as_ref(), content_type_to_image_format(&ct_str)) {
+                                                                        if let Some(ri) = decode_image_bytes(raw, fmt) {
+                                                                            let img_size = ri.size(0);
+                                                                            let raw_bytes = raw.to_vec();
+                                                                            let ext = match fmt {
+                                                                                ImageFormat::Png => "png", ImageFormat::Jpeg => "jpg",
+                                                                                ImageFormat::Gif => "gif", ImageFormat::Webp => "webp",
+                                                                                ImageFormat::Bmp => "bmp", ImageFormat::Tiff => "tiff",
+                                                                                ImageFormat::Ico => "ico", _ => "img",
+                                                                            };
+                                                                            div()
+                                                                                .h_full()
+                                                                                .w_full()
+                                                                                .flex_col()
+                                                                                .bg(theme.code_background)
+                                                                                .child(
+                                                                                    div()
+                                                                                        .h(px(300.0))
+                                                                                        .w_full()
+                                                                                        .overflow_hidden()
+                                                                                        .flex()
+                                                                                        .items_center()
+                                                                                        .justify_center()
+                                                                                        .child(
+                                                                                            img(ImageSource::Render(ri))
+                                                                                                .h(px(300.0)),
+                                                                                        ),
+                                                                                )
+                                                                                .child(
+                                                                                    div()
+                                                                                        .w_full()
+                                                                                        .flex()
+                                                                                        .flex_row()
+                                                                                        .items_center()
+                                                                                        .justify_between()
+                                                                                        .p_2()
+                                                                                        .bg(theme.muted_background)
+                                                                                        .border_t_1()
+                                                                                        .border_color(theme.border)
+                                                                                        .children([
+                                                                                            div().text_xs().text_color(theme.muted_foreground)
+                                                                                                .child(format!("{}×{} px | {}", img_size.width.0, img_size.height.0, ct_str)),
+                                                                                            div().cursor_pointer().px_3().py_1().rounded_md()
+                                                                                                .bg(theme.accent).text_color(theme.accent_foreground).text_sm()
+                                                                                                .child(self.t("preview.open_external"))
+                                                                                                .on_mouse_down(MouseButton::Left, {
+                                                                                                    let raw_bytes = raw_bytes.clone();
+                                                                                                    let ext = ext.to_string();
+                                                                                                    move |_event, _window, _cx| {
+                                                                                                        let tmp_path = std::env::temp_dir().join(
+                                                                                                            format!("apipost-preview-{}.{}", uuid::Uuid::new_v4(), ext));
+                                                                                                        if let Err(e) = std::fs::write(&tmp_path, &raw_bytes) {
+                                                                                                            log::error!("Failed to write temp image: {}", e);
+                                                                                                            return;
+                                                                                                        }
+                                                                                                        let _ = std::process::Command::new("xdg-open")
+                                                                                                            .arg(tmp_path.to_string_lossy().to_string())
+                                                                                                            .spawn();
+                                                                                                    }
+                                                                                                }),
+                                                                                        ]),
+                                                                                )
+                                                                        } else {
+                                                                            div().h_full().flex().items_center().justify_center()
+                                                                                .text_color(theme.muted_foreground)
+                                                                                .child("Image decode failed")
+                                                                        }
+                                                                    } else {
+                                                                        div().h_full().flex().items_center().justify_center()
+                                                                            .text_color(theme.muted_foreground)
+                                                                            .child("Image response detected")
+                                                                    }
                                                                 // JSON 和文本类型用 Input 编辑器（自动换行）
-                                                                if ct_str.contains("json")
+                                                                } else if ct_str.contains("json")
                                                                     || ct_str.starts_with("text/plain")
                                                                 {
                                                                     div()
@@ -4170,7 +4230,7 @@ impl Render for MainView {
                                                                     // 图片/SVG/PDF 等类型
                                                                     let t = |key: &str| self.t(key);
                                                                     div()
-                                                                        .h_full()
+                                                                        .flex_1()
                                                                         .flex_col()
                                                                         .overflow_hidden()
                                                                         .child(render_preview_body(
