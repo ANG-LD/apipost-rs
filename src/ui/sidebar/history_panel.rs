@@ -325,6 +325,7 @@ pub fn render_history_panel(
                                             );
                                         },
                                     );
+                                    this.update_pretty_editor(_window, cx);
                                 } else {
                                     this.response = None;
                                     this.response_input.update(cx, |state, cx| {

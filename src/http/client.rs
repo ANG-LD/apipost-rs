@@ -623,7 +623,10 @@ impl HttpClient {
 
         let elapsed = start_time.elapsed();
         let status = response.status().as_u16();
+        let version = response.version();
+        let remote_addr = response.remote_addr();
         log::info!("=== HTTP响应 ===");
+        log::info!("HTTP版本: {:?}, 远端地址: {:?}", version, remote_addr);
         log::info!("状态码: {}  (耗时: {}ms)", status, elapsed.as_millis());
         let response_headers: HashMap<String, String> = response
             .headers()
@@ -828,6 +831,7 @@ impl HttpClient {
             .no_brotli()
             .no_gzip()
             .no_deflate()
+            .no_proxy()
             .timeout(Duration::from_secs(timeout_secs))
             .connect_timeout(Duration::from_secs(10));
 
@@ -847,6 +851,7 @@ impl HttpClient {
             .no_brotli()
             .no_gzip()
             .no_deflate()
+            .no_proxy()
             .timeout(Duration::from_secs(opts.timeout_secs))
             .connect_timeout(Duration::from_secs(10))
             .redirect(if opts.follow_redirects {
