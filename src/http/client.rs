@@ -668,7 +668,6 @@ impl HttpClient {
 
         // 读取原始响应体（reqwest 禁用自动解压，返回原始压缩数据）
         let body_bytes = response.bytes().await.context("读取响应体失败")?;
-        // body_bytes.len() 即为网络传输的压缩大小
         let size_bytes = body_bytes.len() as i64;
 
         // 根据 Content-Encoding 响应头解压
@@ -745,7 +744,7 @@ impl HttpClient {
             body_text.clone()
         };
         log::info!("响应体: {}", body_preview);
-        log::info!("=== HTTP响应结束 (耗时: {}ms, 解压后大小: {} bytes) ===", elapsed.as_millis(), body_text.len());
+        log::info!("=== HTTP响应结束 (耗时: {}ms, 传输大小: {} bytes, 解压后: {} bytes) ===", elapsed.as_millis(), size_bytes, body_text.len());
 
         Ok(HttpResponse {
             status,

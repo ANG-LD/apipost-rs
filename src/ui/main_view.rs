@@ -4013,22 +4013,6 @@ impl Render for MainView {
                                                                         .text_xs()
                                                                         .font_weight(FontWeight(600.0))
                                                                         .child(format!("{} {}", resp.status, resp.status_text())),
-                                                                    // 响应时间
-                                                                    div()
-                                                                        .flex()
-                                                                        .items_center()
-                                                                        .gap_1()
-                                                                        .text_xs()
-                                                                        .text_color(theme.muted_foreground)
-                                                                        .child(format!("{}ms", resp.time_ms)),
-                                                                    // 响应大小
-                                                                    div()
-                                                                        .flex()
-                                                                        .items_center()
-                                                                        .gap_1()
-                                                                        .text_xs()
-                                                                        .text_color(theme.muted_foreground)
-                                                                        .child(format_size(resp.size_bytes)),
                                                                 ]),
                                                             // 模式选择按钮（仅 Body tab 显示）
                                                             if response_tab == ResponseTab::Body {
