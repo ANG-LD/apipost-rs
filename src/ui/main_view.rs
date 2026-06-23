@@ -4016,8 +4016,8 @@ impl Render for MainView {
                                                                 div()
                                                                     .flex_col()
                                                                     .gap_1()
+                                                                    .h(px(300.0))
                                                                     .overflow_y_scrollbar()
-                                                                    .flex_1()
                                                                     .children(self.response_header_inputs.iter().map(|(key_input, val_input)| {
                                                                         div()
                                                                             .flex()
@@ -4260,7 +4260,7 @@ impl Render for MainView {
                                                             .flex_col()
                                                             .overflow_hidden()
                                                             .child(header_row);
-                                                        if self.body_view_mode == BodyViewMode::Pretty {
+                                                        if response_tab == ResponseTab::Body && self.body_view_mode == BodyViewMode::Pretty {
                                                             let is_json = self.response_raw_format == RawFormat::Json;
                                                             let is_xml = self.response_raw_format == RawFormat::Xml;
                                                             let is_text = self.response_raw_format == RawFormat::Text;
