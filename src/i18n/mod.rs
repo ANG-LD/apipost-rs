@@ -185,9 +185,14 @@ impl I18nManager {
 
         // 主题
         map.insert("theme.title".to_string(), "主题".to_string());
-        map.insert("theme.light".to_string(), "浅色".to_string());
-        map.insert("theme.dark".to_string(), "深色".to_string());
-        map.insert("theme.sepia".to_string(), "暖色".to_string());
+        map.insert("theme.light".to_string(), "晨曦".to_string());
+        map.insert("theme.dark".to_string(), "暗夜".to_string());
+        map.insert("theme.sepia".to_string(), "暖阳".to_string());
+        map.insert("theme.ocean".to_string(), "海洋".to_string());
+        map.insert("theme.sunset".to_string(), "日暮".to_string());
+        map.insert("theme.forest".to_string(), "森林".to_string());
+        map.insert("theme.monokai".to_string(), "摩卡".to_string());
+        map.insert("theme.nord".to_string(), "北境".to_string());
 
         // 语言
         map.insert("language.title".to_string(), "语言".to_string());
@@ -377,9 +382,9 @@ impl I18nManager {
         map.insert("theme.light".to_string(), "Light".to_string());
         map.insert("theme.dark".to_string(), "Dark".to_string());
         map.insert("theme.sepia".to_string(), "Sepia".to_string());
-        map.insert("theme.ocean".to_string(), "海洋".to_string());
-        map.insert("theme.sunset".to_string(), "日暮".to_string());
-        map.insert("theme.forest".to_string(), "森林".to_string());
+        map.insert("theme.ocean".to_string(), "Ocean".to_string());
+        map.insert("theme.sunset".to_string(), "Sunset".to_string());
+        map.insert("theme.forest".to_string(), "Forest".to_string());
         map.insert("theme.monokai".to_string(), "Monokai".to_string());
         map.insert("theme.nord".to_string(), "Nord".to_string());
 

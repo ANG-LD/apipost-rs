@@ -5,56 +5,57 @@
 use gpui::*;
 
 /// 浅色主题
+/// 浅色主题 — 简洁清爽
+/// 浅色主题 — 轻盈明亮，专业感
 pub fn light_theme() -> Theme {
     Theme {
         name: "light".to_string(),
         background: rgb(0xffffff),
-        foreground: rgb(0x1f2937),
+        foreground: rgb(0x111827),
         muted_foreground: rgb(0x6b7280),
-        accent: rgb(0x3b82f6),
+        accent: rgb(0x2563eb),
         accent_foreground: rgb(0xffffff),
-        input_background: rgb(0xf9fafb),
+        input_background: rgb(0xffffff),
         border: rgb(0xe5e7eb),
         muted_background: rgb(0xf3f4f6),
         sidebar_background: rgb(0xf9fafb),
         code_background: rgb(0xf3f4f6),
-        success: rgb(0x22c55e),
-        warning: rgb(0xf59e0b),
-        error: rgb(0xef4444),
-        // JSON 语法高亮颜色（浅色主题）
-        json_key: rgb(0x0078d4),      // 蓝色 - JSON键
-        json_string: rgb(0xa31515),   // 红色 - 字符串值
-        json_number: rgb(0x098658),   // 绿色 - 数字
-        json_boolean: rgb(0x0000ff),  // 蓝色 - 布尔值
-        json_null: rgb(0x808080),     // 灰色 - null
-        json_bracket: rgb(0x000000),  // 黑色 - 括号
+        success: rgb(0x059669),
+        warning: rgb(0xd97706),
+        error: rgb(0xdc2626),
+        json_key: rgb(0x2563eb),
+        json_string: rgb(0x059669),
+        json_number: rgb(0xd97706),
+        json_boolean: rgb(0x7c3aed),
+        json_null: rgb(0x9ca3af),
+        json_bracket: rgb(0x374151),
     }
 }
 
 /// 深色主题
+/// 深色主题 — 现代暗黑
 pub fn dark_theme() -> Theme {
     Theme {
         name: "dark".to_string(),
-        background: rgb(0x0f172a),
-        foreground: rgb(0xf1f5f9),
-        muted_foreground: rgb(0x94a3b8),
-        accent: rgb(0x3b82f6),
+        background: rgb(0x0c0c1d),
+        foreground: rgb(0xe8e8f0),
+        muted_foreground: rgb(0x8892a4),
+        accent: rgb(0x6366f1),
         accent_foreground: rgb(0xffffff),
-        input_background: rgb(0x1e293b),
-        border: rgb(0x334155),
-        muted_background: rgb(0x1e293b),
-        sidebar_background: rgb(0x0f172a),
-        code_background: rgb(0x1e293b),
-        success: rgb(0x22c55e),
-        warning: rgb(0xf59e0b),
-        error: rgb(0xef4444),
-        // JSON 语法高亮颜色（深色主题）- 使用更亮的颜色确保可见性
-        json_key: rgb(0x4fc1ff),      // 亮蓝色 - JSON键
-        json_string: rgb(0xff8c69),   // 亮橙色 - 字符串值
-        json_number: rgb(0x98d977),   // 亮绿色 - 数字
-        json_boolean: rgb(0x79b8ff),  // 亮蓝色 - 布尔值
-        json_null: rgb(0xe0e0e0),     // 亮灰色 - null
-        json_bracket: rgb(0xffdd59),  // 亮黄色 - 括号
+        input_background: rgb(0x18182a),
+        border: rgb(0x2a2a40),
+        muted_background: rgb(0x18182a),
+        sidebar_background: rgb(0x0f0f20),
+        code_background: rgb(0x18182a),
+        success: rgb(0x34d399),
+        warning: rgb(0xfbbf24),
+        error: rgb(0xf87171),
+        json_key: rgb(0x60a5fa),
+        json_string: rgb(0xf59e0b),
+        json_number: rgb(0x4ade80),
+        json_boolean: rgb(0xc084fc),
+        json_null: rgb(0x6b7280),
+        json_bracket: rgb(0xfacc15),
     }
 }
 
@@ -84,6 +85,11 @@ pub struct Theme {
     pub json_bracket: gpui::Rgba,
 }
 
+/// 暖色主题
+/// 暖色主题 — 温暖护眼
+/// 暖色主题 — 羊皮纸质感，典雅舒适
+/// 暖色主题 — 羊皮纸质感，典雅舒适
+/// 暖色主题 — 羊皮纸质感，典雅舒适
 /// 暖色主题
 pub fn sepia_theme() -> Theme {
     Theme {

@@ -2562,7 +2562,6 @@ impl MainView {
         };
         gpui_component::theme::Theme::change(mode, None, cx);
 
-        self.show_settings_popover = false;
         cx.notify();
     }
 
@@ -2919,11 +2918,6 @@ fn settings_popover(this: &mut MainView, cx: &mut Context<MainView>, theme: &The
     let t_theme_dark = this.t("theme.dark");
     let t_theme_light = this.t("theme.light");
     let t_theme_sepia = this.t("theme.sepia");
-    let t_theme_ocean = this.t("theme.ocean");
-    let t_theme_sunset = this.t("theme.sunset");
-    let t_theme_forest = this.t("theme.forest");
-    let t_theme_monokai = this.t("theme.monokai");
-    let t_theme_nord = this.t("theme.nord");
     let t_settings_general = this.t("settings.general");
     let t_settings_auto_save = this.t("settings.auto_save");
     let t_settings_proxy = this.t("settings.proxy");
@@ -3007,7 +3001,7 @@ fn settings_popover(this: &mut MainView, cx: &mut Context<MainView>, theme: &The
                     },
                 ))
                 .child(setting_option_btn(
-                    &t_theme_ocean,
+                    &this.t("theme.ocean"),
                     "theme-ocean",
                     current_theme == "ocean",
                     theme,
@@ -3017,7 +3011,7 @@ fn settings_popover(this: &mut MainView, cx: &mut Context<MainView>, theme: &The
                     },
                 ))
                 .child(setting_option_btn(
-                    &t_theme_sunset,
+                    &this.t("theme.sunset"),
                     "theme-sunset",
                     current_theme == "sunset",
                     theme,
@@ -3027,7 +3021,7 @@ fn settings_popover(this: &mut MainView, cx: &mut Context<MainView>, theme: &The
                     },
                 ))
                 .child(setting_option_btn(
-                    &t_theme_forest,
+                    &this.t("theme.forest"),
                     "theme-forest",
                     current_theme == "forest",
                     theme,
@@ -3037,7 +3031,7 @@ fn settings_popover(this: &mut MainView, cx: &mut Context<MainView>, theme: &The
                     },
                 ))
                 .child(setting_option_btn(
-                    &t_theme_monokai,
+                    &this.t("theme.monokai"),
                     "theme-monokai",
                     current_theme == "monokai",
                     theme,
@@ -3047,7 +3041,7 @@ fn settings_popover(this: &mut MainView, cx: &mut Context<MainView>, theme: &The
                     },
                 ))
                 .child(setting_option_btn(
-                    &t_theme_nord,
+                    &this.t("theme.nord"),
                     "theme-nord",
                     current_theme == "nord",
                     theme,
@@ -3187,7 +3181,7 @@ fn toggle_switch(
         } else {
             theme.muted_foreground
         })
-        .hover(|s| if value { s.opacity(0.85) } else { s.bg(theme.border) })
+        .hover(|s| if value { s } else { s.bg(theme.border) })
         .on_mouse_down(MouseButton::Left, cx.listener(on_toggle))
         .child(if value { "ON" } else { "OFF" })
 }
@@ -3302,7 +3296,7 @@ impl Render for MainView {
                                                 cx.notify();
                                             }))
                                             .child(
-                                                Icon::new(IconName::Settings).small()
+                                                Icon::new(IconName::Settings).small().text_color(theme.muted_foreground)
                                             ),
                                     ]),
                                 // 标签页按钮
@@ -3319,7 +3313,7 @@ impl Render for MainView {
                                             .items_center()
                                             .justify_center()
                                             .cursor_pointer()
-                                            .bg(if sidebar_tab == SidebarTab::Collections { theme.muted_background } else { theme.input_background })
+                                            .bg(if sidebar_tab == SidebarTab::Collections { theme.accent } else { theme.input_background })
                                             .text_color(if sidebar_tab == SidebarTab::Collections { theme.accent_foreground } else { theme.muted_foreground })
                                             .on_click(cx.listener(|this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                 this.set_sidebar_tab(SidebarTab::Collections, cx);
@@ -3333,7 +3327,7 @@ impl Render for MainView {
                                             .items_center()
                                             .justify_center()
                                             .cursor_pointer()
-                                            .bg(if sidebar_tab == SidebarTab::History { theme.muted_background } else { theme.input_background })
+                                            .bg(if sidebar_tab == SidebarTab::History { theme.accent } else { theme.input_background })
                                             .text_color(if sidebar_tab == SidebarTab::History { theme.accent_foreground } else { theme.muted_foreground })
                                             .on_click(cx.listener(|this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                 this.set_sidebar_tab(SidebarTab::History, cx);
@@ -3347,7 +3341,7 @@ impl Render for MainView {
                                             .items_center()
                                             .justify_center()
                                             .cursor_pointer()
-                                            .bg(if sidebar_tab == SidebarTab::Environments { theme.muted_background } else { theme.input_background })
+                                            .bg(if sidebar_tab == SidebarTab::Environments { theme.accent } else { theme.input_background })
                                             .text_color(if sidebar_tab == SidebarTab::Environments { theme.accent_foreground } else { theme.muted_foreground })
                                             .on_click(cx.listener(|this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                 this.set_sidebar_tab(SidebarTab::Environments, cx);
@@ -3843,7 +3837,7 @@ impl Render for MainView {
                                                             .text_xs().text_color(theme.accent_foreground)
                                                             .child(tab_method),
                                                         div()
-                                                            .text_color(if is_active { theme.accent_foreground } else { theme.muted_foreground })
+                                                            .text_color(if is_active { theme.foreground } else { theme.muted_foreground })
                                                             .max_w(px(90.0))
                                                             .overflow_hidden()
                                                             .text_ellipsis()
@@ -3883,7 +3877,7 @@ impl Render for MainView {
                                             .justify_center()
                                             .cursor_pointer()
                                             .text_color(theme.muted_foreground)
-                                            .hover(|s| s.bg(theme.muted_background).text_color(theme.accent_foreground))
+                                            .hover(|s| s.bg(theme.muted_background).text_color(theme.foreground))
                                             .on_click(cx.listener(|this, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>| {
                                                 this.add_tab(window, cx);
                                             }))
@@ -4169,7 +4163,10 @@ impl Render for MainView {
                                                                 .child(
                                                                     Input::new(&self.response_pretty_input)
                                                                         .w_full()
-                                                                        .h_full(),
+                                                                        .h_full()
+                                                                        .bg(theme.code_background)
+                                                                        .text_color(theme.foreground)
+                                                                        .border_0(),
                                                                 )
                                                         },
                                                         BodyViewMode::Raw => {
@@ -4184,7 +4181,10 @@ impl Render for MainView {
                                                                 .child(
                                                                     Input::new(&self.response_input)
                                                                         .w_full()
-                                                                        .h_full(),
+                                                                        .h_full()
+                                                                        .bg(theme.code_background)
+                                                                        .text_color(theme.foreground)
+                                                                        .border_0(),
                                                                 )
                                                         },
                                                         BodyViewMode::Preview => {
