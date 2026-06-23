@@ -143,6 +143,22 @@ impl Database {
             [],
         )?;
 
+        // 创建工作区状态表（保存退出前的 tabs、response 等）
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS workspace_state (
+                id INTEGER PRIMARY KEY DEFAULT 1,
+                tabs_json TEXT NOT NULL DEFAULT '[]',
+                active_tab INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL
+            )",
+            [],
+        )?;
+        // 确保只有一行
+        conn.execute(
+            "INSERT OR IGNORE INTO workspace_state (id, tabs_json, active_tab, updated_at) VALUES (1, '[]', 0, '')",
+            [],
+        )?;
+
         // 创建索引
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_history_created_at ON history(created_at DESC)",
@@ -659,6 +675,33 @@ impl Database {
             .map_err(|_| anyhow::anyhow!("数据库锁中毒"))?;
         let mut result = vec![id.to_string()];
         Self::collect_descendant_ids_impl(&conn, id, &mut result)?;
+        Ok(result)
+    }
+
+    /// 保存工作区状态（tabs、response 等）
+    pub fn save_workspace_state(&self, tabs_json: &str, active_tab: usize) -> Result<()> {
+        let conn = self.conn.lock()
+            .map_err(|_| anyhow::anyhow!("数据库锁中毒"))?;
+        conn.execute(
+            "UPDATE workspace_state SET tabs_json = ?1, active_tab = ?2, updated_at = ?3 WHERE id = 1",
+            params![tabs_json, active_tab as i64, chrono::Utc::now().to_rfc3339()],
+        )?;
+        Ok(())
+    }
+
+    /// 加载工作区状态
+    pub fn load_workspace_state(&self) -> Result<(String, usize)> {
+        let conn = self.conn.lock()
+            .map_err(|_| anyhow::anyhow!("数据库锁中毒"))?;
+        let mut stmt = conn.prepare(
+            "SELECT tabs_json, active_tab FROM workspace_state WHERE id = 1"
+        )?;
+        let result = stmt.query_row([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)? as usize,
+            ))
+        })?;
         Ok(result)
     }
 }

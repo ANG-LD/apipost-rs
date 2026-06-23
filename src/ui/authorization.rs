@@ -55,6 +55,7 @@ impl AuthType {
 
 /// API Key Location
 #[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub enum ApiKeyLocation {
     Header,
     Query,

@@ -10,6 +10,7 @@ use regex;
 
 /// Body 类型枚举
 #[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub enum BodyType {
     None,
     FormData,
@@ -69,6 +70,7 @@ impl BodyType {
 
 /// Raw 格式类型
 #[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub enum RawFormat {
     Json,
     Xml,

@@ -110,7 +110,16 @@ fn main() {
             },
             |window, cx| {
                 let main_view = cx.new(|cx| MainView::new(app_state.clone(), window, cx));
-                cx.new(|cx| Root::new(main_view, window, cx))
+                main_view.update(cx, |view, cx| {
+                    view.load_workspace(window, cx);
+                });
+                let root = cx.new(|cx| Root::new(main_view, window, cx));
+
+                cx.on_window_closed(move |_, _| {
+                    log::info!("应用已退出");
+                });
+
+                root
             },
         );
 

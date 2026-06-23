@@ -89,7 +89,7 @@ pub struct RequestTab {
 }
 
 /// 每个标签页的完整状态快照（纯数据，不含 Entity 引用）
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct TabState {
     pub body_type: BodyType,
     pub raw_format: RawFormat,
@@ -144,6 +144,7 @@ impl Default for TabState {
 
 /// 请求构造器标签页
 #[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub enum BuilderTab {
     Params,
     Authorization,
@@ -1976,6 +1977,49 @@ impl MainView {
         self.is_importing_curl = false;
 
         cx.notify();
+    }
+
+    /// 保存所有 tab 状态到数据库（退出时调用）
+    pub fn save_workspace(&mut self, cx: &mut Context<Self>) {
+        self.save_current_tab_meta(cx);
+        let tabs: Vec<&TabState> = self.request_tabs.iter()
+            .map(|t| &t.tab_state)
+            .collect();
+        if let Ok(json) = serde_json::to_string(&tabs) {
+            if let Err(e) = self.app_state.lock().unwrap().db.save_workspace_state(&json, self.active_tab) {
+                log::error!("保存工作区失败: {}", e);
+            } else {
+                log::info!("工作区已保存 ({} tabs)", self.request_tabs.len());
+            }
+        }
+    }
+
+    /// 从数据库恢复上次退出时的 tab 状态
+    pub fn load_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let workspace = self.app_state.lock().unwrap().db.load_workspace_state();
+        if let Ok((json, active_tab)) = workspace {
+            if let Ok(tabs) = serde_json::from_str::<Vec<TabState>>(&json) {
+                if !tabs.is_empty() {
+                    // 用恢复的 tabs 替换默认 tab
+                    self.request_tabs.clear();
+                    for (i, ts) in tabs.into_iter().enumerate() {
+                        self.request_tabs.push(RequestTab {
+                            id: i,
+                            method: String::new(),
+                            url: String::new(),
+                            name: self.t("sidebar.new_request"),
+                            tab_state: ts,
+                        });
+                    }
+                    let idx = active_tab.min(self.request_tabs.len() - 1);
+                    self.active_tab = idx;
+                    let tab = self.request_tabs[idx].clone();
+                    self.load_tab_meta(&tab, window, cx);
+                    log::info!("工作区已恢复 ({} tabs)", self.request_tabs.len());
+                    return;
+                }
+            }
+        }
     }
 
     /// 关闭指定标签页（至少保留一个）
