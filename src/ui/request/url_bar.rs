@@ -17,26 +17,31 @@ pub fn render_url_bar(
     let method = this.method.clone();
 
     div()
+        .flex_none()
+        .flex_shrink_0()
         .w_full()
         .flex()
         .flex_row()
         .items_center()
         .overflow_hidden()
-        .gap(px(8.0))
+        .gap(px(6.0))
         .px_2()
-        .py_2()
+        .py_1p5()
+        .bg(theme.background)
+        .border_b(px(1.0))
+        .border_color(theme.border)
         .children([
             div()
-                .h(px(34.0))
-                .w(px(95.0))
+                .h(px(32.0))
+                .w(px(90.0))
                 .flex()
                 .child(
                     Select::new(&this.method_select)
                         .small()
-                        .h(px(34.0))
+                        .h(px(32.0))
                         .border_1()
                         .border_color(theme.border)
-                        .rounded_sm()
+                        .rounded_md()
                         .text_color(rgb(method_color(&method)))
                         .font_semibold()
                         .flex_none(),
@@ -44,27 +49,27 @@ pub fn render_url_bar(
             div()
                 .flex_1()
                 .w_full()
-                .h(px(34.0))
+                .h(px(32.0))
                 .flex()
                 .child(
                     Input::new(&this.url_input)
-                        .h(px(34.0))
+                        .h(px(32.0))
                         .w_full()
-                        .bg(theme.code_background)
+                        .bg(theme.input_background)
                         .border_1()
                         .border_color(theme.border)
-                        .rounded_sm()
+                        .rounded_md()
+                        .text_sm()
                         .text_color(theme.foreground),
                 ),
             div()
                 .flex()
-                .h(px(34.0))
-                .w(px(95.0))
-                .mr_1()
+                .h(px(32.0))
+                .w(px(88.0))
                 .child(
                     Button::new("send")
-                        .px_4()
-                        .rounded_sm()
+                        .px_3()
+                        .rounded_md()
                         .bg(if is_loading {
                             theme.muted_foreground
                         } else {
@@ -72,6 +77,8 @@ pub fn render_url_bar(
                         })
                         .text_color(rgb(0xffffff))
                         .font_semibold()
+                        .text_xs()
+                        .shadow_sm()
                         .icon(if is_loading {
                             IconName::LoaderCircle
                         } else {
@@ -113,15 +120,15 @@ pub fn render_url_bar(
                 ),
             div()
                 .flex()
-                .h(px(34.0))
-                .mr_2()
+                .h(px(32.0))
                 .child(
                     Button::new("save-request")
-                        .h(px(34.0))
+                        .h(px(32.0))
                         .px_3()
-                        .rounded_sm()
-                        .bg(theme.input_background)
-                        .text_color(theme.foreground)
+                        .rounded_md()
+                        .bg(theme.muted_background)
+                        .text_color(theme.muted_foreground)
+                        .text_xs()
                         .label(this.t("button.save"))
                         .on_click(cx.listener(
                             |this: &mut MainView,

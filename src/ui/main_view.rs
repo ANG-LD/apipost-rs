@@ -254,6 +254,7 @@ pub struct MainView {
     pub(crate) next_tab_id: usize,
     pub(crate) splitter_dragging: bool,
     pub(crate) splitter_start_y: f32,
+    pub(crate) last_splitter_update_y: f32,
     pub(crate) request_builder_height: f32,
     pub(crate) response_editor_height: f32,
     pub(crate) response_editor_dragging: bool,
@@ -617,21 +618,24 @@ impl MainView {
         let is_active = current_tab == tab;
         div()
             .id(id)
-            .min_w(px(80.0))
-            .px_4()
-            .py_2()
-            .text_sm()
+            .min_w(px(72.0))
+            .px_3()
+            .py_1p5()
+            .text_xs()
+            .font_weight(if is_active { FontWeight(600.0) } else { FontWeight(400.0) })
             .cursor_pointer()
+            .rounded_t_md()
             .text_color(if is_active {
-                theme.accent_foreground
+                theme.foreground
             } else {
                 theme.muted_foreground
             })
             .bg(if is_active {
-                theme.code_background
-            } else {
                 theme.background
+            } else {
+                rgba(0x00000000)
             })
+            .hover(|s| if is_active { s } else { s.bg(theme.code_background) })
             .on_click(cx.listener(
                 move |this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
                     this.set_builder_tab(tab, cx);
@@ -653,16 +657,24 @@ impl MainView {
         let is_active = current_tab == tab;
         div()
             .id(id)
-            .min_w(px(70.0))
+            .min_w(px(64.0))
             .px_3()
-            .py_2()
-            .text_sm()
+            .py_1()
+            .text_xs()
+            .font_weight(if is_active { FontWeight(600.0) } else { FontWeight(400.0) })
             .cursor_pointer()
+            .rounded_t_md()
             .text_color(if is_active {
-                theme.accent_foreground
+                theme.foreground
             } else {
                 theme.muted_foreground
             })
+            .bg(if is_active {
+                theme.background
+            } else {
+                rgba(0x00000000)
+            })
+            .hover(|s| if is_active { s } else { s.bg(theme.code_background) })
             .on_click(cx.listener(
                 move |this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
                     this.set_response_tab(tab, cx);
@@ -958,7 +970,8 @@ impl MainView {
             next_tab_id: 2,
             splitter_dragging: false,
             splitter_start_y: 0.0,
-            request_builder_height: 300.0,
+            last_splitter_update_y: 0.0,
+            request_builder_height: 400.0,
             response_editor_height: 400.0,
             response_editor_dragging: false,
             response_editor_start_y: 0.0,
@@ -1246,17 +1259,22 @@ impl MainView {
     pub fn start_splitter_drag(&mut self, start_y: f32) {
         self.splitter_dragging = true;
         self.splitter_start_y = start_y;
+        self.last_splitter_update_y = start_y;
     }
 
     /// 更新splitter位置（拖拽中）
-    pub fn update_splitter_drag(&mut self, current_y: f32) {
+    pub fn update_splitter_drag(&mut self, current_y: f32) -> bool {
         if self.splitter_dragging {
-            // 计算delta
             let delta_y = current_y - self.splitter_start_y;
-            // 直接调整高度（每像素变化对应相同的像素变化）
             self.request_builder_height = (self.request_builder_height + delta_y).max(100.0);
             self.splitter_start_y = current_y;
+            // 节流：每 6px 移动才通知一次渲染，减少重绘频率
+            if (current_y - self.last_splitter_update_y).abs() > 6.0 {
+                self.last_splitter_update_y = current_y;
+                return true;
+            }
         }
+        false
     }
 
     /// 结束拖拽splitter
@@ -2291,7 +2309,11 @@ impl MainView {
             self.response_html_input.update(cx, |s, cx| {
                 s.set_value("", window, cx);
             });
+            self.response_header_inputs.clear();
         }
+
+        // 刷新美化编辑器
+        self.update_pretty_editor(window, cx);
 
         // 恢复响应 Raw 格式选择器
         self.response_raw_format_select.update(cx, |s, cx| {
@@ -3688,8 +3710,9 @@ impl Render for MainView {
                             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                 if this.splitter_dragging {
                                     let y: f32 = event.position.y.into();
-                                    this.update_splitter_drag(y);
-                                    cx.notify();
+                                    if this.update_splitter_drag(y) {
+                                        cx.notify();
+                                    }
                                 }
                             }))
                             .on_mouse_up(MouseButton::Left, cx.listener(|this, _: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>| {
@@ -3701,12 +3724,14 @@ impl Render for MainView {
                             .children([
                                 // 请求标签栏
                                 div()
-                                    .h(px(40.0))
+                                    .h(px(36.0))
                                     .flex()
                                     .flex_row()
-                                    .bg(theme.code_background)
+                                    .items_end()
+                                    .bg(theme.muted_background)
                                     .border_b(px(1.0))
-                                    .border_color(theme.muted_background)
+                                    .border_color(theme.border)
+                                    .gap_px()
                                     .children(request_tabs.iter().enumerate().map(|(i, tab)| {
                                         let is_active = i == active_tab;
                                         let method_clr = method_color(&tab.method);
@@ -3720,17 +3745,19 @@ impl Render for MainView {
                                         let show_close = show_close;
 
                                         div()
-                                            .h(px(40.0))
+                                            .h(px(36.0))
                                             .w(px(150.0))
                                             .pl_3()
                                             .pr_1()
                                             .flex()
                                             .items_center()
                                             .gap_1()
-                                            .bg(if is_active { theme.background } else { theme.code_background })
+                                            .bg(if is_active { theme.background } else { rgba(0x00000000) })
+                                            .rounded_t_md()
                                             .border_b_2()
                                             .border_b(if is_active { px(2.0) } else { px(0.0) })
-                                            .border_color(if is_active { theme.accent } else { theme.muted_background })
+                                            .border_color(if is_active { theme.accent } else { rgba(0x00000000) })
+                                            .hover(|s| if is_active { s } else { s.bg(theme.code_background) })
                                             .text_xs()
                                             .relative()
                                             .child(
@@ -3804,7 +3831,6 @@ impl Render for MainView {
                                     .flex()
                                     .w_full()
                                     .flex_col()
-                                    .overflow_hidden()
                                     .bg(theme.background)
                                     .children([
                                         crate::ui::request::render_url_bar(self, window, cx).into_any_element(),
@@ -3837,25 +3863,18 @@ impl Render for MainView {
                                     ]),
                                 // Splitter（可拖拽调整上下区域大小）
                                 div()
-                                    .h(px(5.0))
+                                    .flex_none()
+                                    .h(px(6.0))
                                     .w_full()
                                     .bg(theme.muted_background)
+                                    .border_t(px(1.0))
+                                    .border_b(px(1.0))
+                                    .border_color(theme.border)
                                     .cursor_row_resize()
-                                    .hover(|s| s.bg(theme.accent))
+                                    .hover(|s| s.bg(theme.accent).opacity(0.3))
                                     .on_mouse_down(MouseButton::Left, cx.listener(|this, event: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                         let y: f32 = event.position.y.into();
                                         this.start_splitter_drag(y);
-                                        cx.notify();
-                                    }))
-                                    .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window: &mut Window, cx: &mut Context<Self>| {
-                                        if this.splitter_dragging {
-                                            let y: f32 = event.position.y.into();
-                                            this.update_splitter_drag(y);
-                                            cx.notify();
-                                        }
-                                    }))
-                                    .on_mouse_up(MouseButton::Left, cx.listener(|this, _: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>| {
-                                        this.end_splitter_drag();
                                         cx.notify();
                                     })),
                                 // 响应查看器
@@ -3869,12 +3888,14 @@ impl Render for MainView {
                                         div()
                                             .flex()
                                             .flex_row()
-                                            .h(px(36.0))
+                                            .h(px(32.0))
                                             .px_3()
                                             .items_center()
-                                            .gap_4()
+                                            .gap_0()
+                                            .bg(theme.muted_background)
+                                            .rounded_t_md()
                                             .border_b(px(1.0))
-                                            .border_color(theme.muted_background)
+                                            .border_color(theme.border)
                                             .children([
                                                 self.response_tab_button(cx, "response.body", ResponseTab::Body, response_tab, "response-body"),
                                                 self.response_tab_button(cx, "response.cookies", ResponseTab::Cookies, response_tab, "response-cookies"),
@@ -3884,7 +3905,7 @@ impl Render for MainView {
                                         // 响应内容区
                                         div()
                                             .flex_1()
-                                            .p_4()
+                                            .p_3()
                                             .overflow_y_hidden()
                                             .flex()
                                             .flex_col()
@@ -3916,47 +3937,77 @@ impl Render for MainView {
                                                         .items_center()
                                                         .justify_between()
                                                         .w_full()
-                                                        .mb_2()
+                                                        .mb_3()
                                                         .children([
-                                                            // 状态徽章
+                                                            // 状态信息组
                                                             div()
-                                                                .px_2()
-                                                                .py_px()
-                                                                .rounded_sm()
-                                                                .bg(if (200..300).contains(&resp.status) { theme.success } else { theme.error })
-                                                                .text_color(theme.accent_foreground)
-                                                                .child(format!("{} {}", resp.status, resp.status_text())),
+                                                                .flex()
+                                                                .items_center()
+                                                                .gap_3()
+                                                                .children([
+                                                                    // 状态徽章
+                                                                    div()
+                                                                        .px_2p5()
+                                                                        .py_px()
+                                                                        .rounded_md()
+                                                                        .bg(if (200..300).contains(&resp.status) { theme.success } else { theme.error })
+                                                                        .text_color(theme.accent_foreground)
+                                                                        .text_xs()
+                                                                        .font_weight(FontWeight(600.0))
+                                                                        .child(format!("{} {}", resp.status, resp.status_text())),
+                                                                    // 响应时间
+                                                                    div()
+                                                                        .flex()
+                                                                        .items_center()
+                                                                        .gap_1()
+                                                                        .text_xs()
+                                                                        .text_color(theme.muted_foreground)
+                                                                        .child(format!("{}ms", resp.time_ms)),
+                                                                    // 响应大小
+                                                                    div()
+                                                                        .flex()
+                                                                        .items_center()
+                                                                        .gap_1()
+                                                                        .text_xs()
+                                                                        .text_color(theme.muted_foreground)
+                                                                        .child(format_size(resp.size_bytes)),
+                                                                ]),
                                                             // 模式选择按钮（仅 Body tab 显示）
                                                             if response_tab == ResponseTab::Body {
                                                                 div()
                                                                     .flex()
                                                                     .flex_row()
-                                                                    .gap_2()
+                                                                    .gap_1()
+                                                                    .bg(theme.muted_background)
+                                                                    .rounded_md()
+                                                                    .p_px()
                                                                     .children([
                                                                         Button::new("pretty")
-                                                                            .min_w(px(70.0))
+                                                                            .min_w(px(60.0))
                                                                             .label(self.t("ui.pretty"))
                                                                             .small()
-                                                                            .px_3()
-                                                                            .py_1()
-                                                                            .rounded_sm()
-                                                                            .text_sm()
-                                                                            .bg(if self.body_view_mode == BodyViewMode::Pretty { theme.accent } else { theme.input_background })
-                                                                            .text_color(if self.body_view_mode == BodyViewMode::Pretty { theme.accent_foreground } else { theme.muted_foreground })
+                                                                            .px_2()
+                                                                            .py_px()
+                                                                            .rounded_md()
+                                                                            .text_xs()
+                                                                            .bg(if self.body_view_mode == BodyViewMode::Pretty { theme.background } else { rgba(0x00000000) })
+                                                                            .text_color(if self.body_view_mode == BodyViewMode::Pretty { theme.foreground } else { theme.muted_foreground })
+                                                                            .shadow_sm()
                                                                             .on_click(cx.listener(|this, _: &gpui::ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                                                 this.body_view_mode = BodyViewMode::Pretty;
                                                                                 cx.notify();
                                                                             })),
                                                                         Button::new("raw")
-                                                                            .min_w(px(70.0))
+                                                                            .min_w(px(60.0))
                                                                             .label(self.t("ui.raw"))
                                                                             .small()
-                                                                            .px_3()
-                                                                            .py_1()
-                                                                            .rounded_sm()
-                                                                            .text_sm()
-                                                                            .bg(if self.body_view_mode == BodyViewMode::Raw { theme.accent } else { theme.input_background })
-                                                                            .text_color(if self.body_view_mode == BodyViewMode::Raw { theme.accent_foreground } else { theme.muted_foreground })
+                                                                            .px_2()
+                                                                            .py_px()
+                                                                            .rounded_md()
+                                                                            .text_xs()
+                                                                            .bg(if self.body_view_mode == BodyViewMode::Raw { theme.background } else { rgba(0x00000000) })
+                                                                            .text_color(if self.body_view_mode == BodyViewMode::Raw { theme.foreground } else { theme.muted_foreground })
+                                                                            .shadow_sm()
                                                                             .on_click(cx.listener(|this, _: &gpui::ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                                                 this.body_view_mode = BodyViewMode::Raw;
                                                                                 cx.notify();
@@ -4342,7 +4393,7 @@ impl Render for MainView {
                     ]),
                 // ==================== 底部状态栏 ====================
                 div()
-                    .h(px(24.0))
+                    .h(px(26.0))
                     .flex()
                     .flex_row()
                     .items_center()
@@ -4350,7 +4401,7 @@ impl Render for MainView {
                     .px_3()
                     .bg(theme.muted_background)
                     .border_t(px(1.0))
-                    .border_color(theme.muted_background)
+                    .border_color(theme.border)
                     .text_xs()
                     .text_color(theme.muted_foreground)
                     .children([

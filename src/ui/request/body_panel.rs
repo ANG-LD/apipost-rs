@@ -7,6 +7,7 @@ use gpui_component::button::Button;
 use gpui_component::input::Input;
 use gpui_component::select::Select;
 use gpui_component::{IconName, Sizable, StyledExt};
+use gpui_component::scroll::ScrollableElement;
 
 pub fn render_body_panel(
     this: &mut MainView,
@@ -20,7 +21,7 @@ pub fn render_body_panel(
         .flex_1()
         .gap_3()
         .p_3()
-        .overflow_y_hidden()
+        .overflow_y_scrollbar()
         .child(render_body_type_selector(this, &body_state, cx))
         .child(render_body_content(this, body_state, window, cx))
         .into_any_element()

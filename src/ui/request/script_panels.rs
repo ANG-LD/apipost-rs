@@ -4,6 +4,7 @@ use gpui::*;
 use gpui_component::input::Input;
 use gpui_component::Sizable;
 use gpui_component::StyledExt;
+use gpui_component::scroll::ScrollableElement;
 
 pub fn render_pre_request_panel(
     this: &mut MainView,
@@ -16,7 +17,7 @@ pub fn render_pre_request_panel(
         .flex_1()
         .gap_2()
         .p_3()
-        .overflow_y_hidden()
+        .overflow_y_scrollbar()
         .children([
             div()
                 .text_xs()
@@ -30,7 +31,7 @@ pub fn render_pre_request_panel(
                 .border_1()
                 .border_color(theme.border)
                 .rounded_md()
-                .overflow_y_hidden()
+                .overflow_hidden()
                 .child(
                     Input::new(&this.script_state.pre_request_script)
                         .flex_1()
@@ -53,7 +54,7 @@ pub fn render_tests_panel(
         .flex_1()
         .gap_2()
         .p_3()
-        .overflow_y_hidden()
+        .overflow_y_scrollbar()
         .children([
             div()
                 .text_xs()
@@ -67,7 +68,7 @@ pub fn render_tests_panel(
                 .border_1()
                 .border_color(theme.border)
                 .rounded_md()
-                .overflow_y_hidden()
+                .overflow_hidden()
                 .child(
                     Input::new(&this.script_state.test_script)
                         .flex_1()

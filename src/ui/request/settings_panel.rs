@@ -5,6 +5,7 @@ use gpui::*;
 use gpui_component::input::Input;
 use gpui_component::Sizable;
 use gpui_component::StyledExt;
+use gpui_component::scroll::ScrollableElement;
 
 pub fn render_settings_panel(
     this: &mut MainView,
@@ -18,7 +19,7 @@ pub fn render_settings_panel(
         .flex_1()
         .gap_4()
         .p_3()
-        .overflow_y_hidden()
+        .overflow_y_scrollbar()
         .children([
             div()
                 .flex()
