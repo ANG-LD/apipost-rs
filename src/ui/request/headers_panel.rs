@@ -18,7 +18,7 @@ pub fn render_headers_panel(
         .flex_col()
         .flex_1()
         .gap_2()
-        .p_3().pb_16()
+        .p_3().pb_32()
         .overflow_y_scrollbar()
         .children([
             div()
