@@ -377,6 +377,11 @@ impl I18nManager {
         map.insert("theme.light".to_string(), "Light".to_string());
         map.insert("theme.dark".to_string(), "Dark".to_string());
         map.insert("theme.sepia".to_string(), "Sepia".to_string());
+        map.insert("theme.ocean".to_string(), "海洋".to_string());
+        map.insert("theme.sunset".to_string(), "日暮".to_string());
+        map.insert("theme.forest".to_string(), "森林".to_string());
+        map.insert("theme.monokai".to_string(), "Monokai".to_string());
+        map.insert("theme.nord".to_string(), "Nord".to_string());
 
         // Language
         map.insert("language.title".to_string(), "Language".to_string());

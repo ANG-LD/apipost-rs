@@ -110,12 +110,147 @@ pub fn sepia_theme() -> Theme {
     }
 }
 
+/// 海洋蓝主题
+pub fn ocean_theme() -> Theme {
+    Theme {
+        name: "ocean".to_string(),
+        background: rgb(0x0b1929),
+        foreground: rgb(0xd4e4f7),
+        muted_foreground: rgb(0x7b98b3),
+        accent: rgb(0x00b4d8),
+        accent_foreground: rgb(0xffffff),
+        input_background: rgb(0x12283d),
+        border: rgb(0x1e3a52),
+        muted_background: rgb(0x12283d),
+        sidebar_background: rgb(0x0b1929),
+        code_background: rgb(0x12283d),
+        success: rgb(0x2dd4bf),
+        warning: rgb(0xfbbf24),
+        error: rgb(0xf87171),
+        json_key: rgb(0x67e8f9),
+        json_string: rgb(0xfda4af),
+        json_number: rgb(0x86efac),
+        json_boolean: rgb(0x93c5fd),
+        json_null: rgb(0x94a3b8),
+        json_bracket: rgb(0xfde68a),
+    }
+}
+
+/// 日暮橙主题
+pub fn sunset_theme() -> Theme {
+    Theme {
+        name: "sunset".to_string(),
+        background: rgb(0x1a1025),
+        foreground: rgb(0xf0d9b5),
+        muted_foreground: rgb(0x9e8a7a),
+        accent: rgb(0xf97316),
+        accent_foreground: rgb(0xffffff),
+        input_background: rgb(0x2a1835),
+        border: rgb(0x4a2a45),
+        muted_background: rgb(0x2a1835),
+        sidebar_background: rgb(0x1a1025),
+        code_background: rgb(0x2a1835),
+        success: rgb(0x84cc16),
+        warning: rgb(0xf59e0b),
+        error: rgb(0xef4444),
+        json_key: rgb(0xfb923c),
+        json_string: rgb(0xfbbf24),
+        json_number: rgb(0xa3e635),
+        json_boolean: rgb(0x818cf8),
+        json_null: rgb(0x9e8a7a),
+        json_bracket: rgb(0xf0d9b5),
+    }
+}
+
+/// 森林绿主题
+pub fn forest_theme() -> Theme {
+    Theme {
+        name: "forest".to_string(),
+        background: rgb(0x0d1f17),
+        foreground: rgb(0xc8d6c0),
+        muted_foreground: rgb(0x6b8a6e),
+        accent: rgb(0x4ade80),
+        accent_foreground: rgb(0x0d1f17),
+        input_background: rgb(0x162e21),
+        border: rgb(0x234a31),
+        muted_background: rgb(0x162e21),
+        sidebar_background: rgb(0x0d1f17),
+        code_background: rgb(0x162e21),
+        success: rgb(0x86efac),
+        warning: rgb(0xfacc15),
+        error: rgb(0xf87171),
+        json_key: rgb(0x6ee7b7),
+        json_string: rgb(0xfca5a5),
+        json_number: rgb(0xa3e635),
+        json_boolean: rgb(0x67e8f9),
+        json_null: rgb(0x6b8a6e),
+        json_bracket: rgb(0xc8d6c0),
+    }
+}
+
+/// Monokai 经典主题
+pub fn monokai_theme() -> Theme {
+    Theme {
+        name: "monokai".to_string(),
+        background: rgb(0x272822),
+        foreground: rgb(0xf8f8f2),
+        muted_foreground: rgb(0x75715e),
+        accent: rgb(0xa6e22e),
+        accent_foreground: rgb(0x272822),
+        input_background: rgb(0x3e3d32),
+        border: rgb(0x49483e),
+        muted_background: rgb(0x3e3d32),
+        sidebar_background: rgb(0x272822),
+        code_background: rgb(0x3e3d32),
+        success: rgb(0xa6e22e),
+        warning: rgb(0xe6db74),
+        error: rgb(0xf92672),
+        json_key: rgb(0x66d9ef),
+        json_string: rgb(0xe6db74),
+        json_number: rgb(0xae81ff),
+        json_boolean: rgb(0xae81ff),
+        json_null: rgb(0x75715e),
+        json_bracket: rgb(0xf8f8f2),
+    }
+}
+
+/// Nord 冷淡主题
+pub fn nord_theme() -> Theme {
+    Theme {
+        name: "nord".to_string(),
+        background: rgb(0x2e3440),
+        foreground: rgb(0xeceff4),
+        muted_foreground: rgb(0x81a1c1),
+        accent: rgb(0x88c0d0),
+        accent_foreground: rgb(0x2e3440),
+        input_background: rgb(0x3b4252),
+        border: rgb(0x4c566a),
+        muted_background: rgb(0x3b4252),
+        sidebar_background: rgb(0x2e3440),
+        code_background: rgb(0x3b4252),
+        success: rgb(0xa3be8c),
+        warning: rgb(0xebcb8b),
+        error: rgb(0xbf616a),
+        json_key: rgb(0x81a1c1),
+        json_string: rgb(0xa3be8c),
+        json_number: rgb(0xb48ead),
+        json_boolean: rgb(0x81a1c1),
+        json_null: rgb(0x4c566a),
+        json_bracket: rgb(0xeceff4),
+    }
+}
+
 impl Theme {
     /// 从字符串获取主题
     pub fn from_str(s: &str) -> Self {
         match s {
             "light" => light_theme(),
             "sepia" => sepia_theme(),
+            "ocean" => ocean_theme(),
+            "sunset" => sunset_theme(),
+            "forest" => forest_theme(),
+            "monokai" => monokai_theme(),
+            "nord" => nord_theme(),
             _ => dark_theme(),
         }
     }

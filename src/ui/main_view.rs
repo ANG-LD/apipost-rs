@@ -2919,6 +2919,11 @@ fn settings_popover(this: &mut MainView, cx: &mut Context<MainView>, theme: &The
     let t_theme_dark = this.t("theme.dark");
     let t_theme_light = this.t("theme.light");
     let t_theme_sepia = this.t("theme.sepia");
+    let t_theme_ocean = this.t("theme.ocean");
+    let t_theme_sunset = this.t("theme.sunset");
+    let t_theme_forest = this.t("theme.forest");
+    let t_theme_monokai = this.t("theme.monokai");
+    let t_theme_nord = this.t("theme.nord");
     let t_settings_general = this.t("settings.general");
     let t_settings_auto_save = this.t("settings.auto_save");
     let t_settings_proxy = this.t("settings.proxy");
@@ -2927,13 +2932,16 @@ fn settings_popover(this: &mut MainView, cx: &mut Context<MainView>, theme: &The
     let t_settings_not_set = this.t("settings.not_set");
 
     div()
-        .px_3()
-        .py_3()
-        .border_b(px(1.0))
-        .border_color(theme.muted_background)
+        .w(px(300.0))
+        .px_4()
+        .py_4()
         .bg(theme.background)
+        .border_1()
+        .border_color(theme.border)
+        .rounded_md()
+        .shadow_lg()
         .flex_col()
-        .gap_3()
+        .gap_4()
         .children([
             // === 语言 ===
             section_label(&t_lang_title, theme),
@@ -2996,6 +3004,56 @@ fn settings_popover(this: &mut MainView, cx: &mut Context<MainView>, theme: &The
                     cx,
                     |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
                         this.switch_theme("sepia", cx);
+                    },
+                ))
+                .child(setting_option_btn(
+                    &t_theme_ocean,
+                    "theme-ocean",
+                    current_theme == "ocean",
+                    theme,
+                    cx,
+                    |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
+                        this.switch_theme("ocean", cx);
+                    },
+                ))
+                .child(setting_option_btn(
+                    &t_theme_sunset,
+                    "theme-sunset",
+                    current_theme == "sunset",
+                    theme,
+                    cx,
+                    |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
+                        this.switch_theme("sunset", cx);
+                    },
+                ))
+                .child(setting_option_btn(
+                    &t_theme_forest,
+                    "theme-forest",
+                    current_theme == "forest",
+                    theme,
+                    cx,
+                    |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
+                        this.switch_theme("forest", cx);
+                    },
+                ))
+                .child(setting_option_btn(
+                    &t_theme_monokai,
+                    "theme-monokai",
+                    current_theme == "monokai",
+                    theme,
+                    cx,
+                    |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
+                        this.switch_theme("monokai", cx);
+                    },
+                ))
+                .child(setting_option_btn(
+                    &t_theme_nord,
+                    "theme-nord",
+                    current_theme == "nord",
+                    theme,
+                    cx,
+                    |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
+                        this.switch_theme("nord", cx);
                     },
                 )),
             // === 常规 ===
@@ -3066,8 +3124,9 @@ fn settings_popover(this: &mut MainView, cx: &mut Context<MainView>, theme: &The
 fn section_label(label: &str, theme: &Theme) -> gpui::Div {
     div()
         .text_xs()
-        .font_semibold()
-        .text_color(theme.muted_foreground)
+        .font_weight(FontWeight(600.0))
+        .text_color(theme.accent)
+        
         .child(label.to_string())
 }
 
@@ -3081,22 +3140,24 @@ fn setting_option_btn(
 ) -> impl IntoElement {
     div()
         .id(id)
-        .text_sm()
+        .text_xs()
         .cursor_pointer()
-        .min_w(px(70.0))
-        .px_3()
+        .min_w(px(64.0))
+        .px_2p5()
         .py_1()
-        .rounded_sm()
+        .rounded_md()
+        .font_weight(if active { FontWeight(600.0) } else { FontWeight(400.0) })
         .bg(if active {
             theme.accent
         } else {
-            theme.input_background
+            theme.muted_background
         })
         .text_color(if active {
             theme.accent_foreground
         } else {
-            theme.foreground
+            theme.muted_foreground
         })
+        .hover(|s| if active { s } else { s.bg(theme.border) })
         .on_mouse_down(MouseButton::Left, cx.listener(on_toggle))
         .child(label.to_string())
 }
@@ -3110,10 +3171,12 @@ fn toggle_switch(
 ) -> impl IntoElement {
     div()
         .cursor_pointer()
-        .px_2()
-        .py_1()
-        .rounded_sm()
-        .text_sm()
+        .min_w(px(44.0))
+        .px_2p5()
+        .py_px()
+        .rounded_md()
+        .text_xs()
+        .font_weight(FontWeight(600.0))
         .bg(if value {
             theme.success
         } else {
@@ -3122,8 +3185,9 @@ fn toggle_switch(
         .text_color(if value {
             theme.accent_foreground
         } else {
-            theme.foreground
+            theme.muted_foreground
         })
+        .hover(|s| if value { s.opacity(0.85) } else { s.bg(theme.border) })
         .on_mouse_down(MouseButton::Left, cx.listener(on_toggle))
         .child(if value { "ON" } else { "OFF" })
 }
