@@ -110,14 +110,21 @@ fn main() {
             },
             |window, cx| {
                 let main_view = cx.new(|cx| MainView::new(app_state.clone(), window, cx));
+                let weak_view = main_view.downgrade();
                 main_view.update(cx, |view, cx| {
                     view.load_workspace(window, cx);
                 });
-                let root = cx.new(|cx| Root::new(main_view, window, cx));
 
-                cx.on_window_closed(move |_, _| {
+                // 窗口关闭时保存 workspace
+                let _ = cx.on_window_closed(move |_app, _| {
+                    if let Some(view) = weak_view.upgrade() {
+                        view.update(_app, |view, cx| {
+                            view.save_workspace(cx);
+                        });
+                    }
                     log::info!("应用已退出");
                 });
+                let root = cx.new(|cx| Root::new(main_view, window, cx));
 
                 root
             },

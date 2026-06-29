@@ -7,8 +7,7 @@ use gpui_component::{Sizable, StyledExt};
 use gpui::*;
 
 /// 请求设置
-#[derive(Clone)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct RequestSettings {
     pub timeout_secs: u64,
     pub retry_count: u32,

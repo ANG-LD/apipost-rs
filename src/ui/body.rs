@@ -9,8 +9,7 @@ use gpui::*;
 use regex;
 
 /// Body 类型枚举
-#[derive(Clone, Copy, PartialEq, Debug)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum BodyType {
     None,
     FormData,
@@ -69,8 +68,7 @@ impl BodyType {
 }
 
 /// Raw 格式类型
-#[derive(Clone, Copy, PartialEq, Debug)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum RawFormat {
     Json,
     Xml,
@@ -185,7 +183,7 @@ impl RawFormat {
 }
 
 /// Form Data 参数类型
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum FormDataParamType {
     Text,
     Boolean,
@@ -622,6 +620,17 @@ impl BodyState {
             SelectState::new(raw_formats, Some(IndexPath::default()), window, cx)
         })
     }
+}
+
+/// 可序列化的 Form Data 条目快照
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct SavedFormDataEntry {
+    pub key: String,
+    pub value: String,
+    pub enabled: bool,
+    pub param_type: FormDataParamType,
+    pub is_file: bool,
+    pub file_path: String,
 }
 
 /// JSON 格式化/折叠选项

@@ -16,7 +16,8 @@ use crate::ui::sidebar::{build_collection_tree, render_collection_panel, DragIte
 use crate::ui::sidebar::{render_folder_context_menu, render_request_context_menu};
 use crate::ui::{
     count_lines, json_editor, ApiKeyLocation, AuthState, AuthType, BodyState, BodyType,
-    FormDataParamType, HeaderEntry, RawFormat, RequestSettings, ScriptState, SettingsInputs, Theme,
+    FormDataEntry, FormDataParamType, FormDataValue, HeaderEntry, RawFormat, RequestSettings,
+    SavedFormDataEntry, ScriptState, SettingsInputs, Theme,
 };
 use gpui::prelude::*;
 use gpui::InteractiveElement;
@@ -91,6 +92,12 @@ pub struct RequestTab {
 /// 每个标签页的完整状态快照（纯数据，不含 Entity 引用）
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct TabState {
+    #[serde(default)]
+    pub method: String,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub name: String,
     pub body_type: BodyType,
     pub raw_format: RawFormat,
     pub raw_json: String,
@@ -99,6 +106,10 @@ pub struct TabState {
     pub raw_html: String,
     pub headers: Vec<(String, String, bool)>,
     pub params: Vec<(String, String, bool)>,
+    #[serde(default)]
+    pub form_data: Vec<SavedFormDataEntry>,
+    #[serde(default)]
+    pub urlencoded_data: Vec<SavedFormDataEntry>,
     pub auth_type_index: usize,
     pub bearer_token: String,
     pub basic_username: String,
@@ -112,11 +123,18 @@ pub struct TabState {
     pub builder_tab: BuilderTab,
     pub timeout_secs: String,
     pub retry_count: String,
+    #[serde(default)]
+    pub pre_request_script: String,
+    #[serde(default)]
+    pub test_script: String,
 }
 
 impl Default for TabState {
     fn default() -> Self {
         Self {
+            method: "GET".to_string(),
+            url: String::new(),
+            name: String::new(),
             body_type: BodyType::None,
             raw_format: RawFormat::Json,
             raw_json: r#"{"key": "value"}"#.to_string(),
@@ -125,6 +143,8 @@ impl Default for TabState {
             raw_html: String::new(),
             headers: Vec::new(),
             params: Vec::new(),
+            form_data: Vec::new(),
+            urlencoded_data: Vec::new(),
             auth_type_index: 0,
             bearer_token: String::new(),
             basic_username: String::new(),
@@ -138,13 +158,14 @@ impl Default for TabState {
             builder_tab: BuilderTab::Params,
             timeout_secs: "30".to_string(),
             retry_count: "0".to_string(),
+            pre_request_script: String::new(),
+            test_script: String::new(),
         }
     }
 }
 
 /// 请求构造器标签页
-#[derive(Clone, Copy, PartialEq, Debug)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum BuilderTab {
     Params,
     Authorization,
@@ -731,6 +752,8 @@ impl MainView {
                         } else if url.contains('?') {
                             this.parse_url_to_params_internal(&url, _window, cx);
                         }
+                        // URL变更后保存工作区
+                        this.save_workspace(cx);
                     }
                     _ => {}
                 }
@@ -1190,10 +1213,13 @@ impl MainView {
                             if let Ok(hist) = this.app_state.lock().unwrap().db.get_history(50, 0) {
                                 this.history = hist;
                             }
+                            // 响应成功后立即保存工作区状态
+                            this.save_workspace(cx);
                         }
                         Err(e) => {
                             log::error!("请求失败: {}", e);
                             this.error_message = Some(format!("请求失败 -> {}", e));
+                            this.save_workspace(cx);
                         }
                     }
                     this.is_loading = false;
@@ -1936,6 +1962,7 @@ impl MainView {
         }
 
         self.is_importing_curl = false;
+        self.save_workspace(cx);
         cx.notify();
         Ok(())
     }
@@ -1976,17 +2003,17 @@ impl MainView {
         });
         self.is_importing_curl = false;
 
+        self.save_workspace(cx);
         cx.notify();
     }
 
-    /// 保存所有 tab 状态到数据库（退出时调用）
+    /// 保存所有 tab 状态到数据库
     pub fn save_workspace(&mut self, cx: &mut Context<Self>) {
         self.save_current_tab_meta(cx);
-        let tabs: Vec<&TabState> = self.request_tabs.iter()
-            .map(|t| &t.tab_state)
-            .collect();
+        let tabs: Vec<&TabState> = self.request_tabs.iter().map(|t| &t.tab_state).collect();
         if let Ok(json) = serde_json::to_string(&tabs) {
-            if let Err(e) = self.app_state.lock().unwrap().db.save_workspace_state(&json, self.active_tab) {
+            let app = self.app_state.lock().unwrap();
+            if let Err(e) = app.db.save_workspace_state(&json, self.active_tab) {
                 log::error!("保存工作区失败: {}", e);
             } else {
                 log::info!("工作区已保存 ({} tabs)", self.request_tabs.len());
@@ -1996,21 +2023,31 @@ impl MainView {
 
     /// 从数据库恢复上次退出时的 tab 状态
     pub fn load_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let workspace = self.app_state.lock().unwrap().db.load_workspace_state();
+        let workspace = {
+            let app = self.app_state.lock().unwrap();
+            app.db.load_workspace_state()
+        };
         if let Ok((json, active_tab)) = workspace {
             if let Ok(tabs) = serde_json::from_str::<Vec<TabState>>(&json) {
                 if !tabs.is_empty() {
-                    // 用恢复的 tabs 替换默认 tab
                     self.request_tabs.clear();
                     for (i, ts) in tabs.into_iter().enumerate() {
+                        let method = ts.method.clone();
+                        let url = ts.url.clone();
+                        let name = if ts.name.is_empty() {
+                            self.t("sidebar.new_request")
+                        } else {
+                            ts.name.clone()
+                        };
                         self.request_tabs.push(RequestTab {
                             id: i,
-                            method: String::new(),
-                            url: String::new(),
-                            name: self.t("sidebar.new_request"),
+                            method,
+                            url,
+                            name,
                             tab_state: ts,
                         });
                     }
+                    self.next_tab_id = self.request_tabs.len();
                     let idx = active_tab.min(self.request_tabs.len() - 1);
                     self.active_tab = idx;
                     let tab = self.request_tabs[idx].clone();
@@ -2021,6 +2058,7 @@ impl MainView {
             }
         }
     }
+
 
     /// 关闭指定标签页（至少保留一个）
     pub fn close_tab(&mut self, tab_idx: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -2041,6 +2079,7 @@ impl MainView {
         self.active_tab = new_active;
         let tab = self.request_tabs[new_active].clone();
         self.load_tab_meta(&tab, window, cx);
+        self.save_workspace(cx);
     }
 
     /// 切换到指定标签页
@@ -2052,6 +2091,7 @@ impl MainView {
         self.active_tab = tab_idx;
         let tab = self.request_tabs[tab_idx].clone();
         self.load_tab_meta(&tab, window, cx);
+        self.save_workspace(cx);
     }
 
     /// 将当前表单的 URL / 方法写回当前标签元数据
@@ -2071,12 +2111,12 @@ impl MainView {
         } else {
             url.clone()
         };
-        self.request_tabs[self.active_tab].url = url;
-        self.request_tabs[self.active_tab].method = method;
+        self.request_tabs[self.active_tab].url = url.clone();
+        self.request_tabs[self.active_tab].method = method.clone();
         self.request_tabs[self.active_tab].name = if short.is_empty() {
             self.t("sidebar.new_request")
         } else {
-            short
+            short.clone()
         };
 
         // 提取认证状态数据
@@ -2129,6 +2169,9 @@ impl MainView {
 
         // 保存完整标签状态
         let state = TabState {
+            method: method.clone(),
+            url: url.clone(),
+            name: short.clone(),
             body_type: self.body_state.body_type,
             raw_format: self.body_state.raw_format,
             raw_json: self.body_state.raw_content.read(cx).value().to_string(),
@@ -2190,14 +2233,49 @@ impl MainView {
                 .read(cx)
                 .value()
                 .to_string(),
+            form_data: self
+                .body_state
+                .form_data
+                .iter()
+                .map(|e| SavedFormDataEntry {
+                    key: e.key.read(cx).value().to_string(),
+                    value: e.value.get_input_entity().read(cx).value().to_string(),
+                    enabled: e.enabled,
+                    param_type: e.param_type,
+                    is_file: matches!(e.value, FormDataValue::File(_, _)),
+                    file_path: match &e.value {
+                        FormDataValue::File(_, path) => path.clone(),
+                        _ => String::new(),
+                    },
+                })
+                .collect(),
+            urlencoded_data: self
+                .body_state
+                .urlencoded_data
+                .iter()
+                .map(|e| SavedFormDataEntry {
+                    key: e.key.read(cx).value().to_string(),
+                    value: e.value.get_input_entity().read(cx).value().to_string(),
+                    enabled: e.enabled,
+                    param_type: e.param_type,
+                    is_file: matches!(e.value, FormDataValue::File(_, _)),
+                    file_path: match &e.value {
+                        FormDataValue::File(_, path) => path.clone(),
+                        _ => String::new(),
+                    },
+                })
+                .collect(),
+            pre_request_script: self.script_state.pre_request_script.read(cx).value().to_string(),
+            test_script: self.script_state.test_script.read(cx).value().to_string(),
         };
         self.request_tabs[self.active_tab].tab_state = state;
     }
 
     /// 将标签元数据加载到表单控件
     fn load_tab_meta(&mut self, tab: &RequestTab, window: &mut Window, cx: &mut Context<Self>) {
-        self.method = tab.method.clone();
-        self.url = tab.url.clone();
+        let state = &tab.tab_state;
+        self.method = state.method.clone();
+        self.url = state.url.clone();
         self.params.clear();
         self.headers.clear();
         self.error_message = None;
@@ -2214,8 +2292,8 @@ impl MainView {
         self.response_raw_format = state.response_raw_format;
 
         // URL 和方法
-        let url = tab.url.clone();
-        let method = tab.method.clone();
+        let url = state.url.clone();
+        let method = state.method.clone();
         let method_idx = ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]
             .iter()
             .position(|&m| m == method.to_uppercase().as_str())
@@ -2309,6 +2387,60 @@ impl MainView {
         };
         self.auth_type_select.update(cx, |s, cx| {
             s.set_selected_index(Some(IndexPath::new(state.auth_type_index)), window, cx);
+        });
+
+        // 恢复 Form Data
+        self.body_state.form_data.clear();
+        for e in &state.form_data {
+            let key_input = cx.new(|cx| InputState::new(window, cx).default_value(&e.key));
+            let type_select = FormDataParamType::create_select(window, cx);
+            let value = if e.is_file {
+                let input = cx.new(|cx| InputState::new(window, cx).default_value(&e.file_path));
+                FormDataValue::File(input, e.file_path.clone())
+            } else if e.param_type == FormDataParamType::Boolean {
+                let input = cx.new(|cx| InputState::new(window, cx).default_value(&e.value));
+                FormDataValue::Text(input)
+            } else {
+                let input = cx.new(|cx| InputState::new(window, cx).default_value(&e.value));
+                FormDataValue::Text(input)
+            };
+            self.body_state.form_data.push(FormDataEntry {
+                key: key_input,
+                value,
+                enabled: e.enabled,
+                param_type: e.param_type,
+                type_select,
+            });
+        }
+
+        // 恢复 URL-encoded Data
+        self.body_state.urlencoded_data.clear();
+        for e in &state.urlencoded_data {
+            let key_input = cx.new(|cx| InputState::new(window, cx).default_value(&e.key));
+            let type_select = FormDataParamType::create_select(window, cx);
+            let value = if e.is_file {
+                let input = cx.new(|cx| InputState::new(window, cx).default_value(&e.file_path));
+                FormDataValue::File(input, e.file_path.clone())
+            } else {
+                let input = cx.new(|cx| InputState::new(window, cx).default_value(&e.value));
+                FormDataValue::Text(input)
+            };
+            self.body_state.urlencoded_data.push(FormDataEntry {
+                key: key_input,
+                value,
+                enabled: e.enabled,
+                param_type: e.param_type,
+                type_select,
+            });
+        }
+        self.rebuild_form_data_type_subscriptions(window, cx);
+
+        // 恢复脚本
+        self.script_state.pre_request_script.update(cx, |s, cx| {
+            s.set_value(&state.pre_request_script, window, cx);
+        });
+        self.script_state.test_script.update(cx, |s, cx| {
+            s.set_value(&state.test_script, window, cx);
         });
 
         // 恢复设置

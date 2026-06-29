@@ -689,19 +689,15 @@ impl Database {
         Ok(())
     }
 
+
     /// 加载工作区状态
     pub fn load_workspace_state(&self) -> Result<(String, usize)> {
-        let conn = self.conn.lock()
-            .map_err(|_| anyhow::anyhow!("数据库锁中毒"))?;
-        let mut stmt = conn.prepare(
-            "SELECT tabs_json, active_tab FROM workspace_state WHERE id = 1"
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("数据库锁中毒"))?;
+        let result = conn.query_row(
+            "SELECT tabs_json, active_tab FROM workspace_state WHERE id = 1",
+            [],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize)),
         )?;
-        let result = stmt.query_row([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, i64>(1)? as usize,
-            ))
-        })?;
         Ok(result)
     }
 }
