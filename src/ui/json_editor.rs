@@ -5,7 +5,7 @@
 use crate::ui::body::BodyState;
 use crate::ui::themes::Theme;
 use gpui::prelude::*;
-use gpui_component::input::Input;
+use gpui_component::input::{Input, InputState};
 use gpui_component::Sizable;
 use gpui::*;
 
@@ -16,6 +16,14 @@ pub fn count_lines(text: &str) -> usize {
     } else {
         text.lines().count().max(1)
     }
+}
+
+/// 通用代码/JSON 编辑器视图（仅供内部和 code_gen_dialog 复用）
+pub fn code_editor_view(input: &Entity<InputState>, bg: gpui::Rgba) -> impl IntoElement {
+    Input::new(input)
+        .h_full()
+        .bg(bg)
+        .bordered(true)
 }
 
 /// JSON编辑器组件
@@ -54,10 +62,7 @@ pub fn json_editor(
                 .flex_1()
                 .min_h(px(200.0))
                 .child(
-                    Input::new(raw_content)
-                        .h(px(height))
-                        .bg(bg)
-                        .bordered(true),
+                    code_editor_view(raw_content, bg),
                 ),
             // 错误信息
             if let Some(err) = error_message {

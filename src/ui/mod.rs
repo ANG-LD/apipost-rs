@@ -12,6 +12,7 @@ mod scripts;
 mod settings;
 mod themes;
 
+pub mod clipboard;
 pub mod sidebar;
 pub mod request;
 pub mod response;

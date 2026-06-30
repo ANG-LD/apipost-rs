@@ -8,7 +8,8 @@ use crate::app::HttpResponse;
 use crate::http::HttpRequest;
 use crate::ui::components::{popup_panel, tooltip_popup};
 use crate::ui::dialogs::{
-    render_env_dialog_overlay, render_folder_dialog_overlay, render_move_dialog_overlay,
+    render_code_gen_dialog_overlay, render_env_dialog_overlay,
+    render_folder_dialog_overlay, render_move_dialog_overlay, CodeGenDialogState,
     EnvDialogState, FolderDialogState, MoveDialogState,
 };
 use crate::ui::sidebar::CollectionItem;
@@ -290,6 +291,8 @@ pub struct MainView {
     pub(crate) proxy_tips_hovered: bool,
     pub(crate) proxy_tips_x: Option<f32>,
     pub(crate) proxy_tips_y: Option<f32>,
+    /// 代码生成对话框
+    pub(crate) code_gen_dialog_state: Arc<Mutex<crate::ui::dialogs::CodeGenDialogState>>,
 }
 
 /// 保存到收藏夹的对话框状态
@@ -926,6 +929,9 @@ impl MainView {
         let folder_dialog_state = Arc::new(Mutex::new(FolderDialogState::new(window, cx)));
         let move_dialog_state = Arc::new(Mutex::new(MoveDialogState::new()));
         let save_request_dialog = Arc::new(Mutex::new(SaveRequestDialog::new(window, cx)));
+        let code_gen_dialog_state = Arc::new(Mutex::new(
+            crate::ui::dialogs::CodeGenDialogState::new(window, cx),
+        ));
 
         let proxy_url = app_state.lock().unwrap().config.proxy.url.clone();
         let proxy_url_input = cx.new(|cx| {
@@ -1019,6 +1025,7 @@ impl MainView {
             proxy_tips_hovered: false,
             proxy_tips_x: None,
             proxy_tips_y: None,
+            code_gen_dialog_state,
         }
     }
 
@@ -4820,7 +4827,7 @@ impl Render for MainView {
                             .left(px((x - 140.0).max(0.0)))
                             .top(px(y + 4.0));
                     } else if let Some(req) = self.saved_requests.iter().find(|r| r.id == target_id) {
-                        menu = render_request_context_menu(&target_id, &req.name, cx, &theme, &|key| self.t(key))
+                        menu = render_request_context_menu(req, cx, &theme, &|key| self.t(key))
                             .absolute()
                             .left(px((x - 120.0).max(0.0)))
                             .top(px(y + 4.0));
@@ -4887,6 +4894,23 @@ impl Render for MainView {
                         cx,
                     )
                 )
+            )
+            .when(
+                self.code_gen_dialog_state.lock().map(|s| s.open).unwrap_or(false),
+                |d| {
+                    let theme_c = theme.clone();
+                    let eid = cx.entity_id();
+                    d.child(
+                        crate::ui::dialogs::render_code_gen_dialog_overlay(
+                            &self.code_gen_dialog_state,
+                            &theme_c,
+                            eid,
+                            &|key| self.t(key),
+                            window,
+                            cx,
+                        )
+                    )
+                },
             )
             .when(
                 self.save_request_dialog.lock().map(|s| s.visible).unwrap_or(false),

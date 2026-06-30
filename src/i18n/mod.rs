@@ -182,6 +182,10 @@ impl I18nManager {
         map.insert("code.php".to_string(), "PHP".to_string());
         map.insert("code.curl".to_string(), "cURL".to_string());
         map.insert("code.copied".to_string(), "代码已复制到剪贴板".to_string());
+        map.insert("code.copy_btn".to_string(), "复制到剪贴板".to_string());
+        map.insert("code.close_btn".to_string(), "关闭".to_string());
+        map.insert("clipboard.copied".to_string(), "已复制到剪贴板".to_string());
+        map.insert("clipboard.copy_failed".to_string(), "复制失败".to_string());
 
         // 主题
         map.insert("theme.title".to_string(), "主题".to_string());
@@ -224,6 +228,11 @@ impl I18nManager {
         map.insert("context.move_to".to_string(), "移动到...".to_string());
         map.insert("context.add_subfolder".to_string(), "添加子文件夹".to_string());
         map.insert("context.delete".to_string(), "删除".to_string());
+        map.insert("context.copy_curl".to_string(), "复制为 cURL".to_string());
+        map.insert("context.generate_code".to_string(), "生成代码...".to_string());
+        map.insert("context.copy_body".to_string(), "复制请求体".to_string());
+        map.insert("context.copy_headers".to_string(), "复制请求头".to_string());
+        map.insert("context.share_request".to_string(), "分享请求".to_string());
 
         // 侧边栏
         map.insert("sidebar.collections".to_string(), "收藏夹".to_string());
@@ -377,6 +386,10 @@ impl I18nManager {
         map.insert("code.php".to_string(), "PHP".to_string());
         map.insert("code.curl".to_string(), "cURL".to_string());
         map.insert("code.copied".to_string(), "Code copied to clipboard".to_string());
+        map.insert("code.copy_btn".to_string(), "Copy to Clipboard".to_string());
+        map.insert("code.close_btn".to_string(), "Close".to_string());
+        map.insert("clipboard.copied".to_string(), "Copied to clipboard".to_string());
+        map.insert("clipboard.copy_failed".to_string(), "Copy failed".to_string());
 
         // Theme
         map.insert("theme.title".to_string(), "Theme".to_string());
@@ -419,6 +432,11 @@ impl I18nManager {
         map.insert("context.move_to".to_string(), "Move to...".to_string());
         map.insert("context.add_subfolder".to_string(), "Add Subfolder".to_string());
         map.insert("context.delete".to_string(), "Delete".to_string());
+        map.insert("context.copy_curl".to_string(), "Copy as cURL".to_string());
+        map.insert("context.generate_code".to_string(), "Generate Code...".to_string());
+        map.insert("context.copy_body".to_string(), "Copy Request Body".to_string());
+        map.insert("context.copy_headers".to_string(), "Copy Request Headers".to_string());
+        map.insert("context.share_request".to_string(), "Share Request".to_string());
 
         // Sidebar
         map.insert("sidebar.collections".to_string(), "Collections".to_string());

@@ -1,5 +1,7 @@
 use crate::app::database::{Folder, SavedRequest};
 use crate::app::AppState;
+use crate::http::{generate_curl, HttpRequest};
+use crate::ui::clipboard;
 use crate::ui::components::{method_color, popup_panel};
 use crate::ui::main_view::MainView;
 use crate::ui::Theme;
@@ -431,17 +433,86 @@ pub fn render_folder_context_menu(
 }
 
 pub fn render_request_context_menu(
-    request_id: &str,
-    request_name: &str,
+    request: &SavedRequest,
     cx: &mut Context<MainView>,
     theme: &Theme,
     t: &dyn Fn(&str) -> String,
 ) -> gpui::Div {
-    let rid = request_id.to_string();
-    let rname = request_name.to_string();
+    let rid = request.id.clone();
+    let rname = request.name.clone();
+
+    // Build HttpRequest for code generation
+    let http_request = HttpRequest {
+        method: request.method.clone(),
+        url: request.url.clone(),
+        headers: request
+            .headers
+            .as_ref()
+            .and_then(|h| serde_json::from_str::<Vec<(String, String)>>(h).ok())
+            .unwrap_or_default(),
+        body: request.body.clone(),
+        content_type: None,
+        text_fields: Vec::new(),
+        file_fields: Vec::new(),
+    };
+    let curl_cmd = generate_curl(&http_request);
+    let headers_json = request.headers.clone().unwrap_or_default();
+    let body_text = request.body.clone().unwrap_or_default();
 
     popup_panel(theme)
-        .min_w(px(120.0))
+        .min_w(px(180.0))
+        .child(menu_item(&t("context.copy_curl"), IconName::Copy, theme, cx, {
+            let cmd = curl_cmd.clone();
+            move |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
+                this.context_menu_target = None;
+                clipboard::copy_to_clipboard(&cmd);
+                cx.notify();
+            }
+        }))
+        .child(menu_item(&t("context.generate_code"), IconName::File, theme, cx, {
+            let req_data = http_request.clone();
+            move |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
+                this.context_menu_target = None;
+                this.code_gen_dialog_state
+                    .lock()
+                    .unwrap()
+                    .open_dialog(req_data.clone());
+                cx.notify();
+            }
+        }))
+        .child(div().w_full().h(px(1.0)).bg(theme.muted_background))
+        .child(menu_item(&t("context.copy_body"), IconName::Copy, theme, cx, {
+            let body = body_text.clone();
+            move |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
+                this.context_menu_target = None;
+                if !body.is_empty() {
+                    clipboard::copy_to_clipboard(&body);
+                }
+                cx.notify();
+            }
+        }))
+        .child(menu_item(&t("context.copy_headers"), IconName::File, theme, cx, {
+            let headers = headers_json.clone();
+            move |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
+                this.context_menu_target = None;
+                if !headers.is_empty() {
+                    clipboard::copy_to_clipboard(&headers);
+                }
+                cx.notify();
+            }
+        }))
+        .child(div().w_full().h(px(1.0)).bg(theme.muted_background))
+        .child(menu_item(&t("context.share_request"), IconName::Check, theme, cx, {
+            let req_data = http_request.clone();
+            move |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
+                this.context_menu_target = None;
+                if let Ok(json) = serde_json::to_string_pretty(&req_data) {
+                    clipboard::copy_to_clipboard(&json);
+                }
+                cx.notify();
+            }
+        }))
+        .child(div().w_full().h(px(1.0)).bg(theme.muted_background))
         .child(menu_item(&t("context.rename"), IconName::Replace, theme, cx, {
             let rename_id = rid.clone();
             let rename_name = rname.clone();
