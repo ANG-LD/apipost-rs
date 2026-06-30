@@ -21,7 +21,7 @@ use reqwest::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Read;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use reqwest::multipart;
 use tokio::sync::Semaphore;
@@ -133,16 +133,15 @@ pub struct HttpClient {
     /// 默认超时（秒），构造时设定，懒加载用
     default_timeout_secs: u64,
 
-    /// 默认代理 URL（None = 无代理），构造时设定，懒加载用
-    default_proxy_url: Option<String>,
+    /// 默认代理 URL（None = 无代理），运行时可通过 `update_proxy()` 修改
+    default_proxy_url: Arc<Mutex<Option<String>>>,
 
-    /// 懒加载的默认 reqwest 客户端
+    /// 懒加载的默认 reqwest 客户端缓存
     ///
-    /// `Arc` 保证所有 clone 共享同一实例，`OnceLock` 保证只构建一次。
+    /// `Arc` 保证所有 clone 共享同一实例。
+    /// `Mutex<Option<...>>` 允许在代理配置变更后清除缓存并重建。
     /// 首次 `send_request` 时触发初始化。
-    /// 存储 `Result<Client, String>`：构建成功为 `Ok`，失败则缓存错误信息，
-    /// 后续调用直接返回相同错误。（String 用作 Err 变体以保证 Clone）
-    default_client: Arc<OnceLock<Result<Client, String>>>,
+    default_client: Arc<Mutex<Option<Result<Client, String>>>>,
 
     /// 环境变量管理器（与 AppState 共享同一实例）
     env_manager: Arc<EnvironmentManager>,
@@ -167,13 +166,11 @@ impl Clone for HttpClient {
     fn clone(&self) -> Self {
         Self {
             default_timeout_secs: self.default_timeout_secs,
-            default_proxy_url: self.default_proxy_url.clone(),
+            default_proxy_url: Arc::clone(&self.default_proxy_url),
             default_client: Arc::clone(&self.default_client),
             env_manager: Arc::clone(&self.env_manager),
-            // 所有 clone 共享同一份 custom_clients 缓存
             custom_clients: Arc::clone(&self.custom_clients),
             pool_config: self.pool_config.clone(),
-            // 信号量在所有 clone 间共享（并发上限全局生效）
             request_semaphore: self.request_semaphore.clone(),
         }
     }
@@ -458,8 +455,8 @@ impl HttpClient {
     pub fn new(env_manager: Arc<EnvironmentManager>) -> Result<Self> {
         Ok(Self {
             default_timeout_secs: 30,
-            default_proxy_url: None,
-            default_client: Arc::new(OnceLock::new()),
+            default_proxy_url: Arc::new(Mutex::new(None)),
+            default_client: Arc::new(Mutex::new(None)),
             env_manager,
             custom_clients: Arc::new(Mutex::new(HashMap::new())),
             pool_config: PoolConfig::recommended(),
@@ -471,8 +468,8 @@ impl HttpClient {
     pub fn with_timeout(timeout_secs: u64, env_manager: Arc<EnvironmentManager>) -> Result<Self> {
         Ok(Self {
             default_timeout_secs: timeout_secs,
-            default_proxy_url: None,
-            default_client: Arc::new(OnceLock::new()),
+            default_proxy_url: Arc::new(Mutex::new(None)),
+            default_client: Arc::new(Mutex::new(None)),
             env_manager,
             custom_clients: Arc::new(Mutex::new(HashMap::new())),
             pool_config: PoolConfig::recommended(),
@@ -487,8 +484,8 @@ impl HttpClient {
     pub fn with_proxy(proxy_url: &str, env_manager: Arc<EnvironmentManager>) -> Result<Self> {
         Ok(Self {
             default_timeout_secs: 30,
-            default_proxy_url: Some(proxy_url.to_string()),
-            default_client: Arc::new(OnceLock::new()),
+            default_proxy_url: Arc::new(Mutex::new(Some(proxy_url.to_string()))),
+            default_client: Arc::new(Mutex::new(None)),
             env_manager,
             custom_clients: Arc::new(Mutex::new(HashMap::new())),
             pool_config: PoolConfig::recommended(),
@@ -516,6 +513,28 @@ impl HttpClient {
     /// 获取当前连接池配置的只读引用
     pub fn pool_config(&self) -> &PoolConfig {
         &self.pool_config
+    }
+
+    /// 运行时更新代理配置
+    ///
+    /// 更新后立即生效：下一次请求将使用新的代理设置重建底层 Client。
+    /// 同时清除自定义客户端缓存，确保所有请求走新代理。
+    pub fn update_proxy(&self, enabled: bool, url: &str) {
+        let mut proxy = self.default_proxy_url.lock().unwrap();
+        *proxy = if enabled && !url.is_empty() {
+            Some(url.to_string())
+        } else {
+            None
+        };
+        // 清除缓存的默认客户端，下次请求时重建
+        *self.default_client.lock().unwrap() = None;
+        // 清除自定义客户端缓存（它们不经过代理，但重建以保持一致）
+        self.custom_clients.lock().unwrap().clear();
+        log::info!(
+            "代理配置已更新: enabled={}, url={}",
+            enabled,
+            if enabled { url } else { "none" }
+        );
     }
 
     // ------------------------------------------------------------------
@@ -797,7 +816,8 @@ impl HttpClient {
                 Ok(cached.clone())
             } else {
                 log::debug!("构建新的自定义客户端并缓存");
-                let new_client = Self::build_custom_client(options, &self.pool_config)?;
+                let proxy_url = self.default_proxy_url.lock().unwrap().clone();
+                let new_client = Self::build_custom_client(options, proxy_url.as_deref(), &self.pool_config)?;
                 cache.insert(key, new_client.clone());
                 Ok(new_client)
             }
@@ -809,25 +829,26 @@ impl HttpClient {
     /// 首次调用时构建 Client（包含 TLS 初始化、连接池配置），
     /// 后续调用直接返回已缓存的实例。
     /// 所有通过 `Clone` 派生的 `HttpClient` 共享同一个底层 Client。
+    /// 当代理配置通过 `update_proxy()` 变更后，缓存被清除并重建。
     fn get_or_init_default_client(&self) -> Result<Client> {
-        self.default_client
-            .get_or_init(|| {
-                log::info!(
-                    "懒加载: 构建默认 reqwest Client (timeout={}s, proxy={})",
-                    self.default_timeout_secs,
-                    self.default_proxy_url
-                        .as_deref()
-                        .unwrap_or("none")
-                );
-                Self::build_default_client(
-                    self.default_timeout_secs,
-                    self.default_proxy_url.as_deref(),
-                    &self.pool_config,
-                )
-                .map_err(|e| format!("{:#}", e))
-            })
-            .clone()
-            .map_err(|s| anyhow::anyhow!("{}", s))
+        let mut cache = self.default_client.lock().unwrap();
+        if let Some(cached) = cache.as_ref() {
+            return cached.clone().map_err(|s| anyhow::anyhow!("{}", s));
+        }
+        let proxy_url = self.default_proxy_url.lock().unwrap().clone();
+        log::info!(
+            "构建默认 reqwest Client (timeout={}s, proxy={})",
+            self.default_timeout_secs,
+            proxy_url.as_deref().unwrap_or("none")
+        );
+        let result = Self::build_default_client(
+            self.default_timeout_secs,
+            proxy_url.as_deref(),
+            &self.pool_config,
+        )
+        .map_err(|e| format!("{:#}", e));
+        *cache = Some(result.clone());
+        result.map_err(|s| anyhow::anyhow!("{}", s))
     }
 
     /// 构建默认客户端
@@ -857,7 +878,11 @@ impl HttpClient {
     }
 
     /// 构建自定义配置的客户端（用于非默认 RequestOptions）
-    fn build_custom_client(opts: &RequestOptions, pool_config: &PoolConfig) -> Result<Client> {
+    fn build_custom_client(
+        opts: &RequestOptions,
+        proxy_url: Option<&str>,
+        pool_config: &PoolConfig,
+    ) -> Result<Client> {
         let mut builder = Client::builder()
             .no_brotli()
             .no_gzip()
@@ -870,6 +895,11 @@ impl HttpClient {
             } else {
                 reqwest::redirect::Policy::none()
             });
+
+        if let Some(url) = proxy_url {
+            let proxy = Proxy::all(url).context("代理URL无效")?;
+            builder = builder.proxy(proxy);
+        }
 
         if !opts.verify_ssl {
             builder = builder.danger_accept_invalid_certs(true);
@@ -1159,21 +1189,21 @@ mod tests {
     fn test_lazy_client_not_built_on_construction() {
         let env_manager = Arc::new(create_mock_env_manager());
         let client = HttpClient::new(env_manager).unwrap();
-        // 构造后 default_client OnceLock 应为空
-        assert!(client.default_client.get().is_none());
+        // 构造后 default_client 缓存应为空
+        assert!(client.default_client.lock().unwrap().is_none());
     }
 
     #[test]
     fn test_lazy_client_built_on_first_request() {
         let env_manager = Arc::new(create_mock_env_manager());
         let client = HttpClient::new(env_manager).unwrap();
-        assert!(client.default_client.get().is_none());
+        assert!(client.default_client.lock().unwrap().is_none());
 
         // 触发懒加载（不实际发网络请求，仅验证 Client 被构建）
         let result = client.get_or_init_default_client();
         assert!(result.is_ok());
-        // OnceLock 现在包含 Ok(Client)
-        assert!(client.default_client.get().is_some());
+        // 缓存现在包含 Ok(Client)
+        assert!(client.default_client.lock().unwrap().is_some());
     }
 
     #[test]
@@ -1185,9 +1215,9 @@ mod tests {
         // 在 clone 上触发懒加载
         let _ = client2.get_or_init_default_client();
 
-        // 原始实例也应可见（OnceLock 内有值）
-        assert!(client1.default_client.get().is_some());
-        assert!(client2.default_client.get().is_some());
+        // 原始实例也应可见（共享缓存）
+        assert!(client1.default_client.lock().unwrap().is_some());
+        assert!(client2.default_client.lock().unwrap().is_some());
     }
 
     // --- 连接池配置测试 ---

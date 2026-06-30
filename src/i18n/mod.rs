@@ -239,6 +239,7 @@ impl I18nManager {
         map.insert("settings.proxy".to_string(), "代理".to_string());
         map.insert("settings.proxy_enable".to_string(), "启用代理".to_string());
         map.insert("settings.proxy_url".to_string(), "代理地址".to_string());
+        map.insert("settings.proxy_tips".to_string(), "格式: http://host:port 或 socks5://host:port".to_string());
         map.insert("settings.not_set".to_string(), "未设置".to_string());
 
         map
@@ -433,6 +434,7 @@ impl I18nManager {
         map.insert("settings.proxy".to_string(), "Proxy".to_string());
         map.insert("settings.proxy_enable".to_string(), "Enable Proxy".to_string());
         map.insert("settings.proxy_url".to_string(), "Proxy URL".to_string());
+        map.insert("settings.proxy_tips".to_string(), "Format: http://host:port or socks5://host:port".to_string());
         map.insert("settings.not_set".to_string(), "Not set".to_string());
 
         map

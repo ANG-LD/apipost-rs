@@ -282,6 +282,14 @@ pub struct MainView {
     pub(crate) response_editor_dragging: bool,
     pub(crate) response_editor_start_y: f32,
     pub(crate) save_request_dialog: Arc<Mutex<SaveRequestDialog>>,
+    /// 自动保存后台任务句柄（None = 未启动）
+    pub(crate) auto_save_task: Option<gpui::Task<()>>,
+    /// 代理地址输入（设置弹窗中使用）
+    pub(crate) proxy_url_input: Entity<InputState>,
+    /// 代理提示浮层显示状态
+    pub(crate) proxy_tips_hovered: bool,
+    pub(crate) proxy_tips_x: Option<f32>,
+    pub(crate) proxy_tips_y: Option<f32>,
 }
 
 /// 保存到收藏夹的对话框状态
@@ -919,6 +927,12 @@ impl MainView {
         let move_dialog_state = Arc::new(Mutex::new(MoveDialogState::new()));
         let save_request_dialog = Arc::new(Mutex::new(SaveRequestDialog::new(window, cx)));
 
+        let proxy_url = app_state.lock().unwrap().config.proxy.url.clone();
+        let proxy_url_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(&proxy_url)
+        });
+
         Self {
             app_state,
             method: "GET".to_string(),
@@ -1000,6 +1014,42 @@ impl MainView {
             response_editor_dragging: false,
             response_editor_start_y: 0.0,
             save_request_dialog,
+            auto_save_task: None,
+            proxy_url_input,
+            proxy_tips_hovered: false,
+            proxy_tips_x: None,
+            proxy_tips_y: None,
+        }
+    }
+
+    /// 启动/停止自动保存后台任务
+    pub fn update_auto_save_task(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let auto_save_enabled = self.app_state.lock().unwrap().config.general.auto_save;
+        if auto_save_enabled && self.auto_save_task.is_none() {
+            log::info!("启动自动保存 (30s 间隔)");
+            self.auto_save_task = Some(cx.spawn_in(window, async move |this: WeakEntity<MainView>, cx| {
+                loop {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_secs(30))
+                        .await;
+                    let should_continue = this.update(cx, |this, cx| {
+                        let auto_save = this.app_state.lock().unwrap().config.general.auto_save;
+                        if auto_save {
+                            this.save_workspace(cx);
+                            true
+                        } else {
+                            log::info!("自动保存已关闭，停止后台任务");
+                            false
+                        }
+                    });
+                    match should_continue {
+                        Ok(true) => {}
+                        _ => break,
+                    }
+                }
+            }));
+        } else if !auto_save_enabled {
+            self.auto_save_task = None;
         }
     }
 
@@ -3086,7 +3136,6 @@ fn settings_popover(this: &mut MainView, cx: &mut Context<MainView>, theme: &The
     let current_theme = this.app_state.lock().unwrap().config.general.theme.clone();
     let auto_save = this.app_state.lock().unwrap().config.general.auto_save;
     let proxy_enabled = this.app_state.lock().unwrap().config.proxy.enabled;
-    let proxy_url = this.app_state.lock().unwrap().config.proxy.url.clone();
     let t_lang_title = this.t("language.title");
     let t_lang_zh = this.t("language.zh");
     let t_lang_en = this.t("language.en");
@@ -3099,19 +3148,22 @@ fn settings_popover(this: &mut MainView, cx: &mut Context<MainView>, theme: &The
     let t_settings_proxy = this.t("settings.proxy");
     let t_settings_proxy_enable = this.t("settings.proxy_enable");
     let t_settings_proxy_url = this.t("settings.proxy_url");
-    let t_settings_not_set = this.t("settings.not_set");
 
     div()
-        .w(px(300.0))
+        .w(px(290.0))
         .px_4()
-        .py_4()
+        .py_3()
         .bg(theme.background)
         .border_1()
         .border_color(theme.border)
         .rounded_md()
         .shadow_lg()
         .flex_col()
-        .gap_4()
+        .gap_2()
+        .on_mouse_move(cx.listener(|this, _: &MouseMoveEvent, _window: &mut Window, cx: &mut Context<MainView>| {
+            this.proxy_tips_hovered = false;
+            cx.notify();
+        }))
         .children([
             // === 语言 ===
             section_label(&t_lang_title, theme),
@@ -3243,11 +3295,14 @@ fn settings_popover(this: &mut MainView, cx: &mut Context<MainView>, theme: &The
                     auto_save,
                     theme,
                     cx,
-                    |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
+                    |this, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<MainView>| {
                         let new_val = !this.app_state.lock().unwrap().config.general.auto_save;
-                        let mut state = this.app_state.lock().unwrap();
-                        Arc::make_mut(&mut state.config).general.auto_save = new_val;
-                        let _ = state.config.save();
+                        {
+                            let mut state = this.app_state.lock().unwrap();
+                            Arc::make_mut(&mut state.config).general.auto_save = new_val;
+                            let _ = state.config.save();
+                        }
+                        this.update_auto_save_task(window, cx);
                         cx.notify();
                     },
                 )),
@@ -3270,24 +3325,66 @@ fn settings_popover(this: &mut MainView, cx: &mut Context<MainView>, theme: &The
                     cx,
                     |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
                         let new_val = !this.app_state.lock().unwrap().config.proxy.enabled;
-                        let mut state = this.app_state.lock().unwrap();
-                        Arc::make_mut(&mut state.config).proxy.enabled = new_val;
-                        let _ = state.config.save();
+                        {
+                            let mut state = this.app_state.lock().unwrap();
+                            Arc::make_mut(&mut state.config).proxy.enabled = new_val;
+                            let _ = state.config.save();
+                        }
+                        let url = this.proxy_url_input.read(cx).value().to_string();
+                        this.app_state.lock().unwrap().update_proxy(new_val, &url);
                         cx.notify();
                     },
                 )),
             div()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child(format!(
-                    "{}: {}",
-                    t_settings_proxy_url,
-                    if proxy_url.is_empty() {
-                        t_settings_not_set.as_str()
-                    } else {
-                        &proxy_url
-                    }
-                )),
+                .relative()
+                .flex()
+                .flex_col()
+                .gap_1p5()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_weight(FontWeight(500.0))
+                                .text_color(theme.muted_foreground)
+                                .child(t_settings_proxy_url.clone()),
+                        )
+                        .child(
+                            div()
+                                .id("proxy-tips-icon")
+                                .w(px(16.0))
+                                .h(px(16.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded_full()
+                                .border_1()
+                                .border_color(if this.proxy_tips_hovered { theme.accent } else { theme.muted_foreground })
+                                .text_xs()
+                                .text_color(if this.proxy_tips_hovered { theme.accent } else { theme.muted_foreground })
+                                .cursor_default()
+                                .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _window: &mut Window, cx: &mut Context<MainView>| {
+                                    cx.stop_propagation();
+                                    this.proxy_tips_hovered = true;
+                                    this.proxy_tips_x = Some(e.position.x.into());
+                                    this.proxy_tips_y = Some(e.position.y.into());
+                                    cx.notify();
+                                }))
+                                .child("?"),
+                        ),
+                )
+                .child(
+                    Input::new(&this.proxy_url_input)
+                        .small()
+                        .h(px(30.0))
+                        .w_full()
+                        .rounded_sm()
+                        .bg(theme.input_background)
+                        .text_color(theme.foreground),
+                ),
         ])
 }
 
@@ -3296,7 +3393,8 @@ fn section_label(label: &str, theme: &Theme) -> gpui::Div {
         .text_xs()
         .font_weight(FontWeight(600.0))
         .text_color(theme.accent)
-        
+        .pt_1()
+        .pb_0p5()
         .child(label.to_string())
 }
 
@@ -3312,10 +3410,12 @@ fn setting_option_btn(
         .id(id)
         .text_xs()
         .cursor_pointer()
-        .min_w(px(64.0))
+        .min_w(px(60.0))
         .px_2p5()
         .py_1()
-        .rounded_md()
+        .rounded_sm()
+        .border_1()
+        .border_color(if active { theme.accent } else { theme.border })
         .font_weight(if active { FontWeight(600.0) } else { FontWeight(400.0) })
         .bg(if active {
             theme.accent
@@ -3327,7 +3427,7 @@ fn setting_option_btn(
         } else {
             theme.muted_foreground
         })
-        .hover(|s| if active { s } else { s.bg(theme.border) })
+        .hover(|s| if active { s } else { s.bg(theme.muted_background).border_color(theme.muted_foreground) })
         .on_mouse_down(MouseButton::Left, cx.listener(on_toggle))
         .child(label.to_string())
 }
@@ -3341,12 +3441,14 @@ fn toggle_switch(
 ) -> impl IntoElement {
     div()
         .cursor_pointer()
-        .min_w(px(44.0))
+        .min_w(px(42.0))
         .px_2p5()
-        .py_px()
-        .rounded_md()
+        .py_0p5()
+        .rounded_sm()
         .text_xs()
         .font_weight(FontWeight(600.0))
+        .border_1()
+        .border_color(if value { theme.success } else { theme.border })
         .bg(if value {
             theme.success
         } else {
@@ -3450,12 +3552,16 @@ impl Render for MainView {
                                     .h(px(48.0))
                                     .flex()
                                     .items_center()
-                                    .justify_between()
-                                    .px_3()
+                                    .when(self.sidebar_collapsed, |s| s.justify_center())
+                                    .when(!self.sidebar_collapsed, |s| s.justify_between().px_3())
                                     .border_b(px(1.0))
                                     .border_color(theme.muted_background)
                                     .children([
-                                        div().text_color(rgb(0xf97316)).font_semibold().child("ApiPost"),
+                                        if !self.sidebar_collapsed {
+                                            div().text_color(rgb(0xf97316)).font_semibold().child("ApiPost")
+                                        } else {
+                                            div()
+                                        },
                                         // 设置按钮
                                         div()
                                             .h(px(28.0))
@@ -3478,13 +3584,14 @@ impl Render for MainView {
                                 // 标签页按钮
                                 div()
                                     .flex()
-                                    .flex_row()
-                                    .h(px(40.0))
+                                    .when(self.sidebar_collapsed, |s| s.flex_col().flex_1())
+                                    .when(!self.sidebar_collapsed, |s| s.flex_row().h(px(40.0)))
                                     .children([
                                         div()
                                             .id("sidebar-collections-tab") // 收藏夹
                                             .w(px(48.0))
-                                            .h(px(40.0))
+                                            .when(self.sidebar_collapsed, |s| s.h(px(48.0)))
+                                            .when(!self.sidebar_collapsed, |s| s.h(px(40.0)))
                                             .flex()
                                             .items_center()
                                             .justify_center()
@@ -3498,7 +3605,8 @@ impl Render for MainView {
                                         div()
                                             .id("sidebar-history") // 历史记录
                                             .w(px(48.0))
-                                            .h(px(40.0))
+                                            .when(self.sidebar_collapsed, |s| s.h(px(48.0)))
+                                            .when(!self.sidebar_collapsed, |s| s.h(px(40.0)))
                                             .flex()
                                             .items_center()
                                             .justify_center()
@@ -3512,7 +3620,8 @@ impl Render for MainView {
                                         div()
                                             .id("sidebar-env-tab")
                                             .w(px(48.0))
-                                            .h(px(40.0))
+                                            .when(self.sidebar_collapsed, |s| s.h(px(48.0)))
+                                            .when(!self.sidebar_collapsed, |s| s.h(px(40.0)))
                                             .flex()
                                             .items_center()
                                             .justify_center()
@@ -3923,7 +4032,7 @@ impl Render for MainView {
                                     .absolute()
                                     .top(px(48.0))
                                     .left(px(0.0))
-                                    .w(px(280.0))
+                                    .w(px(290.0))
                                     .shadow_md()
                                     .occlude()
                             } else {
@@ -4685,6 +4794,17 @@ impl Render for MainView {
                     }
                     d.child(
                         tooltip_popup(&theme, x, y, &name)
+                    )
+                },
+            )
+            .when(
+                self.proxy_tips_hovered,
+                |d| {
+                    let x = self.proxy_tips_x.unwrap_or(0.0);
+                    let y = self.proxy_tips_y.unwrap_or(0.0);
+                    let tips = self.app_state.lock().unwrap().t("settings.proxy_tips");
+                    d.child(
+                        tooltip_popup(&theme, x + 16.0, y - 4.0, &tips)
                     )
                 },
             )

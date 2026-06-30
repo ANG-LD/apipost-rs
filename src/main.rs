@@ -113,6 +113,7 @@ fn main() {
                 let weak_view = main_view.downgrade();
                 main_view.update(cx, |view, cx| {
                     view.load_workspace(window, cx);
+                    view.update_auto_save_task(window, cx);
                 });
 
                 // 窗口关闭时保存 workspace

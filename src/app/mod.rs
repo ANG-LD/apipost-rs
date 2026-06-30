@@ -196,6 +196,11 @@ impl AppState {
     pub fn t(&self, key: &str) -> String {
         self.i18n.get(key)
     }
+
+    /// 运行时更新代理配置（立即生效，下次请求使用新代理）
+    pub fn update_proxy(&self, enabled: bool, url: &str) {
+        self.http_client.update_proxy(enabled, url);
+    }
 }
 
 /// 应用主题
