@@ -297,6 +297,8 @@ pub struct BodyState {
     pub json_error: Option<String>,
     /// 软换行开关
     pub soft_wrap: bool,
+    /// Binary 文件路径
+    pub binary_file_path: Option<String>,
 }
 
 impl BodyState {
@@ -323,6 +325,7 @@ impl BodyState {
             last_drag_update: None,
             json_error: None,
             soft_wrap: false,
+            binary_file_path: None,
         }
     }
 

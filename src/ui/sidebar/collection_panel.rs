@@ -441,15 +441,26 @@ pub fn render_request_context_menu(
     let rid = request.id.clone();
     let rname = request.name.clone();
 
-    // Build HttpRequest for code generation
+    // Build HttpRequest — headers 存储格式为 "Key: Value\n" 纯文本
+    let parsed_headers: Vec<(String, String)> = request
+        .headers
+        .as_ref()
+        .map(|h| {
+            h.lines()
+                .filter_map(|line| {
+                    let mut parts = line.splitn(2, ':');
+                    let key = parts.next()?.trim();
+                    let value = parts.next()?.trim();
+                    if key.is_empty() { None } else { Some((key.to_string(), value.to_string())) }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     let http_request = HttpRequest {
         method: request.method.clone(),
         url: request.url.clone(),
-        headers: request
-            .headers
-            .as_ref()
-            .and_then(|h| serde_json::from_str::<Vec<(String, String)>>(h).ok())
-            .unwrap_or_default(),
+        headers: parsed_headers,
         body: request.body.clone(),
         content_type: None,
         text_fields: Vec::new(),

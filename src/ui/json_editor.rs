@@ -26,16 +26,16 @@ pub fn code_editor_view(input: &Entity<InputState>, bg: gpui::Rgba) -> impl Into
         .bordered(true)
 }
 
-/// JSON编辑器组件
+/// JSON编辑器组件（不含 Format 按钮，由外部 toolbar 统一管理）
 pub fn json_editor(
     body_state: &BodyState,
     _line_count: usize,
     error_message: Option<String>,
     theme: &Theme,
+    _t: &dyn Fn(&str) -> String,
     cx: &mut Context<crate::ui::MainView>,
 ) -> impl IntoElement {
     let raw_content = &body_state.raw_content;
-    let height = body_state.raw_editor_height;
     let bg = theme.background;
 
     div()
@@ -43,21 +43,7 @@ pub fn json_editor(
         .flex_1()
         .gap_2()
         .children([
-            // 工具栏 - 只有 Format 按钮
-            div()
-                .flex()
-                .justify_end()
-                .items_center()
-                .child(
-                    gpui_component::button::Button::new("format-json")
-                        .label("Format")
-                        .xsmall()
-                        .on_click(cx.listener(|this, _: &ClickEvent, window: &mut Window, cx: &mut Context<crate::ui::MainView>| {
-                            this.format_json(window, cx);
-                            cx.notify();
-                        })),
-                ),
-            // 使用 gpui_component 的 code_editor 实现
+            // 编辑器
             div()
                 .flex_1()
                 .min_h(px(200.0))

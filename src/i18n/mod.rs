@@ -110,7 +110,8 @@ impl I18nManager {
         map.insert("ui.none".to_string(), "none".to_string());
         map.insert("ui.form_data".to_string(), "form-data".to_string());
         map.insert("ui.url_encoded".to_string(), "x-www-form-urlencoded".to_string());
-        map.insert("ui.binary".to_string(), "binary".to_string());
+        map.insert("ui.binary".to_string(), "二进制".to_string());
+        map.insert("ui.binary_placeholder".to_string(), "选择文件上传".to_string());
         map.insert("ui.no_auth".to_string(), "No Auth".to_string());
         map.insert("ui.bearer_token".to_string(), "Bearer Token".to_string());
         map.insert("ui.basic_auth".to_string(), "Basic Auth".to_string());
@@ -139,6 +140,7 @@ impl I18nManager {
         map.insert("response.size".to_string(), "响应大小".to_string());
         map.insert("response.preview".to_string(), "预览".to_string());
         map.insert("response.raw".to_string(), "原始".to_string());
+        map.insert("response.format".to_string(), "格式化".to_string());
         map.insert("response.formatted".to_string(), "格式化".to_string());
         map.insert("preview.not_available".to_string(), "无法预览此内容类型".to_string());
         map.insert("preview.open_in_browser".to_string(), "在浏览器中打开".to_string());
@@ -250,6 +252,14 @@ impl I18nManager {
         map.insert("settings.proxy_url".to_string(), "代理地址".to_string());
         map.insert("settings.proxy_tips".to_string(), "格式: http://host:port 或 socks5://host:port".to_string());
         map.insert("settings.not_set".to_string(), "未设置".to_string());
+        map.insert("settings.shortcuts".to_string(), "快捷键".to_string());
+        map.insert("settings.shortcuts.send".to_string(), "发送请求".to_string());
+        map.insert("settings.shortcuts.new_tab".to_string(), "新建标签页".to_string());
+        map.insert("settings.shortcuts.close_tab".to_string(), "关闭标签页".to_string());
+        map.insert("settings.shortcuts.history".to_string(), "打开历史记录".to_string());
+        map.insert("settings.shortcuts.env".to_string(), "打开环境变量".to_string());
+        map.insert("settings.shortcuts.theme".to_string(), "切换主题".to_string());
+        map.insert("settings.shortcuts.lang".to_string(), "切换语言".to_string());
 
         map
     }
@@ -315,6 +325,7 @@ impl I18nManager {
         map.insert("ui.form_data".to_string(), "form-data".to_string());
         map.insert("ui.url_encoded".to_string(), "x-www-form-urlencoded".to_string());
         map.insert("ui.binary".to_string(), "binary".to_string());
+        map.insert("ui.binary_placeholder".to_string(), "Select a file to upload".to_string());
         map.insert("ui.no_auth".to_string(), "No Auth".to_string());
         map.insert("ui.bearer_token".to_string(), "Bearer Token".to_string());
         map.insert("ui.basic_auth".to_string(), "Basic Auth".to_string());
@@ -343,6 +354,7 @@ impl I18nManager {
         map.insert("response.size".to_string(), "Size".to_string());
         map.insert("response.preview".to_string(), "Preview".to_string());
         map.insert("response.raw".to_string(), "Raw".to_string());
+        map.insert("response.format".to_string(), "Format".to_string());
         map.insert("response.formatted".to_string(), "Formatted".to_string());
         map.insert("preview.not_available".to_string(), "Preview not available for this content type".to_string());
         map.insert("preview.open_in_browser".to_string(), "Open in Browser".to_string());
@@ -454,6 +466,14 @@ impl I18nManager {
         map.insert("settings.proxy_url".to_string(), "Proxy URL".to_string());
         map.insert("settings.proxy_tips".to_string(), "Format: http://host:port or socks5://host:port".to_string());
         map.insert("settings.not_set".to_string(), "Not set".to_string());
+        map.insert("settings.shortcuts".to_string(), "Shortcuts".to_string());
+        map.insert("settings.shortcuts.send".to_string(), "Send Request".to_string());
+        map.insert("settings.shortcuts.new_tab".to_string(), "New Tab".to_string());
+        map.insert("settings.shortcuts.close_tab".to_string(), "Close Tab".to_string());
+        map.insert("settings.shortcuts.history".to_string(), "Open History".to_string());
+        map.insert("settings.shortcuts.env".to_string(), "Open Environments".to_string());
+        map.insert("settings.shortcuts.theme".to_string(), "Cycle Theme".to_string());
+        map.insert("settings.shortcuts.lang".to_string(), "Toggle Language".to_string());
 
         map
     }

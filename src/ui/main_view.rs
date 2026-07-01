@@ -291,8 +291,11 @@ pub struct MainView {
     pub(crate) proxy_tips_hovered: bool,
     pub(crate) proxy_tips_x: Option<f32>,
     pub(crate) proxy_tips_y: Option<f32>,
+    pub(crate) show_shortcuts_popup: bool,
     /// 代码生成对话框
     pub(crate) code_gen_dialog_state: Arc<Mutex<crate::ui::dialogs::CodeGenDialogState>>,
+    /// 根元素 FocusHandle（用于确保快捷键始终生效）
+    pub(crate) root_focus_handle: gpui::FocusHandle,
 }
 
 /// 保存到收藏夹的对话框状态
@@ -326,6 +329,12 @@ impl SaveRequestDialog {
         self.pending_request = Some(request);
         self.needs_refresh = false;
         self.visible = true;
+    }
+}
+
+impl gpui::Focusable for MainView {
+    fn focus_handle(&self, _cx: &gpui::App) -> gpui::FocusHandle {
+        self.root_focus_handle.clone()
     }
 }
 
@@ -1025,7 +1034,9 @@ impl MainView {
             proxy_tips_hovered: false,
             proxy_tips_x: None,
             proxy_tips_y: None,
+            show_shortcuts_popup: false,
             code_gen_dialog_state,
+            root_focus_handle: cx.focus_handle(),
         }
     }
 
@@ -1169,7 +1180,17 @@ impl MainView {
             }
             let body = this.body_state.to_body(cx);
             let text_fields = this.body_state.get_form_data_text_fields(cx);
-            let file_fields_raw = this.body_state.get_form_data_file_fields(cx);
+            let mut file_fields_raw = this.body_state.get_form_data_file_fields(cx);
+            // Binary 模式下添加单独的文件
+            if this.body_state.body_type == BodyType::Binary {
+                if let Some(ref path) = this.body_state.binary_file_path {
+                    file_fields_raw.push((
+                        "file".to_string(),
+                        path.clone(),
+                        "application/octet-stream".to_string(),
+                    ));
+                }
+            }
             let file_fields: Vec<crate::http::FileField> = file_fields_raw
                 .into_iter()
                 .map(
@@ -1630,6 +1651,14 @@ impl MainView {
     }
 
     /// 为 form-data File 类型选择文件
+    pub fn pick_file_for_binary(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use rfd::FileDialog;
+        if let Some(file_path) = FileDialog::new().pick_file() {
+            self.body_state.binary_file_path = Some(file_path.to_string_lossy().to_string());
+            cx.notify();
+        }
+    }
+
     pub fn pick_file_for_form_data(
         &mut self,
         index: usize,
@@ -3392,6 +3421,85 @@ fn settings_popover(this: &mut MainView, cx: &mut Context<MainView>, theme: &The
                         .bg(theme.input_background)
                         .text_color(theme.foreground),
                 ),
+            // 快捷键折叠说明
+            div()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .cursor_pointer()
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _: &MouseDownEvent, _window, cx| {
+                                this.show_shortcuts_popup = !this.show_shortcuts_popup;
+                                cx.notify();
+                            }),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(theme.accent)
+                                .child(this.t("settings.shortcuts")),
+                        )
+                        .child(
+                            Icon::new(
+                                if this.show_shortcuts_popup {
+                                    IconName::ChevronDown
+                                } else {
+                                    IconName::ChevronRight
+                                },
+                            )
+                            .xsmall()
+                            .text_color(theme.accent),
+                        ),
+                )
+                .when(this.show_shortcuts_popup, |el| {
+                    el.child(
+                        div()
+                            .mt_2()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .children(
+                                [
+                                    ("Ctrl+Enter / Ctrl+S", "settings.shortcuts.send"),
+                                    ("Ctrl+N", "settings.shortcuts.new_tab"),
+                                    ("Ctrl+W", "settings.shortcuts.close_tab"),
+                                    ("Ctrl+H", "settings.shortcuts.history"),
+                                    ("Ctrl+E", "settings.shortcuts.env"),
+                                    ("Ctrl+T", "settings.shortcuts.theme"),
+                                    ("Ctrl+L", "settings.shortcuts.lang"),
+                                ]
+                                .iter()
+                                .map(|(key, label)| {
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .justify_between()
+                                        .px_3()
+                                        .py_1()
+                                        .rounded_sm()
+                                        .bg(theme.input_background)
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(theme.accent)
+                                                .child(key.to_string()),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(theme.muted_foreground)
+                                                .child(this.t(label)),
+                                        )
+                                })
+                                .collect::<Vec<_>>(),
+                            ),
+                    )
+                }),
         ])
 }
 
@@ -3510,10 +3618,12 @@ impl Render for MainView {
             .flex_col()
             .bg(theme.background)
             .relative()
+            .track_focus(&self.root_focus_handle)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>| {
                 if event.keystroke.modifiers.control {
                     match event.keystroke.key.as_str() {
-                        "enter" => {
+                        "enter" | "s" => {
+                            cx.stop_propagation();
                             let url = this.url_input.read(cx).value().to_string();
                             if !url.trim().is_empty() {
                                 let method = this.method_select.read(cx).selected_value()
@@ -3524,13 +3634,40 @@ impl Render for MainView {
                             }
                         }
                         "n" => {
+                            cx.stop_propagation();
                             this.add_tab(window, cx);
                         }
                         "w" => {
+                            cx.stop_propagation();
                             if this.request_tabs.len() > 1 {
                                 let tab_idx = this.active_tab;
                                 this.close_tab(tab_idx, window, cx);
                             }
+                        }
+                        "h" => {
+                            cx.stop_propagation();
+                            this.set_sidebar_tab(SidebarTab::History, cx);
+                        }
+                        "e" => {
+                            cx.stop_propagation();
+                            this.set_sidebar_tab(SidebarTab::Environments, cx);
+                        }
+                        "t" => {
+                            cx.stop_propagation();
+                            const THEMES: &[&str] = &[
+                                "dark", "light", "sepia", "ocean", "sunset", "forest", "monokai", "nord",
+                            ];
+                            let current = this.app_state.lock().unwrap().config.general.theme.clone();
+                            let idx = THEMES.iter().position(|t| *t == current).unwrap_or(0);
+                            let next = THEMES[(idx + 1) % THEMES.len()];
+                            this.switch_theme(next, cx);
+                        }
+                        "l" => {
+                            cx.stop_propagation();
+                            let current = this.app_state.lock().unwrap().config.general.language.clone();
+                            let next = if current == "zh-CN" { "en-US" } else { "zh-CN" };
+                            this.app_state.lock().unwrap().switch_language(next);
+                            cx.notify();
                         }
                         _ => {}
                     }

@@ -3,6 +3,7 @@ use crate::ui::json_editor;
 use crate::ui::main_view::MainView;
 use crate::ui::themes::Theme;
 use gpui::*;
+use gpui::prelude::FluentBuilder;
 use gpui_component::button::Button;
 use gpui_component::input::Input;
 use gpui_component::select::Select;
@@ -61,34 +62,18 @@ fn body_type_tab(
         BodyType::Raw => "Raw".to_string(),
         BodyType::Binary => this.t("ui.binary"),
     };
-    let min_w = match body_type {
-        BodyType::UrlEncoded => px(130.0),
-        _ => px(70.0),
-    };
-    div()
-        .text_sm()
-        .cursor_pointer()
-        .min_w(min_w)
-        .px_2()
-        .py_1()
-        .rounded_sm()
-        .bg(if is_active {
-            theme.muted_background
-        } else {
-            theme.input_background
+    Button::new(format!("body-type-{:?}", body_type))
+        .label(label)
+        .xsmall()
+        .when(is_active, |b| {
+            b.bg(theme.accent).text_color(theme.accent_foreground)
         })
-        .text_color(if is_active {
-            theme.foreground
-        } else {
-            theme.muted_foreground
+        .when(!is_active, |b| {
+            b.bg(theme.input_background).text_color(theme.muted_foreground)
         })
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(move |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
-                this.set_body_type(body_type.to_index(), cx);
-            }),
-        )
-        .child(label)
+        .on_click(cx.listener(move |this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<MainView>| {
+            this.set_body_type(body_type.to_index(), cx);
+        }))
 }
 
 fn render_body_content(
@@ -101,18 +86,29 @@ fn render_body_content(
     if body_state.body_type == BodyType::Raw {
         render_raw_editor(this, &body_state, window, cx)
     } else if body_state.body_type == BodyType::Binary {
+        let btn_label = match &body_state.binary_file_path {
+            Some(path) => {
+                std::path::Path::new(path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| path.clone())
+            }
+            None => this.t("ui.binary_placeholder"),
+        };
+        let file_selected = body_state.binary_file_path.is_some();
         div()
             .flex_1()
-            .flex()
-            .items_center()
-            .justify_center()
-            .bg(theme.code_background)
-            .border_1()
-            .border_color(theme.border)
-            .rounded_md()
-            .text_sm()
-            .text_color(theme.muted_foreground)
-            .child("Binary content not supported yet")
+            .flex_col()
+            .pt_1()
+            .child(
+                Button::new("pick-binary-file")
+                    .label(btn_label)
+                    .small()
+                    .when(file_selected, |b| b.text_color(theme.accent))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, window: &mut Window, cx: &mut Context<MainView>| {
+                        this.pick_file_for_binary(window, cx);
+                    })),
+            )
             .into_any_element()
     } else if body_state.body_type == BodyType::FormData {
         render_key_value_editor(
@@ -146,11 +142,14 @@ fn render_raw_editor(
     cx: &mut Context<MainView>,
 ) -> AnyElement {
     let theme = Theme::from_str(&this.app_state.lock().unwrap().theme_name);
+    let is_json = body_state.raw_format == RawFormat::Json;
+    let format_label = this.t("response.format");
 
     div()
         .flex_col()
         .flex_1()
         .gap_2()
+        .pt_1()
         .child(
             div()
                 .flex()
@@ -159,29 +158,47 @@ fn render_raw_editor(
                 .justify_between()
                 .w_full()
                 .gap_2()
-                .px_1()
-                .py_1()
-                .bg(theme.muted_background)
-                .children([
-                    raw_format_btn(this, RawFormat::Json, body_state, cx).into_any_element(),
-                    raw_format_btn(this, RawFormat::Xml, body_state, cx).into_any_element(),
-                    raw_format_btn(this, RawFormat::Text, body_state, cx).into_any_element(),
-                    raw_format_btn(this, RawFormat::Html, body_state, cx).into_any_element(),
-                ]),
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_1()
+                        .children([
+                            raw_format_btn(this, RawFormat::Json, body_state, cx).into_any_element(),
+                            raw_format_btn(this, RawFormat::Xml, body_state, cx).into_any_element(),
+                            raw_format_btn(this, RawFormat::Text, body_state, cx).into_any_element(),
+                            raw_format_btn(this, RawFormat::Html, body_state, cx).into_any_element(),
+                        ]),
+                )
+                .when(is_json, |el| {
+                    el.child(
+                        Button::new("format-json")
+                            .label(format_label)
+                            .xsmall()
+                            .rounded_sm()
+                            .bg(theme.input_background)
+                            .text_color(theme.foreground)
+                            .on_click(cx.listener(|this, _: &ClickEvent, window: &mut Window, cx: &mut Context<MainView>| {
+                                this.format_json(window, cx);
+                                cx.notify();
+                            })),
+                    )
+                }),
         )
-        .child(render_raw_editor_content(body_state, &theme, cx))
+        .child(render_raw_editor_content(body_state, &theme, &|key| this.t(key), cx))
         .into_any_element()
 }
 
 fn render_raw_editor_content(
     body_state: &BodyState,
     theme: &Theme,
+    t: &dyn Fn(&str) -> String,
     cx: &mut Context<MainView>,
 ) -> AnyElement {
     div()
         .flex_1()
         .flex_col()
-        .overflow_hidden()
         .children([
             if body_state.raw_format == RawFormat::Json {
                 Some(
@@ -192,6 +209,7 @@ fn render_raw_editor_content(
                             calculate_body_line_count(body_state, cx),
                             body_state.json_error.clone(),
                             theme,
+                            t,
                             cx,
                         ))
                         .into_any_element(),
@@ -209,17 +227,11 @@ fn render_raw_editor_content(
                 Some(
                     div()
                         .flex_1()
-                        .bg(theme.code_background)
-                        .border_1()
-                        .border_color(theme.border)
-                        .rounded_md()
-                        .overflow_hidden()
                         .child(
                             Input::new(&editor_input)
-                                .h(px(body_state.raw_editor_height))
+                                .h_full()
                                 .w_full()
-                                .bg(theme.background)
-                                .bordered(true),
+                                .bg(theme.background),
                         )
                         .into_any_element(),
                 )
@@ -248,30 +260,18 @@ fn raw_format_btn(
         RawFormat::Html => this.t("ui.html"),
         _ => "".to_string(),
     };
-    div()
-        .text_sm()
-        .cursor_pointer()
-        .min_w(px(50.0))
-        .px_2()
-        .py_px()
-        .rounded_sm()
-        .bg(if is_active {
-            theme.muted_background
-        } else {
-            theme.input_background
+    Button::new(format!("raw-fmt-{:?}", format))
+        .label(label)
+        .xsmall()
+        .when(is_active, |b| {
+            b.bg(theme.accent).text_color(theme.accent_foreground)
         })
-        .text_color(if is_active {
-            theme.foreground
-        } else {
-            theme.muted_foreground
+        .when(!is_active, |b| {
+            b.bg(theme.input_background).text_color(theme.muted_foreground)
         })
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(move |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
-                this.set_raw_format(format.to_index(), cx);
-            }),
-        )
-        .child(label)
+        .on_click(cx.listener(move |this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<MainView>| {
+            this.set_raw_format(format.to_index(), cx);
+        }))
 }
 
 fn calculate_body_line_count(body_state: &BodyState, cx: &Context<MainView>) -> usize {
