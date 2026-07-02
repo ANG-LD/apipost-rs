@@ -119,7 +119,6 @@ pub struct TabState {
     pub api_key_value: String,
     pub api_key_location: ApiKeyLocation,
     pub settings: RequestSettings,
-    #[serde(skip)]
     pub response: Option<HttpResponse>,
     pub response_raw_format: RawFormat,
     pub builder_tab: BuilderTab,

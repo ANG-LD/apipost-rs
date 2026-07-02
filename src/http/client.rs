@@ -373,6 +373,7 @@ impl Cookie {
 /// HTTP响应结构
 ///
 /// 大字段（body、raw_body）使用 `Arc` 共享，clone 为引用计数递增，零拷贝。
+/// 序列化时 Arc 字段转换为 String/Vec<u8>，反序列化时转回 Arc。
 #[derive(Debug)]
 pub struct HttpResponse {
     /// HTTP状态码
@@ -402,6 +403,78 @@ impl Clone for HttpResponse {
             size_bytes: self.size_bytes,
             cookies: self.cookies.clone(),
         }
+    }
+}
+
+// 手动实现 Serialize：将 Arc 字段转为 String/Vec<u8> 后序列化
+impl Serialize for HttpResponse {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("HttpResponse", 7)?;
+        s.serialize_field("status", &self.status)?;
+        s.serialize_field("headers", &self.headers)?;
+        s.serialize_field("body", self.body.as_ref())?;
+        s.serialize_field("raw_body", &self.raw_body.as_ref().map(|a| a.as_ref()))?;
+        s.serialize_field("time_ms", &self.time_ms)?;
+        s.serialize_field("size_bytes", &self.size_bytes)?;
+        s.serialize_field("cookies", &self.cookies)?;
+        s.end()
+    }
+}
+
+// 手动实现 Deserialize：将 String/Vec<u8> 转为 Arc 后存储
+impl<'de> Deserialize<'de> for HttpResponse {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(field_identifier, rename_all = "snake_case")]
+        enum Field { Status, Headers, Body, RawBody, TimeMs, SizeBytes, Cookies }
+
+        struct HttpResponseVisitor;
+        impl<'de> serde::de::Visitor<'de> for HttpResponseVisitor {
+            type Value = HttpResponse;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("struct HttpResponse")
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+                let mut status = 0u16;
+                let mut headers: Option<HashMap<String, String>> = None;
+                let mut body: Option<String> = None;
+                let mut raw_body: Option<Option<Vec<u8>>> = None;
+                let mut time_ms = 0i64;
+                let mut size_bytes = 0i64;
+                let mut cookies: Option<Vec<Cookie>> = None;
+
+                while let Some(key) = map.next_key()? {
+                    match key {
+                        Field::Status => status = map.next_value()?,
+                        Field::Headers => headers = Some(map.next_value()?),
+                        Field::Body => body = Some(map.next_value()?),
+                        Field::RawBody => raw_body = Some(map.next_value()?),
+                        Field::TimeMs => time_ms = map.next_value()?,
+                        Field::SizeBytes => size_bytes = map.next_value()?,
+                        Field::Cookies => cookies = Some(map.next_value()?),
+                    }
+                }
+
+                let headers = headers.ok_or_else(|| serde::de::Error::missing_field("headers"))?;
+                let body = body.ok_or_else(|| serde::de::Error::missing_field("body"))?;
+                let cookies = cookies.ok_or_else(|| serde::de::Error::missing_field("cookies"))?;
+
+                Ok(HttpResponse {
+                    status,
+                    headers,
+                    body: Arc::from(body),
+                    raw_body: raw_body.unwrap_or(None).map(|v| Arc::from(v)),
+                    time_ms,
+                    size_bytes,
+                    cookies,
+                })
+            }
+        }
+
+        deserializer.deserialize_struct("HttpResponse", &["status", "headers", "body", "raw_body", "time_ms", "size_bytes", "cookies"], HttpResponseVisitor)
     }
 }
 
