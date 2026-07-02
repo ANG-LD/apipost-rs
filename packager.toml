@@ -24,6 +24,7 @@ generate-desktop-entry = true
 depends = ["libwebkit2gtk-4.1-0", "libgtk-3-0", "libglib2.0-0", "libc6", "libx11-6", "libwayland-client0"]
 section = "utils"
 priority = "optional"
+maintainer = "Lidong yang <735615901@qq.com>"
 
 [nsis]
 installer-mode = "currentUser"

@@ -371,22 +371,38 @@ impl Cookie {
 }
 
 /// HTTP响应结构
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// 大字段（body、raw_body）使用 `Arc` 共享，clone 为引用计数递增，零拷贝。
+#[derive(Debug)]
 pub struct HttpResponse {
     /// HTTP状态码
     pub status: u16,
     /// 响应头
     pub headers: HashMap<String, String>,
     /// 响应体（文本形式，二进制类型为占位描述）
-    pub body: String,
+    pub body: Arc<str>,
     /// 响应体原始字节（仅二进制内容类型有值，用于图片/PDF等预览）
-    pub raw_body: Option<Vec<u8>>,
+    pub raw_body: Option<Arc<[u8]>>,
     /// 响应时间（毫秒）
     pub time_ms: i64,
     /// 响应大小（字节）
     pub size_bytes: i64,
     /// Cookie列表
     pub cookies: Vec<Cookie>,
+}
+
+impl Clone for HttpResponse {
+    fn clone(&self) -> Self {
+        Self {
+            status: self.status,
+            headers: self.headers.clone(),
+            body: Arc::clone(&self.body),
+            raw_body: self.raw_body.clone(),
+            time_ms: self.time_ms,
+            size_bytes: self.size_bytes,
+            cookies: self.cookies.clone(),
+        }
+    }
 }
 
 impl HttpResponse {
@@ -421,13 +437,13 @@ impl HttpResponse {
 
     /// 尝试解析响应体为JSON
     pub fn parse_json<T: for<'de> Deserialize<'de>>(&self) -> Option<T> {
-        serde_json::from_str(&self.body).ok()
+        serde_json::from_str(self.body.as_ref()).ok()
     }
 
     /// 格式化响应体（如果可以）
     pub fn format_body(&self) -> String {
         // 使用带折叠的 JSON 格式化
-        format_json_folded(&self.body, 5, 2)
+        format_json_folded(self.body.as_ref(), 5, 2)
     }
 
     /// 检测内容类型
@@ -573,7 +589,7 @@ impl HttpClient {
         // 4. 替换请求体中的环境变量
         let body = request.body.as_ref().map(|b| {
             let replaced = self.env_manager.replace_variables(b);
-            if b != &replaced {
+            if b != replaced.as_ref() {
                 log::debug!(
                     "请求体已替换环境变量 (原始长度: {}, 替换后长度: {})",
                     b.len(),
@@ -587,7 +603,7 @@ impl HttpClient {
             let preview = if body_content.len() > 500 {
                 format!("{}...(截断, 总长度: {})", &body_content[..500], body_content.len())
             } else {
-                body_content.clone()
+                body_content.clone().into_owned()
             };
             log::info!("请求体 ({} bytes): {}", body_content.len(), preview);
         } else if request.text_fields.is_empty() && request.file_fields.is_empty() {
@@ -618,16 +634,16 @@ impl HttpClient {
             headers
         };
 
-        let mut request_builder = client.request(method, &url).headers(filtered_headers);
+        let mut request_builder = client.request(method, url.as_ref()).headers(filtered_headers);
 
         if has_multipart {
             request_builder = request_builder.multipart(self.build_multipart(request)?);
         } else if let Some(body_content) = body {
-            request_builder = request_builder.body(body_content);
+            request_builder = request_builder.body(body_content.into_owned());
         }
 
         // DNS 解析日志（用于排查解析问题）
-        if let Ok(parsed) = url::Url::parse(&url) {
+        if let Ok(parsed) = url::Url::parse(url.as_ref()) {
             if let Some(host) = parsed.host_str() {
                 let port = parsed.port().unwrap_or(if parsed.scheme() == "https" { 443 } else { 80 });
                 let addr_str = format!("{}:{}", host, port);
@@ -768,8 +784,8 @@ impl HttpClient {
         Ok(HttpResponse {
             status,
             headers: response_headers,
-            body: body_text,
-            raw_body,
+            body: Arc::from(body_text),
+            raw_body: raw_body.map(|v| Arc::from(v)),
             time_ms: elapsed.as_millis() as i64,
             size_bytes,
             cookies,
@@ -947,7 +963,7 @@ impl HttpClient {
             // 替换头部值中的环境变量
             let resolved = self.env_manager.replace_variables(value);
 
-            if *value != resolved {
+            if *value != *resolved {
                 log::debug!("  {}: {} -> {}", name, value, resolved);
             } else {
                 log::debug!("  {}: {}", name, value);
@@ -955,7 +971,7 @@ impl HttpClient {
 
             let header_name = HeaderName::try_from(name.as_str())
                 .with_context(|| format!("无效的请求头名称: {}", name))?;
-            let header_value = HeaderValue::from_str(&resolved)
+            let header_value = HeaderValue::from_str(resolved.as_ref())
                 .with_context(|| format!("无效的请求头值: {}", resolved))?;
 
             header_map.insert(header_name, header_value);
@@ -978,7 +994,7 @@ impl HttpClient {
         for (name, value) in &request.text_fields {
             let value = self.env_manager.replace_variables(value);
             log::debug!("添加文本字段: {}={}", name, value);
-            form = form.text(name.clone(), value);
+            form = form.text(name.clone(), value.into_owned());
         }
 
         // 添加文件字段
@@ -1144,7 +1160,7 @@ mod tests {
         let response = HttpResponse {
             status: 200,
             headers: HashMap::new(),
-            body: String::new(),
+            body: Arc::from(""),
             time_ms: 100,
             size_bytes: 0,
             raw_body: None,
@@ -1156,7 +1172,7 @@ mod tests {
         let response = HttpResponse {
             status: 404,
             headers: HashMap::new(),
-            body: String::new(),
+            body: Arc::from(""),
             time_ms: 100,
             size_bytes: 0,
             raw_body: None,
@@ -1171,7 +1187,7 @@ mod tests {
         let response = HttpResponse {
             status: 200,
             headers: HashMap::new(),
-            body: r#"{"name":"test","value":123}"#.to_string(),
+            body: Arc::from(r#"{"name":"test","value":123}"#),
             time_ms: 100,
             size_bytes: 0,
             raw_body: None,

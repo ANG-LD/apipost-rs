@@ -119,6 +119,7 @@ pub struct TabState {
     pub api_key_value: String,
     pub api_key_location: ApiKeyLocation,
     pub settings: RequestSettings,
+    #[serde(skip)]
     pub response: Option<HttpResponse>,
     pub response_raw_format: RawFormat,
     pub builder_tab: BuilderTab,
@@ -214,6 +215,10 @@ pub struct ParamEntry {
 pub struct MainView {
     /// 应用状态
     pub(crate) app_state: Arc<std::sync::Mutex<crate::app::AppState>>,
+    /// 翻译字典缓存（从 I18nManager 提取，避免每次翻译都获取 Mutex 锁）
+    pub(crate) translations: Arc<std::collections::HashMap<String, String>>,
+    /// 主题缓存（避免每个面板渲染时重复调用 Theme::from_str）
+    pub(crate) cached_theme: Theme,
     pub method: String,
     pub url: String,
     pub(crate) request_tabs: Vec<RequestTab>,
@@ -283,6 +288,8 @@ pub struct MainView {
     pub(crate) response_editor_dragging: bool,
     pub(crate) response_editor_start_y: f32,
     pub(crate) save_request_dialog: Arc<Mutex<SaveRequestDialog>>,
+    /// 上次 workpace 保存时间（用于节流）
+    pub(crate) last_workspace_save: std::time::Instant,
     /// 自动保存后台任务句柄（None = 未启动）
     pub(crate) auto_save_task: Option<gpui::Task<()>>,
     /// 代理地址输入（设置弹窗中使用）
@@ -416,7 +423,7 @@ fn render_preview_body(
     content_type: Option<&str>,
     theme: &Theme,
     t: &dyn Fn(&str) -> String,
-    raw_body: Option<&Vec<u8>>,
+    raw_body: Option<&[u8]>,
 ) -> AnyElement {
     let ct = content_type.unwrap_or("").to_lowercase();
 
@@ -565,7 +572,7 @@ fn render_preview_body(
 
     // PDF — 在外部程序中打开
     if ct.starts_with("application/pdf") {
-        let pdf_bytes = raw_body.cloned();
+        let pdf_bytes = raw_body.map(|r| r.to_vec());
         return div()
             .flex_1()
             .flex()
@@ -642,9 +649,17 @@ fn render_preview_body(
 }
 
 impl MainView {
-    /// 获取翻译文本
+    /// 获取翻译文本（从 Arc 缓存读取，无 Mutex 锁争用）
     pub(crate) fn t(&self, key: &str) -> String {
-        self.app_state.lock().unwrap().i18n.get(key)
+        self.translations
+            .get(key)
+            .cloned()
+            .unwrap_or_else(|| key.to_string())
+    }
+
+    /// 语言切换后更新翻译缓存
+    fn refresh_translations(&mut self) {
+        self.translations = self.app_state.lock().unwrap().i18n.translations_arc();
     }
 
     /// 创建构建器标签页按钮（带i18n支持）
@@ -656,7 +671,7 @@ impl MainView {
         current_tab: BuilderTab,
         id: impl Into<ElementId>,
     ) -> impl IntoElement {
-        let theme = Theme::from_str(&self.app_state.lock().unwrap().theme_name);
+        let theme = self.cached_theme.clone();
         let is_active = current_tab == tab;
         div()
             .id(id)
@@ -695,7 +710,7 @@ impl MainView {
         current_tab: ResponseTab,
         id: impl Into<ElementId>,
     ) -> impl IntoElement {
-        let theme = Theme::from_str(&self.app_state.lock().unwrap().theme_name);
+        let theme = self.cached_theme.clone();
         let is_active = current_tab == tab;
         div()
             .id(id)
@@ -731,6 +746,11 @@ impl MainView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        // 缓存翻译字典（Arc 共享，避免每次翻译都获取 Mutex 锁）
+        let translations = app_state.lock().unwrap().i18n.translations_arc();
+        // 缓存主题（避免每个面板渲染时重复调用 Theme::from_str）
+        let cached_theme = Theme::from_str(&app_state.lock().unwrap().theme_name);
+
         // 加载历史记录
         let history = app_state
             .lock()
@@ -741,11 +761,9 @@ impl MainView {
 
         // 创建URL输入状态
         let url_input = cx.new(|cx| {
-            let placeholder = app_state
-                .lock()
-                .unwrap()
-                .i18n
-                .get("request.url.placeholder");
+            let guard = app_state.lock().unwrap();
+            let placeholder = guard.i18n.get("request.url.placeholder").to_string();
+            drop(guard);
             InputState::new(window, cx).placeholder(placeholder)
         });
 
@@ -911,7 +929,7 @@ impl MainView {
         let response_raw_format_select = BodyState::create_raw_format_select(window, cx);
 
         // 获取默认标签页名称
-        let default_tab_name = app_state.lock().unwrap().i18n.get("sidebar.new_request");
+        let default_tab_name = app_state.lock().unwrap().i18n.get("sidebar.new_request").to_string();
         let saved_requests = app_state
             .lock()
             .unwrap()
@@ -950,6 +968,8 @@ impl MainView {
 
         Self {
             app_state,
+            translations,
+            cached_theme,
             method: "GET".to_string(),
             url: String::new(),
             request_tabs: vec![RequestTab {
@@ -1029,6 +1049,7 @@ impl MainView {
             response_editor_dragging: false,
             response_editor_start_y: 0.0,
             save_request_dialog,
+            last_workspace_save: std::time::Instant::now(),
             auto_save_task: None,
             proxy_url_input,
             proxy_tips_hovered: false,
@@ -1125,7 +1146,8 @@ impl MainView {
             .lock()
             .unwrap()
             .env_manager
-            .replace_variables(&self.url);
+            .replace_variables(&self.url)
+            .into_owned();
         let app_state = self.app_state.clone();
 
         // 请求构造与发送放到下一帧，确保当前帧先渲染 loading overlay
@@ -1257,7 +1279,7 @@ impl MainView {
                                 response_headers: Some(
                                     serde_json::to_string(&response.headers).unwrap_or_default(),
                                 ),
-                                response_body: Some(response.body.clone()),
+                                response_body: Some(response.body.to_string()),
                                 response_time_ms: Some(response.time_ms),
                                 response_size: Some(response.size_bytes),
                             };
@@ -1273,18 +1295,19 @@ impl MainView {
                             this.response = Some(response.clone());
                             let content_type = response.detect_content_type();
                             this.response_raw_format =
-                                RawFormat::detect(content_type.as_deref(), &response.body);
+                                RawFormat::detect(content_type.as_deref(), response.body.as_ref());
+                            let body_ref = response.body.as_ref();
                             this.response_input.update(cx, |state, cx| {
-                                state.set_value(&response.body, window, cx);
+                                state.set_value(body_ref, window, cx);
                             });
                             this.response_xml_input.update(cx, |state, cx| {
-                                state.set_value(&response.body, window, cx);
+                                state.set_value(body_ref, window, cx);
                             });
                             this.response_text_input.update(cx, |state, cx| {
-                                state.set_value(&response.body, window, cx);
+                                state.set_value(body_ref, window, cx);
                             });
                             this.response_html_input.update(cx, |state, cx| {
-                                state.set_value(&response.body, window, cx);
+                                state.set_value(body_ref, window, cx);
                             });
                             this.update_pretty_editor(window, cx);
                             this.rebuild_response_header_inputs(&response.headers, window, cx);
@@ -1581,13 +1604,13 @@ impl MainView {
 
     pub fn update_pretty_editor(&self, window: &mut Window, cx: &mut Context<Self>) {
         let formatted = if let Some(resp) = &self.response {
-            let body = &resp.body;
+            let body = resp.body.as_ref();
             match self.response_raw_format {
                 RawFormat::Json => serde_json::from_str::<serde_json::Value>(body)
                     .ok()
                     .and_then(|v| serde_json::to_string_pretty(&v).ok())
-                    .unwrap_or_else(|| body.clone()),
-                _ => body.clone(),
+                    .unwrap_or_else(|| body.to_string()),
+                _ => body.to_string(),
             }
         } else {
             String::new()
@@ -2093,9 +2116,17 @@ impl MainView {
         cx.notify();
     }
 
-    /// 保存所有 tab 状态到数据库
+    /// 保存所有 tab 状态到数据库（节流：500ms 内重复调用跳过，避免快速输入时频繁写入）
     pub fn save_workspace(&mut self, cx: &mut Context<Self>) {
         self.save_current_tab_meta(cx);
+
+        // 节流：500ms 内的重复调用跳过
+        let now = std::time::Instant::now();
+        if now.duration_since(self.last_workspace_save) < std::time::Duration::from_millis(500) {
+            return;
+        }
+        self.last_workspace_save = now;
+
         let tabs: Vec<&TabState> = self.request_tabs.iter().map(|t| &t.tab_state).collect();
         if let Ok(json) = serde_json::to_string(&tabs) {
             let app = self.app_state.lock().unwrap();
@@ -2546,16 +2577,16 @@ impl MainView {
             let resp_body = resp.body.clone();
             let resp_headers = resp.headers.clone();
             self.response_input.update(cx, |s, cx| {
-                s.set_value(&resp_body, window, cx);
+                s.set_value(resp_body.as_ref(), window, cx);
             });
             self.response_xml_input.update(cx, |s, cx| {
-                s.set_value(&resp_body, window, cx);
+                s.set_value(resp_body.as_ref(), window, cx);
             });
             self.response_text_input.update(cx, |s, cx| {
-                s.set_value(&resp_body, window, cx);
+                s.set_value(resp_body.as_ref(), window, cx);
             });
             self.response_html_input.update(cx, |s, cx| {
-                s.set_value(&resp_body, window, cx);
+                s.set_value(resp_body.as_ref(), window, cx);
             });
             self.rebuild_response_header_inputs(&resp_headers, window, cx);
         } else {
@@ -2817,6 +2848,7 @@ impl MainView {
     /// 切换主题 — 更新 AppState、gpui_component 主题并持久化
     fn switch_theme(&mut self, theme: &str, cx: &mut Context<Self>) {
         self.app_state.lock().unwrap().set_theme(theme);
+        self.cached_theme = Theme::from_str(theme);
 
         let mode = match theme {
             "light" => gpui_component::theme::ThemeMode::Light,
@@ -3214,6 +3246,7 @@ fn settings_popover(this: &mut MainView, cx: &mut Context<MainView>, theme: &The
                     cx,
                     |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
                         this.app_state.lock().unwrap().switch_language("zh-CN");
+                        this.refresh_translations();
                         cx.notify();
                     },
                 ))
@@ -3225,6 +3258,7 @@ fn settings_popover(this: &mut MainView, cx: &mut Context<MainView>, theme: &The
                     cx,
                     |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
                         this.app_state.lock().unwrap().switch_language("en-US");
+                        this.refresh_translations();
                         cx.notify();
                     },
                 )),
@@ -3609,7 +3643,7 @@ impl Render for MainView {
         let collection_items = self.collection_items.clone();
         let environments = self.environments.clone();
         let show_close = self.request_tabs.len() > 1;
-        let theme = Theme::from_str(&self.app_state.lock().unwrap().theme_name);
+        let theme = self.cached_theme.clone();
 
         div()
             .relative()
@@ -3667,6 +3701,7 @@ impl Render for MainView {
                             let current = this.app_state.lock().unwrap().config.general.language.clone();
                             let next = if current == "zh-CN" { "en-US" } else { "zh-CN" };
                             this.app_state.lock().unwrap().switch_language(next);
+                            this.refresh_translations();
                             cx.notify();
                         }
                         _ => {}
@@ -3803,8 +3838,6 @@ impl Render for MainView {
                                                         .p_2()
                                                         .children(history.iter().map(|entry| {
                                                             let method_clr = method_color(&entry.method);
-                                                            let entry_url = entry.url.clone();
-                                                            let entry_method = entry.method.clone();
                                                             let entry_clone = entry.clone();
                                                             let entry_response_body = entry.response_body.clone();
                                                             let entry_response_headers = entry.response_headers.clone();
@@ -3838,16 +3871,6 @@ impl Render for MainView {
                                                                         let content_type = resp_headers.get("content-type").cloned();
                                                                         // 在 resp_headers 被移动前重建 header inputs
                                                                         this.rebuild_response_header_inputs(&resp_headers, _window, cx);
-                                                                        let response = HttpResponse {
-                                                                            status: status as u16,
-                                                                            headers: resp_headers,
-                                                                            body: resp_body.clone(),
-                                                                            raw_body: None,
-                                                                            time_ms: entry_response_time_ms.unwrap_or(0),
-                                                                            size_bytes: entry_response_size.unwrap_or(0),
-                                                                            cookies: Vec::new(),
-                                                                        };
-                                                                        this.response = Some(response);
                                                                         this.response_raw_format = RawFormat::detect(content_type.as_deref(), &resp_body);
                                                                         this.response_input.update(cx, |state, cx| {
                                                                             state.set_value(&resp_body, _window, cx);
@@ -3861,6 +3884,17 @@ impl Render for MainView {
                                                                         this.response_html_input.update(cx, |state, cx| {
                                                                             state.set_value(&resp_body, _window, cx);
                                                                         });
+                                                                        // resp_body move 进 Arc，避免 clone
+                                                                        let response = HttpResponse {
+                                                                            status: status as u16,
+                                                                            headers: resp_headers,
+                                                                            body: Arc::from(resp_body),
+                                                                            raw_body: None,
+                                                                            time_ms: entry_response_time_ms.unwrap_or(0),
+                                                                            size_bytes: entry_response_size.unwrap_or(0),
+                                                                            cookies: Vec::new(),
+                                                                        };
+                                                                        this.response = Some(response);
                                                                         this.update_pretty_editor(_window, cx);
                                                                     } else {
                                                                         this.response = None;
@@ -4417,7 +4451,7 @@ impl Render for MainView {
                                                             div().w_full().overflow_x_hidden().text_ellipsis().child(text)
                                                         }))
                                                 } else if let Some(resp) = response {
-                                                    let theme = Theme::from_str(&self.app_state.lock().unwrap().theme_name);
+                                                    let theme = self.cached_theme.clone();
                                                     let header_row = div()
                                                         .flex()
                                                         .flex_row()
@@ -4606,7 +4640,7 @@ impl Render for MainView {
                                                                 let ct_str = ct.as_deref().unwrap_or("").to_lowercase();
                                                                 // 光栅图片：原生分辨率 + 双向滚动条
                                                                 if ct_str.starts_with("image/") && ct_str != "image/svg+xml" {
-                                                                    if let (Some(raw), Some(fmt)) = (resp.raw_body.as_ref(), content_type_to_image_format(&ct_str)) {
+                                                                    if let (Some(raw), Some(fmt)) = (resp.raw_body.as_deref(), content_type_to_image_format(&ct_str)) {
                                                                         if let Some(ri) = decode_image_bytes(raw, fmt) {
                                                                             let img_size = ri.size(0);
                                                                             let raw_bytes = raw.to_vec();
@@ -4727,7 +4761,7 @@ impl Render for MainView {
                                                                                             move |_event, _window, _cx| {
                                                                                                 let tmp_path = std::env::temp_dir()
                                                                                                     .join(format!("apipost-preview-{}.html", uuid::Uuid::new_v4()));
-                                                                                                if let Err(e) = std::fs::write(&tmp_path, &body) {
+                                                                                                if let Err(e) = std::fs::write(&tmp_path, &*body) {
                                                                                                     log::error!("Failed to write temp HTML file: {}", e);
                                                                                                     return;
                                                                                                 }
@@ -4762,11 +4796,11 @@ impl Render for MainView {
                                                                         .flex_col()
                                                                         .overflow_hidden()
                                                                         .child(render_preview_body(
-                                                                            &resp.body,
+                                                                            resp.body.as_ref(),
                                                                             ct.as_deref(),
                                                                             &theme,
                                                                             &t,
-                                                                            resp.raw_body.as_ref(),
+                                                                            resp.raw_body.as_deref(),
                                                                         ).into_any_element())
                                                                 }
                                                             } else {

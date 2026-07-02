@@ -663,8 +663,8 @@ impl Database {
         let child_ids: Vec<String> = stmt.query_map(params![parent_id], |row| row.get(0))?
             .collect::<Result<Vec<_>, _>>()?;
         for child_id in child_ids {
-            result.push(child_id.clone());
             Self::collect_descendant_ids_impl(conn, &child_id, result)?;
+            result.push(child_id);
         }
         Ok(())
     }

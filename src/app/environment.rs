@@ -3,6 +3,7 @@
 //! 负责管理全局和局部环境变量
 //! 支持变量替换语法: {{variable_name}}
 
+use std::borrow::Cow;
 use anyhow::Result;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -106,24 +107,25 @@ impl EnvironmentManager {
     /// 语法: {{variable_name}}
     /// 优先级: 当前环境变量 > 全局变量
     ///
-    /// # 性能说明
-    /// 使用单次遍历构建结果，避免每次替换都分配新字符串
-    pub fn replace_variables(&self, input: &str) -> String {
+    /// 无变量时返回 `Cow::Borrowed(input)`，零分配。
+    pub fn replace_variables<'a>(&self, input: &'a str) -> Cow<'a, str> {
+        // 快速路径：无 {{ 则直接返回借用
+        if !input.contains("{{") {
+            return Cow::Borrowed(input);
+        }
+
         let globals = self.global_variables.read().unwrap();
         let current = self.current_variables.read().unwrap();
 
         let mut result = String::with_capacity(input.len());
         let mut last_end = 0;
 
-        // 一次遍历完成替换，避免 O(n*m) 复杂度
         for cap in self.variable_pattern.captures_iter(input) {
             let full_match = cap.get(0).unwrap();
             let var_name = cap.get(1).unwrap().as_str();
 
-            // 添加匹配位置之前的文本
             result.push_str(&input[last_end..full_match.start()]);
 
-            // 查找替换值：优先当前环境，其次全局环境，最后保持原样
             let replacement = current
                 .get(var_name)
                 .or_else(|| globals.get(var_name))
@@ -134,9 +136,14 @@ impl EnvironmentManager {
             last_end = full_match.end();
         }
 
-        // 添加剩余未匹配的文本
         result.push_str(&input[last_end..]);
-        result
+
+        // 如果没有任何实际替换（所有变量均未找到对应值），也返回借用
+        if result == input {
+            Cow::Borrowed(input)
+        } else {
+            Cow::Owned(result)
+        }
     }
 
     /// 检查字符串是否包含变量

@@ -2,6 +2,8 @@
 //!
 //! 测试HTTP请求发送、环境变量替换、cURL解析等核心功能
 
+use std::sync::Arc;
+
 use apipost_rs::app::{EnvironmentManager, HistoryManager};
 use apipost_rs::http::{generate_code, generate_curl, parse_curl, HttpRequest, HttpResponse};
 use apipost_rs::config::AppConfig;
@@ -187,7 +189,7 @@ fn test_response_status() {
     let success_response = HttpResponse {
         status: 200,
         headers: HashMap::new(),
-        body: String::new(),
+        body: Arc::from(""),
         time_ms: 100,
         size_bytes: 0,
         cookies: Vec::new(),
@@ -199,7 +201,7 @@ fn test_response_status() {
     let error_response = HttpResponse {
         status: 404,
         headers: HashMap::new(),
-        body: String::new(),
+        body: Arc::from(""),
         time_ms: 50,
         size_bytes: 0,
         cookies: Vec::new(),
@@ -215,7 +217,7 @@ fn test_response_format_body() {
     let response = HttpResponse {
         status: 200,
         headers: HashMap::new(),
-        body: r#"{"name":"test","value":123}"#.to_string(),
+        body: Arc::from(r#"{"name":"test","value":123}"#),
         time_ms: 100,
         size_bytes: 0,
         cookies: Vec::new(),
@@ -232,7 +234,7 @@ fn test_response_format_non_json() {
     let response = HttpResponse {
         status: 200,
         headers: HashMap::new(),
-        body: "plain text response".to_string(),
+        body: Arc::from("plain text response"),
         time_ms: 100,
         size_bytes: 0,
         cookies: Vec::new(),

@@ -36,15 +36,15 @@ impl Render for DragPreview {
 }
 
 /// 按显示宽度截断（中文≈2宽，英文≈1宽）
-fn truncate_name(s: &str, max_width: usize) -> String {
+fn truncate_name(s: &str, max_width: usize) -> std::borrow::Cow<'_, str> {
     let mut w = 0;
     for (i, ch) in s.char_indices() {
         w += if ch.is_ascii() { 1 } else { 2 };
         if w > max_width {
-            return format!("{}…", &s[..i]);
+            return std::borrow::Cow::Owned(format!("{}…", &s[..i]));
         }
     }
-    s.to_string()
+    std::borrow::Cow::Borrowed(s)
 }
 
 #[derive(Clone, Debug)]
@@ -227,7 +227,7 @@ pub fn render_collection_panel(
                                             cx.notify();
                                         })
                                     })
-                                    .child(truncate_name(&fname, 24usize.saturating_sub(d * 2)))
+                                    .child(truncate_name(&fname, 24usize.saturating_sub(d * 2)).into_owned())
                                     .into_any_element(),
                                 div().into_any_element(),
                             ])
@@ -335,7 +335,7 @@ pub fn render_collection_panel(
                                     this.load_saved_request_by_id(&req_id, &req_method, &req_url, &req_name, _window, cx);
                                 })
                             })
-                            .child(truncate_name(&rname, 24usize.saturating_sub(d * 2)))
+                            .child(truncate_name(&rname, 24usize.saturating_sub(d * 2)).into_owned())
                             .into_any_element(),
                         div().into_any_element(),
                     ])

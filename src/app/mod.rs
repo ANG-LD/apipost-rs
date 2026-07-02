@@ -194,7 +194,7 @@ impl AppState {
 
     /// 获取翻译文本
     pub fn t(&self, key: &str) -> String {
-        self.i18n.get(key)
+        self.i18n.get(key).to_string()
     }
 
     /// 运行时更新代理配置（立即生效，下次请求使用新代理）

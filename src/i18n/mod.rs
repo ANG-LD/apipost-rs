@@ -28,12 +28,17 @@ impl I18nManager {
         }
     }
 
-    /// 获取翻译文本
-    pub fn get(&self, key: &str) -> String {
+    /// 获取翻译文本（零分配查询）
+    pub fn get<'a>(&'a self, key: &'a str) -> &'a str {
         self.translations
             .get(key)
-            .cloned()
-            .unwrap_or_else(|| key.to_string())
+            .map(|s| s.as_str())
+            .unwrap_or(key)
+    }
+
+    /// 获取翻译字典的 Arc（供外部缓存）
+    pub fn translations_arc(&self) -> Arc<HashMap<String, String>> {
+        Arc::clone(&self.translations)
     }
 
     /// 获取当前语言

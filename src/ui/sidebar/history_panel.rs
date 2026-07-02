@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::app::database::HistoryEntry;
 use crate::app::HttpResponse;
 use crate::ui::body::{BodyType, RawFormat};
@@ -270,7 +272,7 @@ pub fn render_history_panel(
                                     let response = HttpResponse {
                                         status: status as u16,
                                         headers: resp_headers,
-                                        body: resp_body.clone(),
+                                        body: Arc::from(resp_body.clone()),
                                         raw_body: None,
                                         time_ms: entry_response_time_ms
                                             .unwrap_or(0),
