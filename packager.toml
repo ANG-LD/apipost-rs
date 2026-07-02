@@ -4,7 +4,8 @@ version = "0.1.0"
 identifier = "com.apipost-rs.apipost-rs"
 description = "A Postman alternative built with Rust and gpui"
 homepage = "https://github.com/apipost-rs/apipost-rs"
-publisher = "apipost-rs team"
+authors = ["Lidong yang <735615901@qq.com>"]
+publisher = "Lidong yang <735615901@qq.com>"
 license-file = "LICENSE"
 copyright = "Copyright 2025 apipost-rs team"
 category = "Development"
@@ -24,7 +25,6 @@ generate-desktop-entry = true
 depends = ["libwebkit2gtk-4.1-0", "libgtk-3-0", "libglib2.0-0", "libc6", "libx11-6", "libwayland-client0"]
 section = "utils"
 priority = "optional"
-maintainer = "Lidong yang <735615901@qq.com>"
 
 [nsis]
 installer-mode = "currentUser"
