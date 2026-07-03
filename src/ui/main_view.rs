@@ -2094,22 +2094,9 @@ impl MainView {
         let new_idx = self.request_tabs.len() - 1;
         self.active_tab = new_idx;
 
-        // 重置表单
-        self.method = "GET".to_string();
-        self.url = String::new();
-        self.params.clear();
-        self.headers.clear();
-        self.response = None;
-        self.error_message = None;
-
-        self.is_importing_curl = true;
-        self.url_input.update(cx, |state, cx| {
-            state.set_value("", window, cx);
-        });
-        self.method_select.update(cx, |state, cx| {
-            state.set_selected_index(Some(IndexPath::new(0)), window, cx);
-        });
-        self.is_importing_curl = false;
+        // 加载默认 TabState，重置所有 UI 组件（body/auth/settings/scripts 等）
+        let new_tab = self.request_tabs[new_idx].clone();
+        self.load_tab_meta(&new_tab, window, cx);
 
         self.save_workspace(cx);
         cx.notify();
