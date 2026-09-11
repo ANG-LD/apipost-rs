@@ -1,6 +1,6 @@
 name = "apipost-rs"
 product-name = "ApiPost-Rs"
-version = "0.2.1"
+version = "0.2.2"
 identifier = "com.apipost-rs.apipost-rs"
 description = "A Postman alternative built with Rust and gpui"
 homepage = "https://github.com/ANG-LD/apipost-rs"
