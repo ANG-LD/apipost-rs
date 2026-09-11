@@ -4019,7 +4019,9 @@ fn setting_option_btn_inner(
         //   Some(w) —— 主题网格用的紧凑款：固定宽度 + 禁止压缩 + 内边距收紧。
         //              固定宽度才能等宽；禁止压缩才能不被同行的长文字挤成不同宽度。
         //   None    —— 语言 / 开关用：内容自适应宽度。
-        .when_some(width, |d, w| d.w(px(w)).flex_shrink_0().px_1())
+        // 铺满整行：basis=0 的 flex_1，四个按钮等分（宽度只由行宽决定，
+        // 与文字长短无关）；min_w 兜底，防止面板极窄时被压没
+        .when_some(width, |d, w| d.flex_1().min_w(px(w)).px_1())
         .when(width.is_none(), |d| d.min_w(px(60.0)).px_2p5())
         // 文字左右内边距一致（居中）
         .flex()
