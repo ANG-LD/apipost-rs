@@ -1,11 +1,14 @@
 /// 移动请求/文件夹到指定文件夹对话框
 use crate::app::database::Folder;
 use crate::app::AppState;
+use crate::ui::components::{
+    button_size_for_icon, themed_icon, IconTier, IconTone, ICON_TEXT_GAP, RADIUS_LG,
+};
 use crate::ui::Theme;
 use gpui::*;
 use gpui::prelude::FluentBuilder;
 use gpui_component::button::Button;
-use gpui_component::{Icon, IconName, Sizable, StyledExt};
+use gpui_component::{IconName, Sizable, StyledExt};
 use std::sync::{Arc, Mutex};
 
 /// 移动对话框状态
@@ -118,7 +121,7 @@ pub fn render_move_dialog_overlay(
             div()
                 .absolute()
                 .inset_0()
-                .bg(rgba(0x00000044))
+                .bg(t.scrim())
                 .on_mouse_down(MouseButton::Left, {
                     let s = state.clone();
                     let eid = entity_id;
@@ -140,11 +143,12 @@ pub fn render_move_dialog_overlay(
                 .on_mouse_down(MouseButton::Left, |_, _, cx| {
                     cx.stop_propagation();
                 })
-                .rounded_lg()
+                .rounded(px(RADIUS_LG))
                 .bg(t.background)
                 .border(px(1.0))
-                .border_color(t.muted_background)
-                .shadow_lg()
+                // 边框/阴影与其它弹窗统一
+                .border_color(t.border)
+                .shadow_2xl()
                 .flex_col()
                 .child(
                     // 标题
@@ -156,19 +160,30 @@ pub fn render_move_dialog_overlay(
                         .px_4()
                         .py_3()
                         .border_b(px(1.0))
-                        .border_color(t.muted_background)
+                        .border_color(t.border)
                         .child(
                             div()
                                 .flex()
                                 .items_center()
-                                .gap_2()
-                                .child(Icon::new(IconName::FolderOpen).small().text_color(t.accent))
+                                .gap(px(ICON_TEXT_GAP))
+                                // 弹窗标题图标：与 14px 半粗标题同档（Regular），
+                                // "移动目标"是文件夹语义 → Accent
+                                .child(themed_icon(
+                                    IconName::FolderOpen,
+                                    IconTier::Regular,
+                                    IconTone::Accent,
+                                    &t,
+                                ))
                                 .child(div().font_semibold().text_color(t.foreground).child("移动到...")),
                         )
                         .child(
                             Button::new("close-move-dialog")
                                 .icon(IconName::Close)
-                                .xsmall()
+                                // 同 folder_dialog 的关闭按钮：独立按钮 → 图标标准档 14px
+                                .with_size(button_size_for_icon(IconTier::Regular))
+                                // 按钮盒保持原来的 20px（组件库 XSmall 图标按钮 size_5）
+                                .w(px(20.0))
+                                .h(px(20.0))
                                 .on_click({
                                     let s = state.clone();
                                     let eid = entity_id;
@@ -192,16 +207,34 @@ pub fn render_move_dialog_overlay(
                         .child(
                             // "根目录" 选项
                             div()
+                                // 可点击行必须给 id，hover 样式才会真的参与计算
+                                .id("move-dialog-root-row")
                                 .flex()
                                 .flex_row()
                                 .items_center()
-                                .gap_2()
+                                .gap(px(ICON_TEXT_GAP))
                                 .px_4()
                                 .py_2()
                                 .cursor_pointer()
-                                .hover(|s| s.bg(t.code_background))
+                                // hover 统一走 tokens：常态行提亮一档，既然它当前是选中态（已经是 muted 面）
+                                // 就再压深一档，否则 hover 与底色同色、看不出反馈
+                                .hover(|s| {
+                                    if selected.is_none() {
+                                        s.bg(t.active_bg())
+                                    } else {
+                                        s.bg(t.hover_bg())
+                                    }
+                                })
+                                // 按下统一走 active_bg()：不许用 .opacity() 整元素变透明
+                                .active(|s| s.bg(t.active_bg()))
                                 .bg(if selected.is_none() { t.muted_background } else { t.background })
-                                .child(Icon::new(IconName::FolderClosed).xsmall().text_color(t.muted_foreground))
+                                // "根目录(无文件夹)" 是个次级占位项 → Muted
+                                .child(themed_icon(
+                                    IconName::FolderClosed,
+                                    IconTier::Dense,
+                                    IconTone::Muted,
+                                    &t,
+                                ))
                                 .child(div().text_sm().text_color(t.foreground).child("根目录 (无文件夹)"))
                                 .on_mouse_down(MouseButton::Left, {
                                     let s = state.clone();
@@ -220,17 +253,34 @@ pub fn render_move_dialog_overlay(
                             let depth = folder_depth(&folders, &fid);
                             let is_selected = selected.as_deref() == Some(&fid);
                             div()
+                                // 列表行在循环里生成，id 必须带 fid 才唯一
+                                // （共用 id 会让所有行共享同一份 hover 状态）
+                                .id(ElementId::from(format!("move-dialog-folder-{}", fid)))
                                 .flex()
                                 .flex_row()
                                 .items_center()
-                                .gap_2()
+                                .gap(px(ICON_TEXT_GAP))
                                 .px_4()
                                 .py_2()
                                 .cursor_pointer()
-                                .hover(|s| s.bg(t.code_background))
+                                .hover(|s| {
+                                    if is_selected {
+                                        s.bg(t.active_bg())
+                                    } else {
+                                        s.bg(t.hover_bg())
+                                    }
+                                })
+                                // 按下统一走 active_bg()
+                                .active(|s| s.bg(t.active_bg()))
                                 .bg(if is_selected { t.muted_background } else { t.background })
                                 .child(div().w(px(depth as f32 * 20.0)))
-                                .child(Icon::new(IconName::FolderClosed).xsmall().text_color(t.accent))
+                                // 真实文件夹 → 与侧栏文件夹树、folder_dialog 同色（Accent）
+                                .child(themed_icon(
+                                    IconName::FolderClosed,
+                                    IconTier::Dense,
+                                    IconTone::Accent,
+                                    &t,
+                                ))
                                 .child(div().text_sm().text_color(t.foreground).child(fname.clone()))
                                 .on_mouse_down(MouseButton::Left, {
                                     let s = state.clone();
@@ -255,7 +305,7 @@ pub fn render_move_dialog_overlay(
                         .px_4()
                         .py_3()
                         .border_t(px(1.0))
-                        .border_color(t.muted_background)
+                        .border_color(t.border)
                         .child(
                             Button::new("cancel-move")
                                 .label("取消")

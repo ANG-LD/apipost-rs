@@ -7,8 +7,10 @@ use crate::app::history::CreateHistoryEntry;
 use crate::app::HttpResponse;
 use crate::http::HttpRequest;
 use crate::ui::components::{
-    ghost_button, popup_panel, primary_button_sm, section_divider, section_title, segment_button,
-    segment_group, tooltip_popup, GAP_M, GAP_S, GAP_XS,
+    button_size_for_icon, ghost_button, popup_panel, primary_button_sm, section_divider,
+    section_title, segment_button, segment_group, themed_icon, tooltip_popup, IconTier, IconTone,
+    CONTROL_H, CONTROL_H_SM, GAP_L, GAP_M, GAP_S, GAP_XS, ICON_TEXT_GAP, RADIUS_LG, RADIUS_SM,
+    RADIUS_XS,
 };
 use crate::ui::dialogs::{
     render_code_gen_dialog_overlay, render_env_dialog_overlay,
@@ -34,7 +36,7 @@ use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::scroll::Scrollable;
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::select::{Select, SelectEvent, SelectState};
-use gpui_component::{Disableable, Icon, IconName, IndexPath, Sizable, StyledExt, WindowExt};
+use gpui_component::{Disableable, IconName, IndexPath, Sizable, StyledExt, WindowExt};
 use std::collections::HashSet;
 use smallvec::smallvec;
 use std::sync::atomic::AtomicBool;
@@ -102,6 +104,59 @@ pub struct RequestTab {
     pub url: String,
     pub name: String,
     pub tab_state: TabState,
+}
+
+/// 一条历史记录在侧栏列表里要显示的派生字符串。
+///
+/// 全部是 `SharedString`（`Arc<str>`）：渲染每帧 clone 一次只是引用计数 +1。
+/// 这些文案只跟 entry 本身有关，所以在 `HistoryList::new` 里算一次就固定下来。
+#[derive(Clone)]
+pub(crate) struct HistoryRow {
+    /// 行容器的 element id：`history-row-{id}`
+    pub element_id: SharedString,
+    pub method: SharedString,
+    pub url: SharedString,
+    /// 状态行文案，与改造前 `format!("{} ({})", status, ...)` 逐字一致；
+    /// 没有状态码时为空（渲染里也不显示状态行）
+    pub status_line: SharedString,
+}
+
+/// 历史列表 = 记录 + 渲染派生数据。
+///
+/// 把派生数据和源数据放在**同一个结构体**里，是因为侧栏列表每帧都要用
+/// `method` / `url` / element id / 状态行：改造前这些是每帧现算的
+/// （每行 2 次 `String::clone` + 2 次 `format!`，50 行就是每帧 200+ 次堆分配）。
+/// 放在一起就**不可能出现派生数据与源数据不同步**（没有第二个写入点），
+/// 也不需要额外维护缓存失效逻辑。
+pub(crate) struct HistoryList {
+    pub entries: Vec<HistoryEntry>,
+    pub rows: Vec<HistoryRow>,
+}
+
+impl HistoryList {
+    pub fn new(entries: Vec<HistoryEntry>) -> Self {
+        let rows = entries
+            .iter()
+            .map(|entry| HistoryRow {
+                element_id: SharedString::from(format!("history-row-{}", entry.id)),
+                method: SharedString::from(entry.method.as_str()),
+                url: SharedString::from(entry.url.as_str()),
+                // 与改造前同样的表达式：没有耗时时会留下一个空括号
+                status_line: match entry.response_status {
+                    Some(status) => SharedString::from(format!(
+                        "{} ({})",
+                        status,
+                        entry
+                            .response_time_ms
+                            .map(|t| format!("{}ms", t))
+                            .unwrap_or_default()
+                    )),
+                    None => SharedString::default(),
+                },
+            })
+            .collect();
+        Self { entries, rows }
+    }
 }
 
 /// 每个标签页的完整状态快照（纯数据，不含 Entity 引用）
@@ -265,8 +320,9 @@ pub struct MainView {
     pub(crate) hovered_item_y: Option<f32>,
     pub(crate) hovered_item_x: Option<f32>,
     pub(crate) context_menu_pos: Option<(f32, f32)>,
-    /// 历史记录（放在堆上共享：渲染时 clone 一次只是引用计数 +1，不再深拷贝整份列表）
-    pub(crate) history: Arc<Vec<HistoryEntry>>,
+    /// 历史记录 + 渲染派生数据（放在堆上共享：渲染时 clone 一次只是引用计数 +1，
+    /// 不再深拷贝整份列表；派生文案也随列表一起构建，渲染时零分配）
+    pub(crate) history: Arc<HistoryList>,
     pub(crate) saved_requests: Arc<Vec<crate::app::database::SavedRequest>>,
     pub(crate) folders: Arc<Vec<crate::app::database::Folder>>,
     pub(crate) environments: Arc<Vec<crate::app::database::Environment>>,
@@ -300,9 +356,6 @@ pub struct MainView {
     pub(crate) is_importing_curl: bool,
     pub(crate) last_synced_url: String,
     pub(crate) response_input: Entity<InputState>,
-    pub(crate) response_xml_input: Entity<InputState>,
-    pub(crate) response_text_input: Entity<InputState>,
-    pub(crate) response_html_input: Entity<InputState>,
     pub(crate) response_pretty_input: Entity<InputState>,
     pub(crate) response_header_inputs: Vec<(Entity<InputState>, Entity<InputState>)>,
     pub(crate) response_raw_format: RawFormat,
@@ -503,7 +556,7 @@ fn render_preview_body(
             .bg(theme.code_background)
             .border_1()
             .border_color(theme.border)
-            .rounded_md()
+            .rounded(px(RADIUS_SM))
             .p_3()
             .text_sm()
             .child(body.to_string())
@@ -533,7 +586,7 @@ fn render_preview_body(
                             .cursor_pointer()
                             .px_3()
                             .py_1()
-                            .rounded_md()
+                            .rounded(px(RADIUS_SM))
                             .bg(theme.accent)
                             .text_color(theme.accent_foreground)
                             .text_sm()
@@ -567,7 +620,7 @@ fn render_preview_body(
                     .bg(theme.code_background)
                     .border_1()
                     .border_color(theme.border)
-                    .rounded_md()
+                    .rounded(px(RADIUS_SM))
                     .overflow_hidden()
                     .child(
                         div()
@@ -592,7 +645,7 @@ fn render_preview_body(
             .bg(theme.code_background)
             .border_1()
             .border_color(theme.border)
-            .rounded_md()
+            .rounded(px(RADIUS_SM))
             .p_3()
             .text_sm()
             .text_color(theme.foreground)
@@ -618,7 +671,7 @@ fn render_preview_body(
                     .cursor_pointer()
                     .px_3()
                     .py_2()
-                    .rounded_md()
+                    .rounded(px(RADIUS_SM))
                     .bg(theme.accent)
                     .text_color(theme.accent_foreground)
                     .text_sm()
@@ -660,7 +713,7 @@ fn render_preview_body(
         .bg(theme.code_background)
         .border_1()
         .border_color(theme.border)
-        .rounded_md()
+        .rounded(px(RADIUS_SM))
         .p_3()
         .text_sm()
         .child(match highlighted.plain.as_ref() {
@@ -898,38 +951,18 @@ impl MainView {
         let settings_inputs = SettingsInputs::new(window, cx);
 
         // 创建响应体输入状态（用于 JSON 语法高亮显示）
+        //
+        // 这里**只有这一个**响应体编辑器：改造前还建了 xml / text / html 三个
+        // 同配置（都是 `code_editor("json")`）的 InputState，每次响应到达都把整篇
+        // 正文 `set_value` 进去，但它们从来没有被 `Input::new(...)` 渲染、也没人读
+        // 它们的值（是只写状态）。每个 InputState 都会把正文抄一遍进自己的 Rope、
+        // 并在绘制时跑一次语法解析，所以那是一份纯浪费：正文常驻内存 ×4、解析 ×4。
+        // 删掉它们是纯内部改动：没有任何用户可见行为依赖它们。
         let response_input = cx.new(|cx| {
             InputState::new(window, cx)
                 .code_editor("json")
                 .multi_line(true)
                 .soft_wrap(true)
-                .line_number(true)
-                .default_value("")
-        });
-
-        // 创建响应体 XML 输入状态（使用 code_editor）
-        let response_xml_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .multi_line(true)
-                .code_editor("json")
-                .line_number(true)
-                .default_value("")
-        });
-
-        // 创建响应体 Text 输入状态（使用 code_editor）
-        let response_text_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .multi_line(true)
-                .code_editor("json")
-                .line_number(true)
-                .default_value("")
-        });
-
-        // 创建响应体 Html 输入状态（使用 code_editor）
-        let response_html_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .multi_line(true)
-                .code_editor("json")
                 .line_number(true)
                 .default_value("")
         });
@@ -1030,7 +1063,7 @@ impl MainView {
             )),
             needs_collections_refresh: false,
             needs_drop_refresh: Arc::new(AtomicBool::new(false)),
-            history: Arc::new(history),
+            history: Arc::new(HistoryList::new(history)),
             saved_requests: Arc::new(saved_requests),
             folders: Arc::new(folders),
             environments: Arc::new(environments),
@@ -1058,9 +1091,6 @@ impl MainView {
             is_importing_curl: false,
             last_synced_url: String::new(),
             response_input,
-            response_xml_input,
-            response_text_input,
-            response_html_input,
             response_pretty_input,
             response_header_inputs,
             response_raw_format: RawFormat::Json,
@@ -1325,23 +1355,18 @@ impl MainView {
                             let content_type = response.detect_content_type();
                             this.response_raw_format =
                                 RawFormat::detect(content_type.as_deref(), response.body.as_ref());
-                            let body_ref = response.body.as_ref();
+                            // 正文按指针交给编辑器：`InputState::set_value` 的入参是
+                            // `impl Into<SharedString>`，传 `&str` 会为整篇正文再做一次
+                            // 堆分配 + 拷贝（5MB 的 JSON 就是 5MB 的白拷贝），
+                            // 传 `SharedString`（内部就是 Arc<str>）只是引用计数 +1
+                            let body = SharedString::from(Arc::clone(&response.body));
                             this.response_input.update(cx, |state, cx| {
-                                state.set_value(body_ref, window, cx);
-                            });
-                            this.response_xml_input.update(cx, |state, cx| {
-                                state.set_value(body_ref, window, cx);
-                            });
-                            this.response_text_input.update(cx, |state, cx| {
-                                state.set_value(body_ref, window, cx);
-                            });
-                            this.response_html_input.update(cx, |state, cx| {
-                                state.set_value(body_ref, window, cx);
+                                state.set_value(body, window, cx);
                             });
                             this.update_pretty_editor(window, cx);
                             this.rebuild_response_header_inputs(&response.headers, window, cx);
                             if let Ok(hist) = this.app_state.lock().unwrap().db.get_history(50, 0) {
-                                this.history = Arc::new(hist);
+                                this.history = Arc::new(HistoryList::new(hist));
                             }
                             // 响应成功后立即保存工作区状态
                             this.save_workspace(cx);
@@ -2673,32 +2698,16 @@ impl MainView {
 
         // 恢复响应体展示
         if let Some(ref resp) = self.response {
-            let resp_body = resp.body.clone();
+            // 正文直接按 SharedString 交过去（`Arc<str>` 的引用计数），
+            // 不再从 `&str` 转一遍 —— 那会为整篇正文再分配一次
+            let resp_body = SharedString::from(Arc::clone(&resp.body));
             let resp_headers = resp.headers.clone();
             self.response_input.update(cx, |s, cx| {
-                s.set_value(resp_body.as_ref(), window, cx);
-            });
-            self.response_xml_input.update(cx, |s, cx| {
-                s.set_value(resp_body.as_ref(), window, cx);
-            });
-            self.response_text_input.update(cx, |s, cx| {
-                s.set_value(resp_body.as_ref(), window, cx);
-            });
-            self.response_html_input.update(cx, |s, cx| {
-                s.set_value(resp_body.as_ref(), window, cx);
+                s.set_value(resp_body, window, cx);
             });
             self.rebuild_response_header_inputs(&resp_headers, window, cx);
         } else {
             self.response_input.update(cx, |s, cx| {
-                s.set_value("", window, cx);
-            });
-            self.response_xml_input.update(cx, |s, cx| {
-                s.set_value("", window, cx);
-            });
-            self.response_text_input.update(cx, |s, cx| {
-                s.set_value("", window, cx);
-            });
-            self.response_html_input.update(cx, |s, cx| {
                 s.set_value("", window, cx);
             });
             self.response_header_inputs.clear();
@@ -2994,13 +3003,9 @@ impl MainView {
         self.app_state.lock().unwrap().set_theme(theme);
         self.cached_theme = Arc::new(Theme::from_str(theme));
 
-        // 底色浅的主题要切到组件库的 Light 模式，否则组件对比度不对
-        let mode = if Theme::is_light(theme) {
-            gpui_component::theme::ThemeMode::Light
-        } else {
-            gpui_component::theme::ThemeMode::Dark
-        };
-        gpui_component::theme::Theme::change(mode, None, cx);
+        // 组件库（输入框/按钮/下拉/设置弹窗）的颜色、圆角、焦点环全部由应用调色板派生；
+        // 底色浅的主题会自动走 Light 模式，不再需要在这里单独判断
+        crate::ui::themes::apply_component_theme(&self.cached_theme, cx);
 
         cx.notify();
     }
@@ -3409,34 +3414,40 @@ fn update_section(this: &MainView, cx: &mut Context<MainView>, theme: &Theme) ->
     };
 
     // 状态行：图标 + 文案（颜色区分成功/失败/有新版本）
-    let (icon, icon_color, text, text_color) = match &this.update_status {
+    // 图标只带"语义档"而不是裸颜色：颜色由 themed_icon 从调色板取，
+    // 这样"成功=success / 失败=error / 进行中=accent"在全应用只有一份定义
+    let (icon, icon_tone, text, text_color) = match &this.update_status {
         UpdateStatus::Idle => (
             IconName::Info,
-            theme.muted_foreground,
+            IconTone::Muted,
             t_hint.clone(),
             theme.muted_foreground,
         ),
         UpdateStatus::Checking => (
             IconName::LoaderCircle,
-            theme.accent,
+            IconTone::Accent,
             this.t("update.checking"),
             theme.muted_foreground,
         ),
         UpdateStatus::UpToDate { latest } => (
-            IconName::Check,
-            theme.success,
+            // 「状态=成功」用圆环对勾：与失败态的圆环叉成对，
+            // 也和「动作=确认」的裸对勾（保存按钮）区分开
+            IconName::CircleCheck,
+            IconTone::Success,
             SharedString::from(format!("{t_up_to_date}（v{latest}）")),
             theme.muted_foreground,
         ),
         UpdateStatus::Available(info) => (
             IconName::TriangleAlert,
-            theme.accent,
+            IconTone::Accent,
             SharedString::from(format!("{t_available} v{}", info.version())),
             theme.foreground,
         ),
         UpdateStatus::Failed(err) => (
-            IconName::Close,
-            theme.error,
+            // 失败是一种"状态"，不是"关闭"动作：原来借用 Close，
+            // 同一个字形既表示关闭又表示失败（一图多义），这里换成圆环叉
+            IconName::CircleX,
+            IconTone::Danger,
             SharedString::from(format!("{t_failed}：{err}")),
             theme.error,
         ),
@@ -3507,8 +3518,9 @@ fn update_section(this: &MainView, cx: &mut Context<MainView>, theme: &Theme) ->
                 .flex()
                 .flex_row()
                 .items_start()
-                .gap(px(GAP_XS + 2.0))
-                .child(Icon::new(icon).xsmall().text_color(icon_color))
+                .gap(px(ICON_TEXT_GAP))
+                // 与 11px 说明文字同行 → 密集档；颜色来自上面的语义档
+                .child(themed_icon(icon, IconTier::Dense, icon_tone, theme))
                 .child(
                     div()
                         .flex_1()
@@ -3541,8 +3553,16 @@ fn update_section(this: &MainView, cx: &mut Context<MainView>, theme: &Theme) ->
                             .flex()
                             .flex_row()
                             .items_center()
-                            .gap(px(GAP_XS))
-                            .child(Icon::new(IconName::Replace).xsmall())
+                            .gap(px(ICON_TEXT_GAP))
+                            // 描边按钮 hover/按下会换文字色 → 图标 Inherit 才会跟着换
+                            // 字形取 Search：这个按钮的动作是"去查找有没有新版本"，
+                            // 原来的 Replace（两块互换）表达的是"替换"，与检查无关
+                            .child(themed_icon(
+                                IconName::Search,
+                                IconTier::Dense,
+                                IconTone::Inherit,
+                                theme,
+                            ))
                             .child(check_label.clone()),
                         theme,
                     )
@@ -3561,8 +3581,13 @@ fn update_section(this: &MainView, cx: &mut Context<MainView>, theme: &Theme) ->
                                 .flex()
                                 .flex_row()
                                 .items_center()
-                                .gap(px(GAP_XS))
-                                .child(Icon::new(IconName::ExternalLink).xsmall())
+                                .gap(px(ICON_TEXT_GAP))
+                                .child(themed_icon(
+                                    IconName::ExternalLink,
+                                    IconTier::Dense,
+                                    IconTone::Inherit,
+                                    theme,
+                                ))
                                 .child(t_release_page.clone()),
                             theme,
                         )
@@ -3579,8 +3604,14 @@ fn update_section(this: &MainView, cx: &mut Context<MainView>, theme: &Theme) ->
                                 .flex()
                                 .flex_row()
                                 .items_center()
-                                .gap(px(2.0))
-                                .child(Icon::new(IconName::ArrowDown).xsmall())
+                                .gap(px(ICON_TEXT_GAP))
+                                // 实心主色按钮内的图标 → Inherit（跟 accent_foreground）
+                                .child(themed_icon(
+                                    IconName::ArrowDown,
+                                    IconTier::Dense,
+                                    IconTone::Inherit,
+                                    theme,
+                                ))
                                 .child(t_download.clone()),
                             theme,
                         )
@@ -3723,7 +3754,7 @@ fn settings_popover(
             .flex_row()
             .items_center()
             .justify_between()
-            .h(px(30.0))
+            .h(px(CONTROL_H))
             .child(
                 div()
                     .text_size(px(12.0))
@@ -3759,7 +3790,7 @@ fn settings_popover(
             .flex_row()
             .items_center()
             .justify_between()
-            .h(px(30.0))
+            .h(px(CONTROL_H))
             .child(
                 div()
                     .text_size(px(12.0))
@@ -3841,12 +3872,12 @@ fn settings_popover(
             )
             .child(
                 Input::new(&this.proxy_url_input)
-                    .h(px(30.0))
+                    .h(px(CONTROL_H))
                     .w_full()
-                    .rounded_md()
+                    .rounded(px(RADIUS_SM))
                     .border_1()
                     .border_color(theme.border)
-                    .bg(theme.input_background)
+                    .bg(theme.control_bg())
                     .text_color(theme.foreground),
             )
             .into_any_element(),
@@ -3859,11 +3890,16 @@ fn settings_popover(
         .flex_col()
         .child(
             div()
+                // 可点击容器必须有 id，hover/active 才参与样式计算
+                .id("shortcuts-toggle")
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap(px(GAP_XS + 2.0))
+                .gap(px(ICON_TEXT_GAP))
                 .cursor_pointer()
+                .rounded(px(RADIUS_XS))
+                .hover(|s| s.bg(theme.hover_bg()))
+                .active(|s| s.bg(theme.active_bg()))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, _: &MouseDownEvent, _window, cx| {
@@ -3871,15 +3907,17 @@ fn settings_popover(
                         cx.notify();
                     }),
                 )
-                .child(
-                    Icon::new(if this.show_shortcuts_popup {
+                // 展开箭头是方向指示（装饰性），与右侧 11px 文字同为次级 → Muted
+                .child(themed_icon(
+                    if this.show_shortcuts_popup {
                         IconName::ChevronDown
                     } else {
                         IconName::ChevronRight
-                    })
-                    .xsmall()
-                    .text_color(theme.muted_foreground),
-                )
+                    },
+                    IconTier::Dense,
+                    IconTone::Muted,
+                    theme,
+                ))
                 .child(
                     div()
                         .text_size(px(11.0))
@@ -3903,8 +3941,9 @@ fn settings_popover(
                             .min_w(px(112.0))
                             .px(px(GAP_XS + 2.0))
                             .py(px(2.0))
-                            .rounded_sm()
-                            .bg(theme.input_background)
+                            // 快捷键小徽章：徽章档圆角 + 控件底色
+                            .rounded(px(RADIUS_XS))
+                            .bg(theme.control_bg())
                             .border_1()
                             .border_color(theme.border)
                             .text_size(px(10.0))
@@ -3965,10 +4004,11 @@ fn settings_popover(
                         .flex()
                         .items_center()
                         .justify_center()
-                        .rounded_md()
+                        .rounded(px(RADIUS_SM))
                         .cursor_pointer()
                         .text_color(theme.muted_foreground)
-                        .hover(|s| s.bg(theme.muted_background).text_color(theme.foreground))
+                        .hover(|s| s.bg(theme.hover_bg()).text_color(theme.foreground))
+                        .active(|s| s.bg(theme.active_bg()).text_color(theme.foreground))
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
@@ -3976,7 +4016,13 @@ fn settings_popover(
                                 cx.notify();
                             }),
                         )
-                        .child(Icon::new(IconName::Close).xsmall()),
+                        // 容器 hover/按下把文字色换成 foreground → 图标必须 Inherit 才跟得上
+                        .child(themed_icon(
+                            IconName::Close,
+                            IconTier::Dense,
+                            IconTone::Inherit,
+                            theme,
+                        )),
                 ),
         )
         .child(
@@ -4039,6 +4085,9 @@ fn setting_option_btn_inner(
     cx: &mut Context<MainView>,
     on_toggle: impl Fn(&mut MainView, &MouseDownEvent, &mut Window, &mut Context<MainView>) + 'static,
 ) -> impl IntoElement {
+    // 按下态用的颜色先取出来：闭包要 move，Rgba 是 Copy
+    let pressed_accent = theme.accent_pressed();
+    let pressed_bg = theme.active_bg();
     div()
         .id(id)
         .text_xs()
@@ -4056,7 +4105,8 @@ fn setting_option_btn_inner(
         .items_center()
         .justify_center()
         .py_1()
-        .rounded_sm()
+        // 它是按钮（不是徽章），圆角走控件档 6px
+        .rounded(px(RADIUS_SM))
         .border_1()
         .border_color(if active { theme.accent } else { theme.border })
         .font_weight(if active { FontWeight(600.0) } else { FontWeight(400.0) })
@@ -4070,7 +4120,9 @@ fn setting_option_btn_inner(
         } else {
             theme.muted_foreground
         })
-        .hover(|s| if active { s } else { s.bg(theme.muted_background).border_color(theme.muted_foreground) })
+        .hover(|s| if active { s } else { s.bg(theme.hover_bg()).border_color(theme.muted_foreground) })
+        // 按下反馈：选中项压深一档，未选中项用更重的灰
+        .active(move |s| if active { s.bg(pressed_accent) } else { s.bg(pressed_bg) })
         .on_mouse_down(MouseButton::Left, cx.listener(on_toggle))
         .child(label.to_string())
 }
@@ -4239,24 +4291,29 @@ impl Render for MainView {
                                     .when(self.sidebar_collapsed, |s| s.justify_center())
                                     .when(!self.sidebar_collapsed, |s| s.justify_between().px_3())
                                     .border_b(px(1.0))
-                                    .border_color(theme.muted_background)
+                                    .border_color(theme.border)
                                     .children([
                                         if !self.sidebar_collapsed {
-                                            div().text_color(rgb(0xf97316)).font_semibold().child("ApiPost")
+                                            div().text_color(theme.accent).font_semibold().child("ApiPost")
                                         } else {
                                             div()
                                         },
-                                        // 设置按钮
+                                        // 设置按钮：外层套一个普通 div，只为让 children 数组元素类型一致
+                                        // （.id() 会把 Div 变成 Stateful<Div>），布局不受影响
+                                        div().child(
                                         div()
-                                            .h(px(28.0))
+                                            // 可点击容器必须有 id，hover/active 才参与样式计算
+                                            .id("sidebar-settings-btn")
+                                            .h(px(CONTROL_H_SM))
                                             .w(px(40.0))
                                             .flex()
                                             .items_center()
                                             .justify_center()
-                                            .rounded_md()
+                                            .rounded(px(RADIUS_SM))
                                             .cursor_pointer()
                                             .bg(if self.show_settings_popover { theme.muted_background } else { theme.input_background })
-                                            .hover(|s| s.bg(theme.muted_background))
+                                            .hover(|s| s.bg(theme.hover_bg()))
+                                            .active(|s| s.bg(theme.active_bg()))
                                             .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>| {
                                                 this.show_settings_popover = !this.show_settings_popover;
                                                 // 打开设置面板时顺手查一次更新，10 分钟内不重复打 GitHub
@@ -4271,9 +4328,15 @@ impl Render for MainView {
                                                 }
                                                 cx.notify();
                                             }))
-                                            .child(
-                                                Icon::new(IconName::Settings).small().text_color(theme.muted_foreground)
-                                            ),
+                                            // 工具栏图标按钮 → 标准档；hover 只换底色，
+                                            // 图标保持次级色（与相邻的折叠按钮同色）
+                                            .child(themed_icon(
+                                                IconName::Settings,
+                                                IconTier::Regular,
+                                                IconTone::Muted,
+                                                &theme,
+                                            ))
+                                        ),
                                     ]),
                                 // 标签页按钮
                                 div()
@@ -4301,7 +4364,14 @@ impl Render for MainView {
                                             .on_click(cx.listener(|this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                 this.set_sidebar_tab(SidebarTab::Collections, cx);
                                             }))
-                                            .child(Icon::new(IconName::FolderClosed).small()),
+                                            // 侧栏 tab 图标：独立图标 → 标准档；
+                                            // 选中时容器把文字色换成 accent_foreground，图标 Inherit 才会跟着换
+                                            .child(themed_icon(
+                                                IconName::FolderClosed,
+                                                IconTier::Regular,
+                                                IconTone::Inherit,
+                                                &theme,
+                                            )),
                                         div()
                                             .id("sidebar-history") // 历史记录
                                             .w(px(48.0))
@@ -4316,7 +4386,17 @@ impl Render for MainView {
                                             .on_click(cx.listener(|this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                 this.set_sidebar_tab(SidebarTab::History, cx);
                                             }))
-                                            .child(Icon::new(IconName::GalleryVerticalEnd).small()),
+                                            // 侧栏 tab 图标：独立图标 → 标准档；
+                                            // 选中时容器把文字色换成 accent_foreground，图标 Inherit 才会跟着换；
+                                            // 字形取 Undo2（回到过去）：原来的 GalleryVerticalEnd 是排版里的
+                                            // "行末标记"，与"历史记录"毫无关系；图标集里没有时钟/列表字形，
+                                            // 逆时针回退箭头是唯一表达"回溯过去"的一档
+                                            .child(themed_icon(
+                                                IconName::Undo2,
+                                                IconTier::Regular,
+                                                IconTone::Inherit,
+                                                &theme,
+                                            )),
                                         div()
                                             .id("sidebar-env-tab")
                                             .w(px(48.0))
@@ -4331,7 +4411,13 @@ impl Render for MainView {
                                             .on_click(cx.listener(|this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                 this.set_sidebar_tab(SidebarTab::Environments, cx);
                                             }))
-                                            .child(Icon::new(IconName::Globe).small()),
+                                            // 侧栏 tab 图标：独立图标 → 标准档；颜色随容器（Inherit）
+                                            .child(themed_icon(
+                                                IconName::Globe,
+                                                IconTier::Regular,
+                                                IconTone::Inherit,
+                                                &theme,
+                                            )),
                                     ]),
                                 // 侧边栏内容
                                 if !self.sidebar_collapsed {
@@ -4349,7 +4435,7 @@ impl Render for MainView {
                                         .overflow_hidden()
                                         .children([
                                             if sidebar_tab == SidebarTab::History { // 历史记录
-                                                if history.is_empty() {
+                                                if history.entries.is_empty() {
                                                     div()
                                                         .id("history-empty")
                                                         .p_4()
@@ -4373,16 +4459,21 @@ impl Render for MainView {
                                                                 .flex_col()
                                                                 .gap_1()
                                                                 .p_2().pb(px(24.0))
-                                                                .children(history.iter().enumerate().map(|(history_idx, entry)| {
+                                                                // zip 而不是按下标取：entries 和 rows 永远等长（同一次构造产出），
+                                                                // zip 天然不会越界，渲染期不可能 panic
+                                                                .children(history.entries.iter().zip(history.rows.iter()).enumerate().map(|(history_idx, (entry, row))| {
 let method_clr = method_color(&entry.method);
-                                                            // 每行只做一次 Arc 引用计数，不再 clone 整个 entry 和响应体：
-                                                            // 这些数据只在点击时才需要，没必要每帧复制
-                                                            let history_row = self.history.clone();
+                                                            // 每行只做引用计数：列表 Arc 和这一行的派生文案都是 Arc，
+                                                            // 一行 5 次 clone 全是引用计数，零堆分配
+                                                            // 交给点击闭包的那份句柄：和 row 分开，避免同时借用与被 move
+                                                            let history_handle = Arc::clone(&history);
                                                             let entry_response_time_ms = entry.response_time_ms;
                                                             let entry_response_size = entry.response_size.or_else(|| entry.response_body.as_ref().map(|b| b.len() as i64));
-                                                            let display_method = entry.method.clone();
-                                                            let display_url = entry.url.clone();
                                                             div()
+                                                                // 列表行必须带本条记录的 id：gpui 的 hover/active 状态挂在
+                                                                // element_state 上，而 element_state 只由 global_id（= .id()）提供；
+                                                                // 共用一个 id 会让所有行共享同一份状态（一行悬停、全部高亮）
+                                                                .id(row.element_id.clone())
                                                                 .w_full()
                                                                 // 关键：flex 子项默认 flex_shrink=1，会被压缩到刚好装下，
                                                                 // 内容高度等于容器高度就永远滚不动
@@ -4390,12 +4481,12 @@ let method_clr = method_color(&entry.method);
                                                                 .flex_col()
                                                                 .gap_1()
                                                                 .p_2()
-                                                                .rounded_md()
+                                                                .rounded(px(RADIUS_SM))
                                                                 .cursor_pointer()
-                                                                .hover(|s| s.bg(theme.code_background)).bg(theme.muted_background)
+                                                                .hover(|s| s.bg(theme.active_bg())).bg(theme.muted_background)
                                                                 .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                                     // 从共享的 Arc 里按下标取，避免每帧复制大对象
-                                                                    let Some(entry) = history_row.get(history_idx) else { return; };
+                                                                    let Some(entry) = history_handle.entries.get(history_idx) else { return; };
                                                                     this.load_saved_request(
                                                                         &entry.id,
                                                                         &entry.method,
@@ -4414,23 +4505,17 @@ let method_clr = method_color(&entry.method);
                                                                         // 在 resp_headers 被移动前重建 header inputs
                                                                         this.rebuild_response_header_inputs(&resp_headers, _window, cx);
                                                                         this.response_raw_format = RawFormat::detect(content_type.as_deref(), &resp_body);
+                                                                        // 正文先 move 进 Arc<str>（不 clone），再从同一个 Arc 取 SharedString
+                                                                        // 交给编辑器：`set_value` 收 `impl Into<SharedString>`，从 `&str`
+                                                                        // 转的话会为整篇正文再分配 + 拷贝一次
+                                                                        let resp_body: Arc<str> = Arc::from(resp_body);
                                                                         this.response_input.update(cx, |state, cx| {
-                                                                            state.set_value(&resp_body, _window, cx);
+                                                                            state.set_value(SharedString::from(Arc::clone(&resp_body)), _window, cx);
                                                                         });
-                                                                        this.response_xml_input.update(cx, |state, cx| {
-                                                                            state.set_value(&resp_body, _window, cx);
-                                                                        });
-                                                                        this.response_text_input.update(cx, |state, cx| {
-                                                                            state.set_value(&resp_body, _window, cx);
-                                                                        });
-                                                                        this.response_html_input.update(cx, |state, cx| {
-                                                                            state.set_value(&resp_body, _window, cx);
-                                                                        });
-                                                                        // resp_body move 进 Arc，避免 clone
                                                                         let response = HttpResponse {
                                                                             status: status as u16,
                                                                             headers: resp_headers,
-                                                                            body: Arc::from(resp_body),
+                                                                            body: resp_body,
                                                                             raw_body: None,
                                                                             time_ms: entry_response_time_ms.unwrap_or(0),
                                                                             size_bytes: entry_response_size.unwrap_or(0),
@@ -4443,31 +4528,24 @@ let method_clr = method_color(&entry.method);
                                                                         this.response_input.update(cx, |state, cx| {
                                                                             state.set_value("", _window, cx);
                                                                         });
-                                                                        this.response_xml_input.update(cx, |state, cx| {
-                                                                            state.set_value("", _window, cx);
-                                                                        });
-                                                                        this.response_text_input.update(cx, |state, cx| {
-                                                                            state.set_value("", _window, cx);
-                                                                        });
-                                                                        this.response_html_input.update(cx, |state, cx| {
-                                                                            state.set_value("", _window, cx);
-                                                                        });
                                                                         this.response_header_inputs.clear();
                                                                         this.update_pretty_editor(_window, cx);
                                                                     }
                                                                 }))
                                                                 .children([
                                                                     div().flex().items_center().gap_2().children([
-                                                                        div().px_1().py_px().rounded_sm().bg(rgb(method_clr))
+                                                                        div().px_1().py_px().rounded(px(RADIUS_XS)).bg(rgb(method_clr))
                                                                             .text_xs().text_color(theme.accent_foreground)
-                                                                            .child(display_method),
+                                                                            .child(row.method.clone()),
                                                                         div().flex_1().min_w(px(0.0)).truncate().text_xs().text_color(theme.foreground)
-                                                                            .child(display_url),
+                                                                            .child(row.url.clone()),
                                                                     ]),
                                                                     if let Some(status) = entry.response_status {
-                                                                        let status_color = if (200..300).contains(&status) { 0x22c55e } else { 0xef4444 };
-                                                                        div().text_xs().text_color(rgb(status_color))
-                                                                            .child(format!("{} ({})", status, entry.response_time_ms.map(|t| format!("{}ms", t)).unwrap_or_default()))
+                                                                        // 状态码颜色直接取主题的成功/错误色，
+                                                                        // 与响应区顶部那个状态徽章保持一致（原来是另一组写死的绿/红）
+                                                                        let status_color = if (200..300).contains(&status) { theme.success } else { theme.error };
+                                                                        div().text_xs().text_color(status_color)
+                                                                            .child(row.status_line.clone())
                                                                     } else {
                                                                         div()
                                                                     },
@@ -4510,7 +4588,12 @@ let method_clr = method_color(&entry.method);
                                                             .child(
                                                                 Button::new("add-folder-btn")
                                                                     .icon(IconName::Plus)
-                                                                    .xsmall()
+                                                                    // 面板标题行里的行内小按钮（容器 20px < 28px）→ 密集档 12px；
+                                                                    // 组件库按自身 size 反解图标尺寸，所以显式给该档对应的 size
+                                                                    .with_size(button_size_for_icon(IconTier::Dense))
+                                                                    // 按钮盒保持原来的 20px（组件库 XSmall 图标按钮 size_5）
+                                                                    .w(px(20.0))
+                                                                    .h(px(20.0))
                                                                     .on_click(cx.listener(|this, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>| {
                                                                         this.open_folder_dialog(None, window, cx);
                                                                     })),
@@ -4529,6 +4612,8 @@ let method_clr = method_color(&entry.method);
                                                             let drop_app = self.app_state.clone();
                                                             let drop_flag = self.needs_drop_refresh.clone();
                                                             let drop_eid = cx.entity_id();
+                                                            // 拖拽落点高亮色：闭包要求 'static，Rgba 是 Copy，先取出来
+                                                            let drop_tint = theme.accent.alpha(0.12);
                                                             div()
                                                                 .id("sidebar-collections-scroll")
                                                                 // 直接给显式高度：这条高度链上 flex_1/100% 都拿不到父容器的确定高度
@@ -4540,8 +4625,9 @@ let method_clr = method_color(&entry.method);
                                                                 // 压成容器高度，可滚动范围变成 0）
                                                                 .overflow_y_scroll()
                                                                 .overflow_x_hidden()
-                                                                .drag_over::<DragItem>(|style, _data, _window, _cx| {
-                                                                    style.bg(rgba(0x88888822))
+                                                                .drag_over::<DragItem>(move |style, _data, _window, _cx| {
+                                                                    // 落点高亮用主题主色淡化，写死的灰色在深色主题下几乎看不见
+                                                                    style.bg(drop_tint)
                                                                 })
                                                                 .on_drop::<DragItem>(move |data: &DragItem, _window, cx| {
                                                                     if let Ok(app) = drop_app.lock() {
@@ -4562,7 +4648,7 @@ let method_clr = method_color(&entry.method);
                                                                         .flex_none()
                                                                         .flex_col()
                                                                         .p_2().pb(px(40.0))
-                                                                        .child(render_collection_panel(&collection_items, &self.context_menu_target, &self.hovered_item_name, cx, &theme, &self.app_state, self.needs_drop_refresh.clone())),
+                                                                        .child(render_collection_panel(&collection_items, cx, &theme, &self.app_state, self.needs_drop_refresh.clone())),
                                                                 )
                                                                 .into_any_element()
                                                         }
@@ -4574,6 +4660,9 @@ let method_clr = method_color(&entry.method);
                                                     &environments,
                                                     self.active_env_id(),
                                                     &self.app_state,
+                                                    // 翻译字典按 Arc 传进去：面板每帧要取 ~9 条文案，
+                                                    // 走字典是引用计数，不必每帧锁 app_state + to_string()
+                                                    &self.translations,
                                                     &theme,
                                                     sidebar_content_h,
                                                     cx,
@@ -4584,26 +4673,37 @@ let method_clr = method_color(&entry.method);
                                 } else {
                                     div().flex_1()
                                 },
-                                // 侧边栏抽屉 折叠/展开按钮
+                                // 侧边栏抽屉 折叠/展开按钮：外层套一个普通 div，只为让
+                                // children 数组元素类型一致（.id() 会变成 Stateful<Div>）
+                                div().child(
                                 div()
-                                    .h(px(32.0))
+                                    // 可点击容器必须有 id，hover/active 才参与样式计算
+                                    .id("sidebar-collapse-btn")
+                                    .h(px(CONTROL_H))
                                     .flex()
                                     .items_center()
                                     .justify_center()
                                     .cursor_pointer()
-                                    .hover(|s| s.bg(theme.code_background))
+                                    .hover(|s| s.bg(theme.hover_bg()))
+                                    .active(|s| s.bg(theme.active_bg()))
                                     .border_t(px(1.0))
-                                    .border_color(theme.muted_background)
+                                    .border_color(theme.border)
                                     .text_color(theme.muted_foreground)
                                     .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                         this.toggle_sidebar(cx);
                                     }))
-                                    .text_color(theme.muted_foreground)
-                                    .child(if self.sidebar_collapsed {
-                                        Icon::new(IconName::PanelLeftOpen).small()
-                                    } else {
-                                        Icon::new(IconName::PanelLeftClose).small()
-                                    }),
+                                    // 工具栏/侧栏图标按钮 → 标准档；颜色跟容器（Muted）
+                                    .child(themed_icon(
+                                        if self.sidebar_collapsed {
+                                            IconName::PanelLeftOpen
+                                        } else {
+                                            IconName::PanelLeftClose
+                                        },
+                                        IconTier::Regular,
+                                        IconTone::Inherit,
+                                        &theme,
+                                    ))
+                                ),
                             ]),
                         // ==================== 主工作区 ====================
                         div()
@@ -4671,6 +4771,8 @@ let method_clr = method_color(&entry.method);
                                                 let show_close = show_close;
 
                                                 div()
+                                                    // 标签在循环里生成，id 必须带下标才唯一
+                                                    .id(SharedString::from(format!("request-tab-{}", i)))
                                                     .h(px(36.0))
                                                     .w(px(REQUEST_TAB_WIDTH))
                                                     // 标签定宽且不收缩：标签过多时由标签条横向滚动，
@@ -4681,29 +4783,32 @@ let method_clr = method_color(&entry.method);
                                                     .flex()
                                                     .items_center()
                                                     .gap_1()
-                                                    .bg(if is_active { theme.background } else { rgba(0x00000000) })
+                                                    .bg(if is_active { theme.background } else { theme.background.alpha(0.0) })
                                                     .rounded_t_md()
                                                     .border_b_2()
                                                     .border_b(if is_active { px(2.0) } else { px(0.0) })
-                                                    .border_color(if is_active { theme.accent } else { rgba(0x00000000) })
-                                                    .hover(|s| if is_active { s } else { s.bg(theme.code_background) })
+                                                    .border_color(if is_active { theme.accent } else { theme.accent.alpha(0.0) })
+                                                    .hover(|s| if is_active { s } else { s.bg(theme.hover_bg()) })
                                                     .text_xs()
                                                     .relative()
                                                     .child(
                                                         div()
+                                                            // 点击区与外层标签各有一个 id：外层管整条标签的 hover，
+                                                            // 这里管"点名字切标签"这块的 hover，两者互不影响
+                                                            .id(SharedString::from(format!("tab-hit-{}", i)))
                                                             .flex()
                                                             .items_center()
                                                             .gap_2()
-                                                            .rounded_sm()
+                                                            .rounded(px(RADIUS_XS))
                                                             .px_1()
                                                             .py_px()
                                                             .cursor_pointer()
-                                                            .hover(|s| s.bg(theme.muted_background))
+                                                            .hover(|s| s.bg(theme.hover_bg()))
                                                             .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                                 this.switch_tab(i, _window, cx);
                                                             }))
                                                             .children([
-                                                                div().px_1().py_px().rounded_sm()
+                                                                div().px_1().py_px().rounded(px(RADIUS_XS))
                                                                     .bg(rgb(method_clr))
                                                                     .text_xs().text_color(theme.accent_foreground)
                                                                     .child(tab_method),
@@ -4726,14 +4831,24 @@ let method_clr = method_color(&entry.method);
                                                                 .flex()
                                                                 .items_center()
                                                                 .justify_center()
-                                                                .rounded_sm()
+                                                                // 16px 的微元素（压在小圆角标签上），用徽章档 4px
+                                                                .rounded(px(RADIUS_XS))
+                                                                // 标签在循环里生成，id 必须带下标才唯一
+                                                                .id(ElementId::from(format!("tab-close-{}", i)))
                                                                 .cursor_pointer()
-                                                                .hover(|s| s.bg(theme.muted_background))
+                                                                .hover(|s| s.bg(theme.hover_bg()))
+                                                                .active(|s| s.bg(theme.active_bg()))
                                                                 .text_color(theme.muted_foreground)
                                                                 .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                                     this.close_tab(i, _window, cx);
                                                                 }))
-                                                                .child(Icon::new(IconName::Close).xsmall()),
+                                                                // 16px 微方框 → 密集档；与容器文字同色
+                                                                .child(themed_icon(
+                                                                    IconName::Close,
+                                                                    IconTier::Dense,
+                                                                    IconTone::Inherit,
+                                                                    &theme,
+                                                                )),
                                                         )
                                                     })
                                             }))
@@ -4754,13 +4869,20 @@ let method_clr = method_color(&entry.method);
                                                 .text_color(if can_left { theme.foreground } else { theme.border })
                                                 .when(can_left, |btn| {
                                                     btn.cursor_pointer()
-                                                        .hover(|s| s.bg(theme.code_background))
+                                                        .hover(|s| s.bg(theme.hover_bg()))
                                                         .on_click(cx.listener(|this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                             this.scroll_tabs_by(-1);
                                                             cx.notify();
                                                         }))
                                                 })
-                                                .child(Icon::new(IconName::ChevronLeft).small()),
+                                                // 标签栏滚动按钮：独立图标按钮 → 标准档；
+                                                // 颜色跟容器（容器用 border 表达"不可点"的置灰态）
+                                                .child(themed_icon(
+                                                    IconName::ChevronLeft,
+                                                    IconTier::Regular,
+                                                    IconTone::Inherit,
+                                                    &theme,
+                                                )),
                                         )
                                         .child(
                                             div()
@@ -4773,13 +4895,18 @@ let method_clr = method_color(&entry.method);
                                                 .text_color(if can_right { theme.foreground } else { theme.border })
                                                 .when(can_right, |btn| {
                                                     btn.cursor_pointer()
-                                                        .hover(|s| s.bg(theme.code_background))
+                                                        .hover(|s| s.bg(theme.hover_bg()))
                                                         .on_click(cx.listener(|this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                             this.scroll_tabs_by(1);
                                                             cx.notify();
                                                         }))
                                                 })
-                                                .child(Icon::new(IconName::ChevronRight).small()),
+                                                .child(themed_icon(
+                                                    IconName::ChevronRight,
+                                                    IconTier::Regular,
+                                                    IconTone::Inherit,
+                                                    &theme,
+                                                )),
                                         )
                                     })
                                     // 新增标签按钮
@@ -4793,11 +4920,19 @@ let method_clr = method_color(&entry.method);
                                             .justify_center()
                                             .cursor_pointer()
                                             .text_color(theme.muted_foreground)
-                                            .hover(|s| s.bg(theme.muted_background).text_color(theme.foreground))
+                                            .hover(|s| s.bg(theme.hover_bg()).text_color(theme.foreground))
+                                            .active(|s| s.bg(theme.active_bg()).text_color(theme.foreground))
                                             .on_click(cx.listener(|this, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>| {
                                                 this.add_tab(window, cx);
                                             }))
-                                            .child(Icon::new(IconName::Plus).small())
+                                            // 新建标签按钮：独立图标按钮 → 标准档；
+                                            // 容器 hover 会把文字色换成 foreground → Inherit 才会跟着换
+                                            .child(themed_icon(
+                                                IconName::Plus,
+                                                IconTier::Regular,
+                                                IconTone::Inherit,
+                                                &theme,
+                                            ))
                                     ),
                                 // 请求构造器
                                 div()
@@ -4839,21 +4974,29 @@ let method_clr = method_color(&entry.method);
                                         }
                                     ]),
                                 // Splitter（可拖拽调整上下区域大小）
-                                div()
-                                    .flex_none()
-                                    .h(px(6.0))
-                                    .w_full()
-                                    .bg(theme.muted_background)
-                                    .border_t(px(1.0))
-                                    .border_b(px(1.0))
-                                    .border_color(theme.border)
-                                    .cursor_row_resize()
-                                    .hover(|s| s.bg(theme.accent).opacity(0.3))
-                                    .on_mouse_down(MouseButton::Left, cx.listener(|this, event: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
-                                        let y: f32 = event.position.y.into();
-                                        this.start_splitter_drag(y);
-                                        cx.notify();
-                                    })),
+                                // 外层套一个普通 div，只为让 children 数组元素类型一致
+                                // （.id() 会把 Div 变成 Stateful<Div>），布局不受影响
+                                div().child(
+                                    div()
+                                        // 可拖拽的分隔条也是"可交互容器"：没有 id 就没有 element_state，
+                                        // hover/active 状态无处记录，高亮不会生效
+                                        .id("request-splitter")
+                                        .flex_none()
+                                        .h(px(6.0))
+                                        .w_full()
+                                        .bg(theme.muted_background)
+                                        .border_t(px(1.0))
+                                        .border_b(px(1.0))
+                                        .border_color(theme.border)
+                                        .cursor_row_resize()
+                                        // 用主色 30% 的实心淡色，别再叠 opacity（整元素透明后几乎看不见）
+                                        .hover(|s| s.bg(theme.accent.alpha(0.3)))
+                                        .on_mouse_down(MouseButton::Left, cx.listener(|this, event: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                            let y: f32 = event.position.y.into();
+                                            this.start_splitter_drag(y);
+                                            cx.notify();
+                                        })),
+                                ),
                                 // 响应查看器
                                 div()
                                     .flex_1()
@@ -4893,8 +5036,8 @@ let method_clr = method_color(&entry.method);
                                                     div()
                                                         .w_full()
                                                         .p_3()
-                                                        .rounded_md()
-                                                        .bg(rgb(0x3f2020))
+                                                        .rounded(px(RADIUS_SM))
+                                                        .bg(theme.error.alpha(0.12))
                                                         .text_color(theme.error)
                                                         .text_xs()
                                                         .overflow_x_hidden()
@@ -4923,7 +5066,7 @@ let method_clr = method_color(&entry.method);
                                                                     div()
                                                                         .px_2p5()
                                                                         .py_px()
-                                                                        .rounded_md()
+                                                                        .rounded(px(RADIUS_XS))
                                                                         .bg(if (200..300).contains(&resp.status) { theme.success } else { theme.error })
                                                                         .text_color(theme.accent_foreground)
                                                                         .text_xs()
@@ -4976,7 +5119,7 @@ let method_clr = method_color(&entry.method);
                                                             .bg(theme.code_background)
                                                             .border_1()
                                                             .border_color(theme.border)
-                                                            .rounded_md()
+                                                            .rounded(px(RADIUS_SM))
                                                             .p_2()
                                                             .child(
                                                                 div()
@@ -5002,8 +5145,8 @@ let method_clr = method_color(&entry.method);
                                                                             .flex_row()
                                                                             .gap_2()
                                                                             .children([
-                                                                                div().flex_1().child(Input::new(key_input).small().h(px(28.0)).disabled(true).bg(theme.input_background).text_color(theme.foreground)),
-                                                                                div().flex_1().child(Input::new(val_input).small().h(px(28.0)).disabled(true).bg(theme.input_background).text_color(theme.foreground)),
+                                                                                div().flex_1().child(Input::new(key_input).small().h(px(CONTROL_H_SM)).rounded(px(RADIUS_SM)).disabled(true).bg(theme.control_bg()).text_color(theme.foreground)),
+                                                                                div().flex_1().child(Input::new(val_input).small().h(px(CONTROL_H_SM)).rounded(px(RADIUS_SM)).disabled(true).bg(theme.control_bg()).text_color(theme.foreground)),
                                                                             ])
                                                                     }))
                                                             )
@@ -5028,7 +5171,7 @@ let method_clr = method_color(&entry.method);
                                                                 .bg(theme.code_background)
                                                                 .border_1()
                                                                 .border_color(theme.border)
-                                                                .rounded_md()
+                                                                .rounded(px(RADIUS_SM))
                                                                 .child(
                                                                     Input::new(&self.response_pretty_input)
                                                                         .w_full()
@@ -5046,7 +5189,7 @@ let method_clr = method_color(&entry.method);
                                                                 .bg(theme.code_background)
                                                                 .border_1()
                                                                 .border_color(theme.border)
-                                                                .rounded_md()
+                                                                .rounded(px(RADIUS_SM))
                                                                 .child(
                                                                     Input::new(&self.response_input)
                                                                         .w_full()
@@ -5104,7 +5247,7 @@ let method_clr = method_color(&entry.method);
                                                                                         .children([
                                                                                             div().text_xs().text_color(theme.muted_foreground)
                                                                                                 .child(format!("{}×{} px | {}", img_size.width.0, img_size.height.0, ct_str)),
-                                                                                            div().cursor_pointer().px_3().py_1().rounded_md()
+                                                                                            div().cursor_pointer().px_3().py_1().rounded(px(RADIUS_SM))
                                                                                                 .bg(theme.accent).text_color(theme.accent_foreground).text_sm()
                                                                                                 .child(self.t("preview.open_external"))
                                                                                                 .on_mouse_down(MouseButton::Left, {
@@ -5145,7 +5288,7 @@ let method_clr = method_color(&entry.method);
                                                                         .bg(theme.code_background)
                                                                         .border_1()
                                                                         .border_color(theme.border)
-                                                                        .rounded_md()
+                                                                        .rounded(px(RADIUS_SM))
                                                                         .child(
                                                                             Input::new(&self.response_input)
                                                                                 .w_full()
@@ -5173,7 +5316,7 @@ let method_clr = method_color(&entry.method);
                                                                                         .cursor_pointer()
                                                                                         .px_3()
                                                                                         .py_1()
-                                                                                        .rounded_md()
+                                                                                        .rounded(px(RADIUS_SM))
                                                                                         .bg(theme.accent)
                                                                                         .text_color(theme.accent_foreground)
                                                                                         .text_sm()
@@ -5201,7 +5344,7 @@ let method_clr = method_color(&entry.method);
                                                                                 .bg(theme.code_background)
                                                                                 .border_1()
                                                                                 .border_color(theme.border)
-                                                                                .rounded_md()
+                                                                                .rounded(px(RADIUS_SM))
                                                                                 .overflow_hidden()
                                                                                 .child(
                                                                                     Input::new(&self.response_input)
@@ -5297,7 +5440,7 @@ let method_clr = method_color(&entry.method);
                             if is_loading {
                                 div()
                                     .absolute().top_0().left_0().right_0().bottom_0()
-                                    .bg(rgba(0x00000055))
+                                    .bg(theme.scrim())
                                     .flex().items_center().justify_center().flex_col().gap_4()
                                     .occlude()
                                     .child(
@@ -5338,9 +5481,16 @@ let method_clr = method_color(&entry.method);
                             .flex()
                             .flex_row()
                             .items_center()
-                            .gap(px(crate::ui::components::GAP_S))
+                            // 图标与文字之间一律 ICON_TEXT_GAP（原来是 8px）
+                            .gap(px(ICON_TEXT_GAP))
                             .children([
-                                div().child(Icon::new(IconName::Globe).xsmall()),
+                                // 底部状态栏：与 11px 文字同行 → 密集档；次级信息 → Muted
+                                div().child(themed_icon(
+                                    IconName::Globe,
+                                    IconTier::Dense,
+                                    IconTone::Muted,
+                                    &theme,
+                                )),
                                 div().child(
                                     self.active_environment_name
                                         .clone()
@@ -5350,7 +5500,7 @@ let method_clr = method_color(&entry.method);
                                 if proxy_on {
                                     div()
                                         .px(px(6.0))
-                                        .rounded_sm()
+                                        .rounded(px(RADIUS_XS))
                                         .bg(theme.border)
                                         .text_color(theme.foreground)
                                         .child(self.t("settings.proxy"))
@@ -5504,14 +5654,14 @@ let method_clr = method_color(&entry.method);
                         div()
                             .absolute()
                             .top_0().left_0().right_0().bottom_0()
-                            .bg(rgba(0x00000055))
+                            .bg(theme.scrim())
                             .flex().items_center().justify_center()
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                             .child(
                                 div()
                                     .w(px(420.0))
                                     .bg(theme.background)
-                                    .rounded_xl()
+                                    .rounded(px(RADIUS_LG))
                                     .border_1().border_color(theme.border)
                                     .shadow_2xl()
                                     .flex_col()
@@ -5524,14 +5674,28 @@ let method_clr = method_color(&entry.method);
                                             .bg(theme.muted_background)
                                             .border_b_1().border_color(theme.border)
                                             .child(
-                                                div().flex().items_center().gap_2()
-                                                    .child(Icon::new(IconName::Star).text_color(theme.accent))
+                                                div().flex().items_center().gap(px(ICON_TEXT_GAP))
+                                                    // 弹窗标题图标：与 text_sm 标题同档 → Accent；
+                                                    // 字形取 File：这个弹窗保存的是"请求"，与 folder_dialog
+                                                    // （重命名请求）的标题图标一致。Star 是"收藏"语义，
+                                                    // 本应用没有收藏功能，不该借它当"强调"用
+                                                    .child(themed_icon(
+                                                        IconName::File,
+                                                        IconTier::Regular,
+                                                        IconTone::Accent,
+                                                        &theme,
+                                                    ))
                                                     .child(div().text_sm().font_weight(FontWeight(600.0)).text_color(theme.foreground).child(dialog_title.clone()))
                                             )
                                             .child({
                                                 let s = save_dialog.clone();
                                                 Button::new("close-save-dialog")
-                                                    .icon(IconName::Close).small()
+                                                    .icon(IconName::Close)
+                                                    // 弹窗标题栏的关闭按钮 → 图标标准档 14px
+                                                    .with_size(button_size_for_icon(IconTier::Regular))
+                                                    // 按钮盒保持原来的 24px（组件库 Small 图标按钮 size_6）
+                                                    .w(px(24.0))
+                                                    .h(px(24.0))
                                                     .text_color(theme.muted_foreground)
                                                     .on_click(move |_, _, cx| {
                                                         if let Ok(mut d) = s.lock() { d.visible = false; d.pending_request = None; }
@@ -5544,10 +5708,17 @@ let method_clr = method_color(&entry.method);
                                             .child(
                                                 div().flex_col().gap_2()
                                                     .child(div().flex().items_center().gap_1p5()
-                                                        .child(Icon::new(IconName::File).small().text_color(theme.accent))
+                                                        // 弹窗内表单标签：相邻文字是 text_xs(12px) → 密集档
+                                                        // （原来 14px，比同一行文字大一圈）
+                                                        .child(themed_icon(
+                                                            IconName::File,
+                                                            IconTier::Dense,
+                                                            IconTone::Accent,
+                                                            &theme,
+                                                        ))
                                                         .child(div().text_xs().font_weight(FontWeight(500.0)).text_color(theme.muted_foreground).child(title_label.clone())),
                                                     )
-                                                    .child(Input::new(&name_input).h(px(42.0)).w_full().rounded_md().bg(theme.background).text_color(theme.foreground)),
+                                                    .child(Input::new(&name_input).h(px(CONTROL_H)).w_full().rounded(px(RADIUS_SM)).bg(theme.control_bg()).text_color(theme.foreground)),
                                             )
                                     )
                                     .child(
@@ -5565,7 +5736,13 @@ let method_clr = method_color(&entry.method);
                                                 let s = save_dialog.clone();
                                                 let app = save_app.clone();
                                                 Button::new("confirm-save-dialog-btn").icon(IconName::Check).label(save_text.clone())
-                                                    .bg(theme.accent).text_color(rgb(0xffffff)).rounded_md()
+                                                    // 弹窗底部的确认按钮 → 图标标准档 14px。
+                                                    // Size::Size 分支不带固定高度/内边距（button.rs 只给 px），
+                                                    // 所以按控件令牌补回高度与左右内边距，按钮几何与相邻的取消按钮一致
+                                                    .with_size(button_size_for_icon(IconTier::Regular))
+                                                    .h(px(CONTROL_H))
+                                                    .px(px(GAP_L))
+                                                    .bg(theme.accent).text_color(theme.accent_foreground).rounded(px(RADIUS_SM))
                                                     .on_click(move |_, _window, cx| {
                                                         let d = s.lock().unwrap();
                                                         let name = d.name_input.read(cx).value().to_string();

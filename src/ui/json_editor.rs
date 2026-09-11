@@ -29,7 +29,14 @@ pub fn code_editor_view(
     div()
         .size_full()
         .text_color(fg)
-        .child(Input::new(input).h_full().bg(bg).bordered(true))
+        // 编辑器自身给统一圆角，和外面的面板/卡片保持同一档
+        .child(
+            Input::new(input)
+                .h_full()
+                .bg(bg)
+                .bordered(true)
+                .rounded(px(crate::ui::components::RADIUS_SM)),
+        )
 }
 
 /// 编辑器面板：与 JSON 编辑框同高（flex_1 + min_h(200)）。
@@ -55,7 +62,8 @@ pub fn json_editor(
     cx: &mut Context<crate::ui::MainView>,
 ) -> impl IntoElement {
     let raw_content = &body_state.raw_content;
-    let bg = theme.background;
+    // 与响应体编辑器（main_view 里用 code_background）保持同一底色
+    let bg = theme.code_background;
 
     div()
         .flex_col()
@@ -68,7 +76,7 @@ pub fn json_editor(
             if let Some(err) = error_message {
                 div()
                     .text_sm()
-                    .text_color(rgb(0xef4444))
+                    .text_color(theme.error)
                     .child(err)
                     .into_any_element()
             } else {

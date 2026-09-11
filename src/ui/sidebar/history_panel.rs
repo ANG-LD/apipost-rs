@@ -6,6 +6,7 @@ use crate::ui::body::{BodyType, RawFormat};
 use crate::ui::components::method_color;
 use crate::ui::headers::HeaderEntry;
 use crate::ui::main_view::{MainView, ParamEntry};
+use crate::ui::components::{RADIUS_SM, RADIUS_XS};
 use crate::ui::Theme;
 use gpui::*;
 use gpui_component::input::InputState;
@@ -45,13 +46,17 @@ pub fn render_history_panel(
                 let display_url = entry.url.clone();
 
                 div()
+                    // 历史行在循环里生成，id 必须带 entry.id：
+                    // hover/active 状态挂在 element_state 上（由 global_id = .id() 提供），
+                    // 共用 id 会让所有行共享同一份状态（一行悬停、全部高亮）
+                    .id(SharedString::from(format!("history-row-{}", entry.id)))
                     .w_full()
                     .flex_col()
                     .gap_1()
                     .p_2()
-                    .rounded_md()
+                    .rounded(px(RADIUS_SM))
                     .cursor_pointer()
-                    .hover(|s| s.bg(theme.code_background))
+                    .hover(|s| s.bg(theme.active_bg()))
                     .bg(theme.muted_background)
                     .on_mouse_down(
                         MouseButton::Left,
@@ -289,41 +294,15 @@ pub fn render_history_panel(
                                     );
                                     let json_body =
                                         RawFormat::Json.format_body(&resp_body);
+                                    // 注：本函数（render_history_panel）目前**没有任何调用者**，
+                                    // 侧栏历史列表已由 main_view.rs 内联实现代替。这里只跟着
+                                    // 主实现把正文交给唯一的响应体编辑器（原先还写 xml/text/html
+                                    // 三个从未被渲染的 InputState，已删除）。
                                     this.response_input.update(
                                         cx,
                                         |state, cx| {
                                             state.set_value(
-                                                &json_body,
-                                                _window,
-                                                cx,
-                                            );
-                                        },
-                                    );
-                                    this.response_xml_input.update(
-                                        cx,
-                                        |state, cx| {
-                                            state.set_value(
-                                                &resp_body,
-                                                _window,
-                                                cx,
-                                            );
-                                        },
-                                    );
-                                    this.response_text_input.update(
-                                        cx,
-                                        |state, cx| {
-                                            state.set_value(
-                                                &resp_body,
-                                                _window,
-                                                cx,
-                                            );
-                                        },
-                                    );
-                                    this.response_html_input.update(
-                                        cx,
-                                        |state, cx| {
-                                            state.set_value(
-                                                &resp_body,
+                                                SharedString::from(json_body),
                                                 _window,
                                                 cx,
                                             );
@@ -333,15 +312,6 @@ pub fn render_history_panel(
                                 } else {
                                     this.response = None;
                                     this.response_input.update(cx, |state, cx| {
-                                        state.set_value("", _window, cx);
-                                    });
-                                    this.response_xml_input.update(cx, |state, cx| {
-                                        state.set_value("", _window, cx);
-                                    });
-                                    this.response_text_input.update(cx, |state, cx| {
-                                        state.set_value("", _window, cx);
-                                    });
-                                    this.response_html_input.update(cx, |state, cx| {
                                         state.set_value("", _window, cx);
                                     });
                                 }
@@ -359,10 +329,10 @@ pub fn render_history_panel(
                             div()
                                 .px_1()
                                 .py_px()
-                                .rounded_sm()
+                                .rounded(px(RADIUS_XS))
                                 .bg(rgb(method_clr))
                                 .text_xs()
-                                .text_color(rgb(0xffffff))
+                                .text_color(theme.accent_foreground)
                                 .child(display_method),
                             div()
                                 .flex_1()
@@ -372,15 +342,15 @@ pub fn render_history_panel(
                                 .child(display_url),
                         ]),
                         if let Some(status) = entry.response_status {
-                            let status_color =
-                                if (200..300).contains(&status) {
-                                    0x22c55e
-                                } else {
-                                    0xef4444
-                                };
+                            // 与响应区状态徽章用同一套主题语义色
+                            let status_color = if (200..300).contains(&status) {
+                                theme.success
+                            } else {
+                                theme.error
+                            };
                             div()
                                 .text_xs()
-                                .text_color(rgb(status_color))
+                                .text_color(status_color)
                                 .child(format!(
                                     "{} ({})",
                                     status,

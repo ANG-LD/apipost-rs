@@ -4,6 +4,14 @@
 
 use gpui::*;
 
+// 设计令牌（尺寸常量 + 由调色板派生的语义色）与组件库主题桥接。
+// tokens 里的常量不在这里 re-export，统一由 components 模块对外提供（只有一条路径，
+// 避免 ui/mod.rs 的两个 glob 导入撞名）；`impl Theme` 上的语义色方法无需导入即可调用。
+pub mod component_theme;
+pub mod tokens;
+
+pub use component_theme::*;
+
 /// 浅色主题
 /// 浅色主题 — 简洁清爽
 /// 浅色主题 — 轻盈明亮，专业感
@@ -278,7 +286,10 @@ pub fn tokyonight_theme() -> Theme {
         name: "tokyonight".to_string(),
         background: rgb(0x1a1b26),
         foreground: rgb(0xc0caf5),
-        muted_foreground: rgb(0x565f89),
+        // 次级色只比原来提了两档亮度：原值 #565f89 压在 #1a1b26 上对比度只有 2.76，
+        // 低于 WCAG 对非文本图标的 3.0；#5f6b96 是同色相邻近的蓝灰，提亮后 3.28，
+        // 既达标又与 foreground(#c0caf5, 3.23) 拉开，保持"次级"而非"正文"观感
+        muted_foreground: rgb(0x5f6b96),
         accent: rgb(0x7aa2f7),
         accent_foreground: rgb(0x1a1b26),
         input_background: rgb(0x24283b),
@@ -330,7 +341,9 @@ pub fn latte_theme() -> Theme {
         name: "latte".to_string(),
         background: rgb(0xeff1f5),
         foreground: rgb(0x4c4f69),
-        muted_foreground: rgb(0x8c8fa1),
+        // 与 tokyonight 同理：原值 #8c8fa1 压在 #eff1f5 上只有 2.83，
+        // #878a9c 是同色相提亮一档（3.02），刚好越过 3.0 又不贴近 foreground
+        muted_foreground: rgb(0x878a9c),
         accent: rgb(0x7287fd),
         accent_foreground: rgb(0xffffff),
         input_background: rgb(0xe6e9ef),

@@ -1,3 +1,4 @@
+use crate::ui::components::RADIUS_SM;
 use crate::ui::main_view::MainView;
 use crate::ui::Theme;
 use gpui::*;
@@ -30,7 +31,7 @@ pub fn render_pre_request_panel(
                 .bg(theme.muted_background)
                 .border_1()
                 .border_color(theme.border)
-                .rounded_md()
+                .rounded(px(RADIUS_SM))
                 .overflow_hidden()
                 .child(
                     Input::new(&this.script_state.pre_request_script)
@@ -67,7 +68,7 @@ pub fn render_tests_panel(
                 .bg(theme.muted_background)
                 .border_1()
                 .border_color(theme.border)
-                .rounded_md()
+                .rounded(px(RADIUS_SM))
                 .overflow_hidden()
                 .child(
                     Input::new(&this.script_state.test_script)

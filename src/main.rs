@@ -92,13 +92,11 @@ fn main() {
         // 初始化gpui-component
         gpui_component::init(cx);
 
-        // 根据配置初始化深色/浅色主题（影响语法高亮颜色）
-        let theme_mode = if config.general.theme == "light" {
-            gpui_component::theme::ThemeMode::Light
-        } else {
-            gpui_component::theme::ThemeMode::Dark
-        };
-        gpui_component::theme::Theme::change(theme_mode, None, cx);
+        // 把应用调色板（12 套主题）与圆角/焦点环同步给组件库：输入框、按钮、
+        // 下拉框、设置弹窗都是组件库画的，颜色取自它自己的全局主题。
+        // 注意顺序：必须放在 init 之后，init 内部会先 Theme::change 一次默认主题。
+        // 之前这里用 `theme == "light"` 判断浅色，漏掉了同样属于浅色的 latte。
+        ui::apply_component_theme(&ui::Theme::from_str(&config.general.theme), cx);
 
         // 初始化应用状态（传入持久 runtime handle，config 所有权移入 AppState）
         let app_state = AppState::try_new(config, rt_handle)

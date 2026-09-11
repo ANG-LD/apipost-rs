@@ -1,5 +1,5 @@
 use crate::ui::components::{
-    form_row, section_divider, toggle_switch, CONTROL_H, GAP_M, GAP_S, PANEL_PAD,
+    form_row, section_divider, toggle_switch, CONTROL_H, GAP_M, GAP_S, PANEL_PAD, RADIUS_SM,
 };
 use crate::ui::main_view::MainView;
 use crate::ui::Theme;
@@ -74,12 +74,13 @@ fn number_row(
             .gap(px(GAP_S))
             .child(
                 Input::new(state)
-                    .h(px(CONTROL_H - 2.0))
+                    // 原来比其他输入框矮 2px（CONTROL_H - 2.0），统一成 CONTROL_H
+                    .h(px(CONTROL_H))
                     .w(px(96.0))
-                    .rounded_md()
+                    .rounded(px(RADIUS_SM))
                     .border_1()
                     .border_color(theme.border)
-                    .bg(theme.input_background)
+                    .bg(theme.control_bg())
                     .text_color(theme.foreground),
             )
             .child(

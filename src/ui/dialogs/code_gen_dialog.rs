@@ -5,12 +5,15 @@
 use crate::http::{generate_code, HttpRequest};
 use crate::ui::clipboard;
 use crate::ui::json_editor::code_editor_view;
+use crate::ui::components::{
+    themed_icon, IconTier, IconTone, RADIUS_LG, RADIUS_SM,
+};
 use crate::ui::Theme;
 use gpui::*;
 use gpui::prelude::FluentBuilder;
 use gpui_component::button::Button;
 use gpui_component::input::InputState;
-use gpui_component::{Icon, IconName, Sizable, StyledExt};
+use gpui_component::{IconName, Sizable, StyledExt};
 use std::sync::{Arc, Mutex};
 
 const CODE_LANGUAGES: &[(&str, &str)] = &[
@@ -114,7 +117,7 @@ pub fn render_code_gen_dialog_overlay(
     gpui::div()
         .absolute()
         .inset_0()
-        .bg(rgba(0x00000088))
+        .bg(theme.scrim())
         .flex()
         .items_center()
         .justify_center()
@@ -126,7 +129,7 @@ pub fn render_code_gen_dialog_overlay(
                 .bg(theme.background)
                 .border_1()
                 .border_color(theme.border)
-                .rounded_lg()
+                .rounded(px(RADIUS_LG))
                 .shadow_2xl()
                 .flex()
                 .flex_col()
@@ -149,10 +152,20 @@ pub fn render_code_gen_dialog_overlay(
                         )
                         .child(
                             gpui::div()
+                                // 可点击容器必须给 id：gpui 的 hover/active 样式挂在 element state 上，
+                                // 而 element state 只由 global_id 提供（`Element::id()` 直接读它），
+                                // 没 id 的元素 `hover()` 永远不参与样式计算
+                                .id("code-gen-dialog-close")
+                                .flex()
+                                .items_center()
+                                .justify_center()
                                 .cursor_pointer()
                                 .p_1()
-                                .rounded_md()
-                                .hover(|s| s.bg(theme.muted_background))
+                                .rounded(px(RADIUS_SM))
+                                // 关闭按钮是"只变底色的图标微按钮"，所以图标保持 Muted：
+                                // 底色已经提供了反馈，图标不必再跟着变色
+                                .hover(|s| s.bg(theme.hover_bg()))
+                                .active(|s| s.bg(theme.active_bg()))
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener({
@@ -163,11 +176,15 @@ pub fn render_code_gen_dialog_overlay(
                                         }
                                     }),
                                 )
-                                .child(
-                                    Icon::new(IconName::PanelLeftClose)
-                                        .small()
-                                        .text_color(theme.muted_foreground),
-                                ),
+                                // 弹窗标题栏的关闭按钮属于 ICON_BTN 一类微按钮，
+                                // 与 settings 浮层、环境弹窗、标签页的关闭按钮同为 12px；
+                                // 字形取 Close：PanelLeftClose 是"收起左侧栏"，不表达"关闭弹窗"
+                                .child(themed_icon(
+                                    IconName::Close,
+                                    IconTier::Dense,
+                                    IconTone::Muted,
+                                    theme,
+                                )),
                         ),
                 )
                 .child(
@@ -201,7 +218,8 @@ pub fn render_code_gen_dialog_overlay(
                         })),
                 )
                 .child({
-                    let bg = theme.background;
+                    // 代码区底色统一用 code_background（与响应体查看器一致）
+                    let bg = theme.code_background;
                     gpui::div()
                         .flex_1()
                         .px_4()

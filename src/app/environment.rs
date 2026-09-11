@@ -64,6 +64,15 @@ impl EnvironmentManager {
         globals.clone()
     }
 
+    /// 全局变量条数。
+    ///
+    /// 侧栏「环境变量」页只显示一个数字，而它每帧都会渲染：原来走
+    /// `get_all_globals()`（克隆整份 HashMap，每个键值各一次堆分配）再转 Vec、
+    /// 排序，最后只取 `.len()`。这里直接读计数，语义（键值对条数）完全相同。
+    pub fn globals_count(&self) -> usize {
+        self.global_variables.read().unwrap().len()
+    }
+
     /// 设置当前环境变量
     pub fn set_current(&self, key: String, value: String) {
         let mut current = self.current_variables.write().unwrap();

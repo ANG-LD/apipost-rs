@@ -38,6 +38,13 @@ pub fn response_headers_viewer(
         .bg(theme.code_background)
         .border_1()
         .border_color(theme.border)
-        .rounded_md()
-        .child(Input::new(&headers_input).w_full().h_full())
+        .rounded(px(crate::ui::components::RADIUS_SM))
+        // 多行只读输入框本身不画边框/底色（外层容器负责），避免出现双层边框
+        .child(
+            Input::new(&headers_input)
+                .w_full()
+                .h_full()
+                .bg(theme.code_background)
+                .border_0(),
+        )
 }

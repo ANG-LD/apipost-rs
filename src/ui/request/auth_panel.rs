@@ -1,7 +1,7 @@
 use crate::ui::authorization::{ApiKeyLocation, AuthState, AuthType};
 use crate::ui::components::{
     form_row, section_divider, segment_button, segment_group, CONTROL_H, GAP_M, GAP_S, GAP_XS,
-    PANEL_PAD,
+    PANEL_PAD, RADIUS_SM,
 };
 use crate::ui::main_view::MainView;
 use crate::ui::Theme;
@@ -50,7 +50,7 @@ pub fn render_auth_panel(
                             div()
                                 .px(px(GAP_S))
                                 .py(px(GAP_XS))
-                                .rounded_md()
+                                .rounded(px(RADIUS_SM))
                                 .bg(theme.muted_background)
                                 .text_xs()
                                 .text_color(theme.muted_foreground)
@@ -193,12 +193,13 @@ fn field_row(label: impl Into<SharedString>, state: &Entity<InputState>, theme: 
         label,
         theme,
         Input::new(state)
-            .h(px(CONTROL_H - 2.0))
+            // 原来比其他输入框矮 2px（CONTROL_H - 2.0），统一成 CONTROL_H
+            .h(px(CONTROL_H))
             .w(px(420.0))
-            .rounded_md()
+            .rounded(px(RADIUS_SM))
             .border_1()
             .border_color(theme.border)
-            .bg(theme.input_background)
+            .bg(theme.control_bg())
             .text_color(theme.foreground)
             .into_any_element(),
     )

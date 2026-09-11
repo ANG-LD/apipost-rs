@@ -1,3 +1,4 @@
+use crate::ui::components::{themed_icon, IconTier, IconTone, CONTROL_H, ICON_BTN, RADIUS_SM};
 use crate::ui::main_view::MainView;
 use crate::ui::Theme;
 use gpui::*;
@@ -5,7 +6,7 @@ use gpui::*;
 use gpui::prelude::*;
 use gpui_component::button::Button;
 use gpui_component::input::Input;
-use gpui_component::{Icon, IconName, Sizable, StyledExt};
+use gpui_component::{IconName, Sizable, StyledExt};
 use gpui_component::scroll::ScrollableElement;
 
 pub fn render_params_panel(
@@ -14,7 +15,8 @@ pub fn render_params_panel(
     cx: &mut Context<MainView>,
 ) -> impl IntoElement {
     let theme = this.cached_theme.clone();
-    let hover_bg = theme.muted_background;
+    let hover_bg = theme.hover_bg();
+    let active_bg = theme.active_bg();
     // 颜色值先取出来：`theme` 现在是 Arc，move 闭包里没法像以前那样只捕获
     // `theme.error` 这一个 Copy 字段（Deref 之后取字段只能整个 Arc 移动进闭包），
     // 提前取出 Rgba 既避免移动 Arc，也不产生任何分配。
@@ -85,34 +87,38 @@ pub fn render_params_panel(
                             div().flex_1().child(
                                 Input::new(&param.key)
                                     .small()
-                                    .h(px(32.0))
-                                    .bg(theme.code_background)
+                                    .h(px(CONTROL_H))
+                                    .bg(theme.control_bg())
                                     .border_1()
                                     .border_color(theme.border)
+                                    .rounded(px(RADIUS_SM))
                                     .text_color(theme.foreground),
                             ),
                             div().flex_1().child(
                                 Input::new(&param.value)
                                     .small()
-                                    .h(px(32.0))
-                                    .bg(theme.code_background)
+                                    .h(px(CONTROL_H))
+                                    .bg(theme.control_bg())
                                     .border_1()
                                     .border_color(theme.border)
+                                    .rounded(px(RADIUS_SM))
                                     .text_color(theme.foreground),
                             ),
                             // 外层再包一层普通 div：children 数组要求元素类型一致
                             div().child(
                             div()
                                 .id(format!("del-row-{}", idx))
-                                .w(px(22.0))
-                                .h(px(22.0))
+                                // 行内图标按钮：尺寸/圆角取 ICON_BTN + RADIUS_SM，和 components::icon_button() 同一套
+                                .w(px(ICON_BTN))
+                                .h(px(ICON_BTN))
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .rounded_md()
+                                .rounded(px(RADIUS_SM))
                                 .cursor_pointer()
                                 .text_color(theme.muted_foreground)
                                 .hover(move |s| s.bg(hover_bg).text_color(error_color))
+                                .active(move |s| s.bg(active_bg).text_color(error_color))
                                 .on_mouse_down(MouseButton::Left, cx.listener(
                                     move |this,
                                           _: &MouseDownEvent,
@@ -121,7 +127,16 @@ pub fn render_params_panel(
                                         this.remove_param(idx, _window, cx);
                                     },
                                 ))
-                                .child(Icon::new(IconName::Close).xsmall()),
+                                // 行内删除按钮：常态跟容器 muted_foreground，
+                                // hover/按下跟容器的 error 色 → Inherit；
+                                // 字形取 Delete：这一行的动作是"删除该行"，
+                                // Close（叉）在本应用专表"关闭"，删除只能有一种字形
+                                .child(themed_icon(
+                                    IconName::Delete,
+                                    IconTier::Dense,
+                                    IconTone::Inherit,
+                                    &theme,
+                                )),
                             ),
                         ])
                 })),

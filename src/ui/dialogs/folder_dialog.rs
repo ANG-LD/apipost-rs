@@ -1,11 +1,14 @@
 /// 文件夹创建/重命名对话框
 use crate::app::AppState;
+use crate::ui::components::{
+    button_size_for_icon, themed_icon, IconTier, IconTone, CONTROL_H, RADIUS_LG, RADIUS_SM,
+};
 use crate::ui::Theme;
 use gpui::*;
 use gpui::prelude::FluentBuilder;
 use gpui_component::button::Button;
 use gpui_component::input::{Input, InputState};
-use gpui_component::{Disableable, Icon, IconName, Sizable, StyledExt};
+use gpui_component::{Disableable, IconName, Sizable, StyledExt};
 use std::sync::{Arc, Mutex};
 
 /// 文件夹/请求重命名对话框状态
@@ -136,7 +139,7 @@ pub fn render_folder_dialog_overlay(
             div()
                 .absolute()
                 .inset_0()
-                .bg(rgba(0x00000066))
+                .bg(th.scrim())
                 .on_mouse_down(MouseButton::Left, {
                     let s = state.clone();
                     let eid = entity_id;
@@ -157,11 +160,13 @@ pub fn render_folder_dialog_overlay(
                 .on_mouse_down(MouseButton::Left, |_, _, cx| {
                     cx.stop_propagation();
                 })
-                .rounded_lg()
+                .rounded(px(RADIUS_LG))
                 .bg(th.background)
                 .border(px(1.0))
-                .border_color(th.muted_background)
-                .shadow_lg()
+                // 弹窗边框统一用主题 border 色：原来用的是 muted_background（比 border 深/浅一档），
+                // 和另外几个弹窗不是一套
+                .border_color(th.border)
+                .shadow_2xl()
                 .overflow_hidden()
                 .flex_col()
                 .child(
@@ -189,9 +194,16 @@ pub fn render_folder_dialog_overlay(
                                         .justify_center()
                                         .w(px(36.0))
                                         .h(px(36.0))
-                                        .rounded_md()
-                                        .bg(rgba(0x6366f11f))
-                                        .child(Icon::new(title_icon).small().text_color(th.accent)),
+                                        .rounded(px(RADIUS_SM))
+                                        .bg(th.accent.alpha(0.12))
+                                        // 36px 图标徽章属于"独立图标"档位（Regular 14px），
+                                        // 副标题里说这是"文件夹"还是"请求"的强调标识 → Accent
+                                        .child(themed_icon(
+                                            title_icon,
+                                            IconTier::Regular,
+                                            IconTone::Accent,
+                                            &th,
+                                        )),
                                 )
                                 .child(
                                     div()
@@ -215,7 +227,14 @@ pub fn render_folder_dialog_overlay(
                         .child(
                             Button::new("close-folder-dialog")
                                 .icon(IconName::Close)
-                                .xsmall()
+                                // 弹窗标题栏的关闭按钮是独立按钮 → 图标标准档 14px。
+                                // 组件库 Button 的图标尺寸只由 Button 自身的 size 决定
+                                // （button.rs: icon_size = size * 0.75），所以显式给该档对应的 size
+                                .with_size(button_size_for_icon(IconTier::Regular))
+                                // 按钮盒保持原来的 20px（组件库 XSmall 图标按钮 size_5）：
+                                // 这一轮只改图标尺寸，不动按钮几何
+                                .w(px(20.0))
+                                .h(px(20.0))
                                 .on_click({
                                     let s = state.clone();
                                     let eid = entity_id;
@@ -243,12 +262,12 @@ pub fn render_folder_dialog_overlay(
                                 .child(field_label),
                         )
                         .child(
-                            // 用 code_background 作输入框底色，和卡片背景拉开层次
+                            // 底色走 control_bg()（= input_background），全应用输入框同一个值
                             Input::new(&name_input)
-                                .h(px(38.0))
+                                .h(px(CONTROL_H))
                                 .w_full()
-                                .rounded_md()
-                                .bg(th.code_background)
+                                .rounded(px(RADIUS_SM))
+                                .bg(th.control_bg())
                                 .text_color(th.foreground),
                         ),
                 )
@@ -266,7 +285,7 @@ pub fn render_folder_dialog_overlay(
                             Button::new("cancel-folder")
                                 .label(t("dialog.cancel"))
                                 .outline()
-                                .rounded_md()
+                                .rounded(px(RADIUS_SM))
                                 .on_click({
                                     let s = state.clone();
                                     let eid = entity_id;
@@ -286,7 +305,7 @@ pub fn render_folder_dialog_overlay(
                                 .label(t("dialog.save"))
                                 .bg(th.accent)
                                 .text_color(th.accent_foreground)
-                                .rounded_md()
+                                .rounded(px(RADIUS_SM))
                                 .on_click(move |_, _, cx| {
                                     let name_input = save_state.lock().unwrap().name_input.clone();
                                     let name = name_input.read(cx).value().to_string();

@@ -3,6 +3,7 @@
 //! 以表格形式展示 HTTP 响应的 Cookie 列表。
 
 use crate::http::Cookie;
+use crate::ui::components::RADIUS_SM;
 use crate::ui::Theme;
 use gpui::*;
 use gpui_component::StyledExt;
@@ -29,7 +30,7 @@ pub fn response_cookies_viewer(cookies: &[Cookie], theme: &Theme) -> impl IntoEl
         .bg(theme.code_background)
         .border_1()
         .border_color(theme.border)
-        .rounded_md()
+        .rounded(px(RADIUS_SM))
         .p_2()
         .children([
             // 表头
@@ -78,7 +79,7 @@ pub fn response_cookies_viewer(cookies: &[Cookie], theme: &Theme) -> impl IntoEl
                                 .gap_2()
                                 .p_1()
                                 .bg(theme.muted_background)
-                                .rounded_sm()
+                                .rounded(px(crate::ui::components::RADIUS_SM))
                                 .children([
                                     div()
                                         .w(px(100.0))

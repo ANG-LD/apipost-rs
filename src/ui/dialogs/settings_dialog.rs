@@ -118,7 +118,13 @@ fn language_section(
                     } else {
                         theme.input_background
                     })
-                    .text_color(rgb(0xffffff))
+                    // 文字色跟着主题走：写死白色时，forest/monokai/tokyonight 这类
+                    // 主色本身很亮的主题下，白字压在主色上几乎看不清
+                    .text_color(if is_active {
+                        theme.accent_foreground
+                    } else {
+                        theme.foreground
+                    })
                     .on_click(move |_, _, _| {
                         if let Ok(mut s) = app_state.lock() {
                             s.switch_language(&lang_code);
@@ -159,7 +165,12 @@ fn theme_section(
                     } else {
                         theme.input_background
                     })
-                    .text_color(rgb(0xffffff))
+                    // 同语言按钮：文字色由主题派生，浅主色主题下才不会白字压白底
+                    .text_color(if is_active {
+                        theme.accent_foreground
+                    } else {
+                        theme.foreground
+                    })
                     .on_click(move |_, _, _| {
                         if let Ok(mut s) = app_state.lock() {
                             s.set_theme(&theme_code);

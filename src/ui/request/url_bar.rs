@@ -1,12 +1,13 @@
 use crate::ui::components::{
-    ghost_button, method_color, primary_button, CONTROL_H, GAP_S, GAP_XS, PANEL_PAD,
+    ghost_button, method_color, primary_button, themed_icon, IconTier, IconTone, CONTROL_H, GAP_S,
+    ICON_TEXT_GAP, PANEL_PAD, RADIUS_SM,
 };
 use crate::ui::main_view::MainView;
 use crate::ui::Theme;
 use gpui::*;
 use gpui_component::input::Input;
 use gpui_component::select::Select;
-use gpui_component::{Icon, IconName, Sizable, StyledExt};
+use gpui_component::{IconName, Sizable, StyledExt};
 
 pub fn render_url_bar(
     this: &mut MainView,
@@ -45,7 +46,7 @@ pub fn render_url_bar(
                         .w_full()
                         .border_1()
                         .border_color(theme.border)
-                        .rounded_md()
+                        .rounded(px(RADIUS_SM))
                         // 方法颜色由列表项(MethodItem)自带：Select 外层的 text_color 不作用于选中文字
                         .flex_none(),
                 )
@@ -60,10 +61,10 @@ pub fn render_url_bar(
                     Input::new(&this.url_input)
                         .h(px(CONTROL_H))
                         .w_full()
-                        .bg(theme.input_background)
+                        .bg(theme.control_bg())
                         .border_1()
                         .border_color(theme.border)
-                        .rounded_md()
+                        .rounded(px(RADIUS_SM))
                         .text_sm()
                         .text_color(theme.foreground),
                 )
@@ -85,15 +86,19 @@ pub fn render_url_bar(
                     .flex()
                     .flex_row()
                     .items_center()
-                    .gap(px(GAP_XS))
-                    .child(
-                        Icon::new(if is_loading {
+                    .gap(px(ICON_TEXT_GAP))
+                    // 实心主色按钮内的图标 → Inherit（跟按钮的 accent_foreground）；
+                    // 图标与文字之间一律 ICON_TEXT_GAP
+                    .child(themed_icon(
+                        if is_loading {
                             IconName::LoaderCircle
                         } else {
                             IconName::Play
-                        })
-                        .xsmall(),
-                    )
+                        },
+                        IconTier::Dense,
+                        IconTone::Inherit,
+                        &theme,
+                    ))
                     .child(if is_loading {
                         this.t("ui.sending")
                     } else {

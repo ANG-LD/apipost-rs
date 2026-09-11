@@ -1,7 +1,10 @@
 use crate::ui::body::{BodyState, BodyType, FormDataParamType, RawFormat};
 use crate::ui::json_editor;
 use crate::ui::main_view::MainView;
-use crate::ui::components::{ghost_button, segment_button, segment_group};
+use crate::ui::components::{
+    ghost_button, segment_button, segment_group, themed_icon, IconTier, IconTone, CONTROL_H,
+    ICON_BTN, RADIUS_SM, RADIUS_XS,
+};
 use crate::ui::themes::Theme;
 use std::sync::Arc;
 use gpui::*;
@@ -11,7 +14,7 @@ use gpui::prelude::FluentBuilder;
 use gpui_component::button::Button;
 use gpui_component::input::Input;
 use gpui_component::select::Select;
-use gpui_component::{Icon, IconName, Sizable, StyledExt};
+use gpui_component::{IconName, Sizable, StyledExt};
 use gpui_component::scroll::ScrollableElement;
 
 pub fn render_body_panel(
@@ -221,7 +224,9 @@ fn render_raw_editor_content(
                     // 之前用裸 Input：既没有边框也没有高度约束，内容根本画不出来。
                     crate::ui::json_editor::code_editor_pane(
                         &editor_input,
-                        theme.background,
+                        // 代码编辑器底色统一用 code_background：响应体查看器也是这个值，
+                        // 以前请求侧用 background，两边的"编辑区"看起来不像一套
+                        theme.code_background,
                         theme.foreground,
                     )
                     .into_any_element(),
@@ -390,10 +395,11 @@ fn render_key_value_editor(
                                 div().flex_1().child(
                                     Input::new(&entry.key)
                                         .small()
-                                        .h(px(28.0))
-                                        .bg(theme.code_background)
+                                        .h(px(CONTROL_H))
+                                        .bg(theme.control_bg())
                                         .border_1()
                                         .border_color(theme.border)
+                                        .rounded(px(RADIUS_SM))
                                         .text_color(theme.foreground),
                                 ),
                             ];
@@ -405,7 +411,7 @@ fn render_key_value_editor(
                                         .child(
                                             Select::new(&entry.type_select)
                                                 .small()
-                                                .h(px(28.0))
+                                                .h(px(CONTROL_H))
                                                 // 不显式给颜色时，选中文字会落到占位符的弱化色，
                                                 // 看起来"不跟随主题设定的颜色"
                                                 .text_color(theme.foreground),
@@ -425,20 +431,22 @@ fn render_key_value_editor(
                                 children.push(
                                     div()
                                         .flex_1()
-                                        .h(px(28.0))
+                                        .h(px(CONTROL_H))
                                         .flex()
                                         .items_center()
                                         .justify_center()
-                                        .rounded_sm()
+                                        .rounded(px(RADIUS_XS))
+                                        // true/false 用主题的成功色/错误色，不再写死十六进制，
+                                        // 这样 gruvbox/sepia 这类暖色主题下也能和整体配色一致
                                         .bg(if is_true {
-                                            rgba(0x22c55e1f)
+                                            theme.success.alpha(0.14)
                                         } else {
-                                            rgba(0xef44441f)
+                                            theme.error.alpha(0.14)
                                         })
                                         .text_color(if is_true {
-                                            rgb(0x22c55e)
+                                            theme.success
                                         } else {
-                                            rgb(0xef4444)
+                                            theme.error
                                         })
                                         .text_sm()
                                         .font_semibold()
@@ -497,10 +505,11 @@ fn render_key_value_editor(
                                             .get_input_entity(),
                                     )
                                     .small()
-                                    .h(px(28.0))
-                                    .bg(theme.code_background)
+                                    .h(px(CONTROL_H))
+                                    .bg(theme.control_bg())
                                     .border_1()
                                     .border_color(theme.border)
+                                    .rounded(px(RADIUS_SM))
                                     .text_color(theme.foreground),
                                 ));
                             } else {
@@ -515,10 +524,10 @@ fn render_key_value_editor(
                                 children.push(
                                     div()
                                         .flex_1()
-                                        .h(px(28.0))
+                                        .h(px(CONTROL_H))
                                         .items_center()
-                                        .rounded_sm()
-                                        .bg(theme.code_background)
+                                        .rounded(px(RADIUS_SM))
+                                        .bg(theme.control_bg())
                                         .border_1()
                                         .border_color(theme.border)
                                         .cursor_pointer()
@@ -572,20 +581,35 @@ fn render_key_value_editor(
                                 div().child(
                                 div()
                                     .id(format!("{}-del-{}", add_btn_id, idx))
-                                    .w(px(22.0))
-                                    .h(px(22.0))
+                                    // 行内图标按钮：尺寸/圆角取 ICON_BTN + RADIUS_SM，和 components::icon_button() 同一套
+                                    .w(px(ICON_BTN))
+                                    .h(px(ICON_BTN))
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .rounded_md()
+                                    .rounded(px(RADIUS_SM))
                                     .cursor_pointer()
                                     .text_color(theme.muted_foreground)
                                     .hover({
-                                        let hover_bg = theme.muted_background;
+                                        let hover_bg = theme.hover_bg();
                                         let err = theme.error;
                                         move |s| s.bg(hover_bg).text_color(err)
                                     })
-                                    .child(Icon::new(IconName::Close).xsmall())
+                                    .active({
+                                        let pressed_bg = theme.active_bg();
+                                        let err = theme.error;
+                                        move |s| s.bg(pressed_bg).text_color(err)
+                                    })
+                                    // 行内删除按钮里的图标：常态 Inherit（跟容器的 muted_foreground），
+                                    // hover/按下时容器把文字色换成 error，图标必须跟着换；
+                                    // 字形取 Delete：这一行的动作是"删除该行"，
+                                    // Close（叉）在本应用专表"关闭"，删除只能有一种字形
+                                    .child(themed_icon(
+                                        IconName::Delete,
+                                        IconTier::Dense,
+                                        IconTone::Inherit,
+                                        &theme,
+                                    ))
                                     .on_mouse_down(MouseButton::Left, cx.listener(
                                         move |this,
                                               _: &MouseDownEvent,

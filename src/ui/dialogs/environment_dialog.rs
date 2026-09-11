@@ -6,8 +6,8 @@ use crate::app::database::Environment;
 use crate::app::AppState;
 use crate::ui::components::{
     danger_button, ghost_button, icon_button, icon_text_button, primary_button, primary_button_sm,
-    CONTROL_H,
-    GAP_M, GAP_S, GAP_XS,
+    themed_icon, IconTier, IconTone, CONTROL_H, GAP_M, GAP_S, GAP_XS, ICON_BTN, ICON_TEXT_GAP,
+    RADIUS_LG, RADIUS_MD, RADIUS_SM,
 };
 use crate::ui::Theme;
 use gpui::*;
@@ -15,7 +15,7 @@ use gpui::prelude::FluentBuilder;
 use gpui_component::button::Button;
 use gpui_component::input::{Input, InputState};
 use gpui_component::scroll::ScrollableElement;
-use gpui_component::{Disableable, Icon, IconName, Sizable, StyledExt};
+use gpui_component::{Disableable, IconName, Sizable, StyledExt};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -248,7 +248,7 @@ pub fn render_env_dialog_overlay(
         .left(px(0.0))
         .right(px(0.0))
         .bottom(px(0.0))
-        .bg(rgba(0x00000055))
+        .bg(theme.scrim())
         .flex()
         .items_center()
         .justify_center()
@@ -257,7 +257,7 @@ pub fn render_env_dialog_overlay(
             div()
                 .w(px(640.0))
                 .bg(theme.background)
-                .rounded_xl()
+                .rounded(px(RADIUS_LG))
                 .border_1()
                 .border_color(theme.border)
                 .shadow_2xl()
@@ -279,8 +279,15 @@ pub fn render_env_dialog_overlay(
                             div()
                                 .flex()
                                 .items_center()
-                                .gap_2p5()
-                                .child(Icon::new(IconName::Globe).text_color(theme.accent))
+                                // 图标与文字之间一律 ICON_TEXT_GAP（原来是 10px）
+                                .gap(px(ICON_TEXT_GAP))
+                                // 弹窗标题图标：与 14px 标题同档（Regular），语义=当前环境（强调）
+                                .child(themed_icon(
+                                    IconName::Globe,
+                                    IconTier::Regular,
+                                    IconTone::Accent,
+                                    theme,
+                                ))
                                 .child(
                                     div()
                                         .text_sm()
@@ -328,8 +335,15 @@ pub fn render_env_dialog_overlay(
                                         div()
                                             .flex()
                                             .items_center()
-                                            .gap(px(GAP_XS))
-                                            .child(Icon::new(IconName::Globe).xsmall().text_color(theme.accent))
+                                            // 图标与文字之间一律 ICON_TEXT_GAP
+                                            .gap(px(ICON_TEXT_GAP))
+                                            // 与 11px 标签同行 → 密集档；"环境名"是这一组的强调项 → Accent
+                                            .child(themed_icon(
+                                                IconName::Globe,
+                                                IconTier::Dense,
+                                                IconTone::Accent,
+                                                theme,
+                                            ))
                                             .child(
                                                 div()
                                                     .text_size(px(11.0))
@@ -342,11 +356,11 @@ pub fn render_env_dialog_overlay(
                                         Input::new(&name_input)
                                             .h(px(CONTROL_H))
                                             .w_full()
-                                            .rounded_md()
+                                            .rounded(px(RADIUS_SM))
                                             .border_1()
                                             // 名称为空时红框提示，而不是点了保存什么反应都没有
                                             .border_color(if name_error { theme.error } else { theme.border })
-                                            .bg(theme.input_background)
+                                            .bg(theme.control_bg())
                                             .text_color(theme.foreground),
                                     )
                                     .when(name_error, |d| {
@@ -405,8 +419,15 @@ pub fn render_env_dialog_overlay(
                                     .flex()
                                     .flex_row()
                                     .items_center()
-                                    .gap(px(GAP_XS))
-                                    .child(Icon::new(IconName::Delete).xsmall())
+                                    .gap(px(ICON_TEXT_GAP))
+                                    // 危险动作 → 让图标跟随 danger_button 的 error 色（Inherit），
+                                    // 这样按钮改配色时图标不会掉队
+                                    .child(themed_icon(
+                                        IconName::Delete,
+                                        IconTier::Dense,
+                                        IconTone::Inherit,
+                                        theme,
+                                    ))
                                     .child(t("env.delete")),
                                 theme,
                             )
@@ -452,8 +473,15 @@ pub fn render_env_dialog_overlay(
                                     .flex()
                                     .flex_row()
                                     .items_center()
-                                    .gap(px(GAP_XS))
-                                    .child(Icon::new(IconName::Check).xsmall())
+                                    .gap(px(ICON_TEXT_GAP))
+                                    // 保存=确认动作，但底色是实心主色，图标必须跟按钮的
+                                    // accent_foreground 才够对比度 → Inherit（不是 Success）
+                                    .child(themed_icon(
+                                        IconName::Check,
+                                        IconTier::Dense,
+                                        IconTone::Inherit,
+                                        theme,
+                                    ))
                                     .child(save_env_label.clone()),
                                 theme,
                             )
@@ -605,7 +633,8 @@ fn render_var_section(
     let empty_hint = empty_hint.to_string();
     let count_label = count_label.to_string();
     let at_cap = count >= MAX_VAR_SLOTS;
-    let input_h = CONTROL_H - 4.0;
+    // 变量行输入框高度统一到常规控件高度（原来比其他输入框矮 4px）
+    let input_h = CONTROL_H;
 
     div()
         .flex_col()
@@ -616,11 +645,17 @@ fn render_var_section(
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap(px(GAP_S))
+                .gap(px(ICON_TEXT_GAP))
                 .child(
-                    Icon::new(if is_current { IconName::Globe } else { IconName::Star })
-                        .small()
-                        .text_color(theme.accent),
+                    // 相邻文字是 12px 的节标题 → 图标同取密集档（原来是 14px，比文字大一圈）；
+                    // Globe=当前环境 / Asterisk=全局变量（* = 不限作用域，与侧栏那个入口同一语义），
+                    // 两者都是这一节的强调项 → Accent
+                    themed_icon(
+                        if is_current { IconName::Globe } else { IconName::Asterisk },
+                        IconTier::Dense,
+                        IconTone::Accent,
+                        theme,
+                    ),
                 )
                 .child(
                     div()
@@ -645,9 +680,15 @@ fn render_var_section(
                                 .flex()
                                 .flex_row()
                                 .items_center()
-                                .gap(px(2.0))
+                                .gap(px(ICON_TEXT_GAP))
                                 .text_size(px(11.0))
-                                .child(Icon::new(IconName::Plus).xsmall())
+                                // 实心主色按钮内的图标 → Inherit（跟 accent_foreground）
+                                .child(themed_icon(
+                                    IconName::Plus,
+                                    IconTier::Dense,
+                                    IconTone::Inherit,
+                                    theme,
+                                ))
                                 .child(add_label.clone()),
                             theme,
                         )
@@ -671,7 +712,7 @@ fn render_var_section(
         // 变量卡片
         .child(
             div()
-                .rounded_lg()
+                .rounded(px(RADIUS_MD))
                 .border_1()
                 .border_color(theme.border)
                 .overflow_hidden()
@@ -706,7 +747,8 @@ fn render_var_section(
                                     .text_color(theme.muted_foreground)
                                     .child(value_label.clone()),
                             )
-                            .child(div().w(px(22.0))),
+                            // 删除列占位宽度与 icon_button 的 ICON_BTN 一致，表头才对齐
+                            .child(div().w(px(ICON_BTN))),
                     )
                 })
                 .children((0..count).map(move |i| {
@@ -726,20 +768,20 @@ fn render_var_section(
                             Input::new(k)
                                 .h(px(input_h))
                                 .flex_1()
-                                .rounded_md()
+                                .rounded(px(RADIUS_SM))
                                 .border_1()
                                 .border_color(theme.border)
-                                .bg(theme.input_background)
+                                .bg(theme.control_bg())
                                 .text_color(theme.foreground),
                         )
                         .child(
                             Input::new(v)
                                 .h(px(input_h))
                                 .flex_1()
-                                .rounded_md()
+                                .rounded(px(RADIUS_SM))
                                 .border_1()
                                 .border_color(theme.border)
-                                .bg(theme.input_background)
+                                .bg(theme.control_bg())
                                 .text_color(theme.foreground),
                         )
                         .child(
@@ -765,6 +807,9 @@ fn render_var_section(
                 // 空状态：整块可点，直接加一行变量
                 .when(count == 0, |d| {
                     let s_empty = s_add_empty.clone();
+                    // 闭包要 move，颜色先取出来（Rgba 是 Copy）
+                    let hover_bg = theme.hover_bg();
+                    let pressed_bg = theme.active_bg();
                     d.child(
                         div()
                             .id(SharedString::from(format!("empty-{}-add", btn_id)))
@@ -776,13 +821,14 @@ fn render_var_section(
                             .items_center()
                             .justify_center()
                             .gap(px(GAP_XS))
-                            .rounded_md()
+                            .rounded(px(RADIUS_SM))
                             .border_1()
                             .border_color(theme.border)
                             .text_size(px(11.0))
                             .text_color(theme.accent)
                             .cursor_pointer()
-                            .hover(move |st| st.bg(theme.muted_background))
+                            .hover(move |st| st.bg(hover_bg))
+                            .active(move |st| st.bg(pressed_bg))
                             .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                                 if let Ok(mut st) = s_empty.lock() {
                                     if is_current {
@@ -795,7 +841,14 @@ fn render_var_section(
                                 }
                                 cx.notify(entity_id);
                             })
-                            .child(Icon::new(IconName::Plus).xsmall())
+                            // 容器本身就是 accent 文字色（强调"点这里加一行"），
+                            // 图标 Inherit 就与文字同色，不必再写一遍 accent
+                            .child(themed_icon(
+                                IconName::Plus,
+                                IconTier::Dense,
+                                IconTone::Inherit,
+                                theme,
+                            ))
                             .child(add_label.clone())
                             .child(
                                 div()
