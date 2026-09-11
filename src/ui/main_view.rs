@@ -3668,7 +3668,7 @@ fn settings_popover(
         for (label, id, value) in chunk {
             let value = value.clone();
             let active = current_theme == value;
-            row = row.child(setting_option_btn(
+            row = row.child(setting_option_btn_compact(
                 label,
                 id,
                 active,
@@ -3973,6 +3973,19 @@ fn settings_popover(
         )
 }
 
+/// 紧凑型选项按钮 —— 主题网格专用：固定 58px、内边距收紧，4 列排得下且等宽
+fn setting_option_btn_compact(
+    label: &str,
+    id: &'static str,
+    active: bool,
+    theme: &Theme,
+    cx: &mut Context<MainView>,
+    on_toggle: impl Fn(&mut MainView, &MouseDownEvent, &mut Window, &mut Context<MainView>) + 'static,
+) -> impl IntoElement {
+    setting_option_btn_inner(label, id, active, Some(58.0), theme, cx, on_toggle)
+}
+
+/// 常规选项按钮 —— 语言 / 代理 / 自动保存用：内容自适应宽度
 fn setting_option_btn(
     label: &str,
     id: &'static str,
@@ -3981,19 +3994,32 @@ fn setting_option_btn(
     cx: &mut Context<MainView>,
     on_toggle: impl Fn(&mut MainView, &MouseDownEvent, &mut Window, &mut Context<MainView>) + 'static,
 ) -> impl IntoElement {
+    setting_option_btn_inner(label, id, active, None, theme, cx, on_toggle)
+}
+
+fn setting_option_btn_inner(
+    label: &str,
+    id: &'static str,
+    active: bool,
+    width: Option<f32>,
+    theme: &Theme,
+    cx: &mut Context<MainView>,
+    on_toggle: impl Fn(&mut MainView, &MouseDownEvent, &mut Window, &mut Context<MainView>) + 'static,
+) -> impl IntoElement {
     div()
         .id(id)
         .text_xs()
         .cursor_pointer()
-        // 固定宽度（紧凑）：4 列主题网格放得下（4×58 + 3×4 = 244 ≤ 面板内宽 246）；
-        // flex+居中：文字左右内边距一致
-        .w(px(58.0))
-        // 禁止被 flex 压缩：否则同一行里各按钮按文字长短被压成不同宽度
-        .flex_shrink_0()
+        // 宽度分两种：
+        //   Some(w) —— 主题网格用的紧凑款：固定宽度 + 禁止压缩 + 内边距收紧。
+        //              固定宽度才能等宽；禁止压缩才能不被同行的长文字挤成不同宽度。
+        //   None    —— 语言 / 开关用：内容自适应宽度。
+        .when_some(width, |d, w| d.w(px(w)).flex_shrink_0().px_1())
+        .when(width.is_none(), |d| d.min_w(px(60.0)).px_2p5())
+        // 文字左右内边距一致（居中）
         .flex()
         .items_center()
         .justify_center()
-        .px_1()
         .py_1()
         .rounded_sm()
         .border_1()
