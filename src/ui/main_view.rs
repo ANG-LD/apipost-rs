@@ -3659,7 +3659,7 @@ fn settings_popover(
     // 主题
     sections.push(section_divider(theme).into_any_element());
     sections.push(section_title(t_theme_title, theme).into_any_element());
-    for (row_index, chunk) in theme_items.chunks(3).enumerate() {
+    for (row_index, chunk) in theme_items.chunks(4).enumerate() {
         // 两行主题按钮之间留出小间距（容器 gap 在滚动包装下不生效，这里显式给）
         let mut row = div().flex().flex_row().gap(px(GAP_XS));
         if row_index > 0 {
@@ -3985,14 +3985,15 @@ fn setting_option_btn(
         .id(id)
         .text_xs()
         .cursor_pointer()
-        // 固定宽度：主题/语言等按钮等宽排列；flex+居中：文字左右内边距一致
-        .w(px(78.0))
+        // 固定宽度（紧凑）：4 列主题网格放得下（4×58 + 3×4 = 244 ≤ 面板内宽 246）；
+        // flex+居中：文字左右内边距一致
+        .w(px(58.0))
         // 禁止被 flex 压缩：否则同一行里各按钮按文字长短被压成不同宽度
         .flex_shrink_0()
         .flex()
         .items_center()
         .justify_center()
-        .px_2p5()
+        .px_1()
         .py_1()
         .rounded_sm()
         .border_1()

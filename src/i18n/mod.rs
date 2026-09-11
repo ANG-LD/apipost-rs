@@ -494,7 +494,7 @@ impl I18nManager {
         map.insert("theme.monokai".to_string(), "Monokai".to_string());
         map.insert("theme.nord".to_string(), "Nord".to_string());
         map.insert("theme.dracula".to_string(), "Dracula".to_string());
-        map.insert("theme.tokyonight".to_string(), "Tokyo Night".to_string());
+        map.insert("theme.tokyonight".to_string(), "Tokyo".to_string());
         map.insert("theme.gruvbox".to_string(), "Gruvbox".to_string());
         map.insert("theme.latte".to_string(), "Latte".to_string());
 
