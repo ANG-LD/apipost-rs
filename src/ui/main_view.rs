@@ -4218,6 +4218,12 @@ impl Render for MainView {
                                 // 标签页按钮
                                 div()
                                     .flex()
+                                    // 设置浮层打开时完全不绘制这一行。
+                                    // 说明：浮层已挂到根容器、按元素树顺序必然在侧边栏之后绘制，
+                                    // 但实测这三个图标仍会压在面板之上（gpui 大概有独立绘制通道），
+                                    // 因此这里用「不参与绘制」保证结果，不依赖绘制顺序。
+                                    // 该区域本就被浮层盖住，视觉上无额外损失。
+                                    .opacity(if self.show_settings_popover { 0.0 } else { 1.0 })
                                     .when(self.sidebar_collapsed, |s| s.flex_col().flex_1())
                                     .when(!self.sidebar_collapsed, |s| s.flex_row().h(px(40.0)))
                                     .children([
