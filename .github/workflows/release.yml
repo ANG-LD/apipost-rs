@@ -1,0 +1,203 @@
+name: Release
+
+# 打 tag（如 v0.2.0）时：在三平台构建 release 二进制，并用 cargo-packager 打安装包
+# （Linux deb / Windows NSIS / macOS app+dmg），一并上传到该 tag 的 GitHub Release。
+#
+# 触发方式（两种任选）：
+#   1. git tag v0.2.0 && git push origin v0.2.0        → 推送 tag 即自动触发
+#   2. GitHub 页面 → Actions → 本工作流 → Run workflow 手动触发
+#
+# 图标说明（Windows 桌面快捷方式没图标的根因就在这）：
+#   * cargo-packager 的 NSIS 模板用 `CreateShortcut "$DESKTOP\...\lnk" "$INSTDIR\apipost-rs.exe"`，
+#     快捷方式图标取自 exe 内嵌图标 → 必须由 build.rs（tauri-winres）把 assets/icon.ico 写进 exe。
+#   * macOS 的 App 图标取自 assets/icon.icns（CFBundleIconFile）。
+#   * Linux deb 的图标取自 assets/icons/*.png（必须是 hicolor 标准尺寸，
+#     装到 /usr/share/icons/hicolor/<尺寸>/apps/；用 1024x1024 母版会导致桌面图标空白）。
+#
+# macOS 签名/公证（可选）：仓库配置了 APPLE_CERTIFICATE 等 secrets 就会自动签名+公证，
+# 没配置就产出未签名 dmg（用户首次打开需右键→打开，或去掉 quarantine 属性）。
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            triple: x86_64-unknown-linux-gnu
+            asset: apipost-rs-x86_64-unknown-linux-gnu
+            package: deb
+            package_files: dist/*.deb
+          - os: windows-latest
+            triple: x86_64-pc-windows-msvc
+            asset: apipost-rs-x86_64-pc-windows-msvc.exe
+            package: nsis
+            package_files: dist/*.exe
+          - os: macos-latest
+            triple: universal-apple-darwin
+            asset: apipost-rs-universal-apple-darwin
+            package: app,dmg
+            package_files: dist/*.dmg
+    runs-on: ${{ matrix.os }}
+    # 供 step 的 if 判断用：有证书才走签名那一条
+    env:
+      HAS_APPLE_CERT: ${{ secrets.APPLE_CERTIFICATE != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Linux 需要 GTK / WebKitGTK / X11 / Wayland 等系统库（与 packaging.yml 一致）
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libglib2.0-dev \
+            libx11-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            libgraphene-1.0-dev \
+            libpng-dev \
+            libjpeg-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          # macOS 出通用二进制：arm64 + x86_64 各编一遍再 lipo 合体
+          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      # 打包前先卡图标：少了对应平台的图标，装完就是默认白板图标，宁可直接失败
+      - name: Verify icon assets
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os, struct, sys
+          ok = True
+          for f in ("assets/icon.png", "assets/icon.ico", "assets/icon.icns"):
+              if not os.path.exists(f):
+                  print(f"缺少图标文件: {f}"); ok = False
+          if os.path.exists("assets/icon.icns"):
+              with open("assets/icon.icns", "rb") as fp:
+                  head = fp.read(4)
+              if head != b"icns":
+                  print("assets/icon.icns 不是合法的 icns 容器"); ok = False
+          if os.path.exists("assets/icon.ico"):
+              # ICO 头：reserved(2) type(2) count(2)
+              with open("assets/icon.ico", "rb") as fp:
+                  hdr = fp.read(6)
+              if len(hdr) < 6 or struct.unpack("<HHH", hdr)[1] != 1:
+                  print("assets/icon.ico 不是合法的 ico 文件"); ok = False
+          sys.exit(0 if ok else 1)
+          PY
+
+      # 自动更新是按版本号比对的：tag / Cargo.toml / packager.toml 三处必须一致。
+      # 不一致的话，用户装到的版本和 release tag 对不上，会一直提示"有新版本"或永远收不到提示。
+      - name: Verify version consistency
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          PY=python3; command -v python3 >/dev/null 2>&1 || PY=python
+          "$PY" - <<'EOF'
+          import os, sys
+          try:
+              import tomllib
+          except ModuleNotFoundError:
+              import tomli as tomllib  # py<3.11 兜底
+          tag = os.environ["GITHUB_REF_NAME"].lstrip("vV")
+          cargo = tomllib.load(open("Cargo.toml", "rb"))["package"]["version"]
+          packager = tomllib.load(open("packager.toml", "rb"))["version"]
+          print(f"tag={tag}  Cargo.toml={cargo}  packager.toml={packager}")
+          if not (tag == cargo == packager):
+              print("::error::版本号不一致，先把 Cargo.toml / packager.toml 的 version 改成 tag 的版本再发")
+              sys.exit(1)
+          EOF
+
+      # ---------- 构建 ----------
+      - name: Build release binary (Linux / Windows)
+        if: runner.os != 'macOS'
+        run: cargo build --release
+
+      - name: Build release binary (macOS, arm64 + x86_64)
+        if: runner.os == 'macOS'
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+
+      - name: Merge universal binary (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p target/universal-apple-darwin/release
+          lipo -create \
+            -output target/universal-apple-darwin/release/apipost-rs \
+            target/aarch64-apple-darwin/release/apipost-rs \
+            target/x86_64-apple-darwin/release/apipost-rs
+          lipo -info target/universal-apple-darwin/release/apipost-rs
+
+      # 二进制重命名为带 target-triple 的资产名，便于按平台区分。
+      - name: Stage asset (Linux)
+        if: runner.os == 'Linux'
+        run: cp target/release/apipost-rs "${{ matrix.asset }}"
+
+      - name: Stage asset (Windows)
+        if: runner.os == 'Windows'
+        run: copy target\release\apipost-rs.exe "${{ matrix.asset }}"
+
+      - name: Stage asset (macOS)
+        if: runner.os == 'macOS'
+        run: cp target/universal-apple-darwin/release/apipost-rs "${{ matrix.asset }}"
+
+      # ---------- 打包 ----------
+      - name: Install cargo-packager
+        run: cargo install cargo-packager --locked --version ^0.11
+
+      - name: Package ${{ matrix.package }} (Linux / Windows)
+        if: runner.os != 'macOS'
+        run: cargo packager -c packager.toml -f ${{ matrix.package }} --release
+
+      # 有证书：签名 + 公证
+      - name: Package ${{ matrix.package }} (macOS, 签名+公证)
+        if: runner.os == 'macOS' && env.HAS_APPLE_CERT == 'true'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: cargo packager -c packager.toml -f ${{ matrix.package }} --target universal-apple-darwin --release
+
+      # 没证书：照样出 dmg，只是未签名（首次打开要右键→打开）
+      - name: Package ${{ matrix.package }} (macOS, 未签名)
+        if: runner.os == 'macOS' && env.HAS_APPLE_CERT != 'true'
+        run: cargo packager -c packager.toml -f ${{ matrix.package }} --target universal-apple-darwin --release
+
+      # 各并行 job 都打到同一个 Release（按 tag 创建/更新），并追加各自的资产。
+      # 建议配合勾选 "Generate release notes"。
+      - name: Upload asset to release
+        uses: softprops/action-gh-release@v3
+        with:
+          name: ApiPost-Rs ${{ github.ref_name }}
+          # 带 '-' 的 tag（如 v0.2.0-beta.1）标成预发布：GitHub 的 /releases/latest
+          # 会自动跳过预发布，客户端就不会把 beta 当成正式更新推给用户
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: |
+            ${{ matrix.asset }}
+            ${{ matrix.package_files }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

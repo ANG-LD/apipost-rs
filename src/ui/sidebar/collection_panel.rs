@@ -215,6 +215,8 @@ pub fn render_collection_panel(
                                     .into_any_element(),
                                 div()
                                     .flex_1()
+                                    .min_w(px(0.0))
+                                    .truncate()
                                     .text_sm()
                                     .text_color(theme.foreground)
                                     .on_mouse_move({
@@ -314,6 +316,8 @@ pub fn render_collection_panel(
                             .into_any_element(),
                         div()
                             .flex_1()
+                            .min_w(px(0.0))
+                            .truncate()
                             .text_sm()
                             .text_color(theme.muted_foreground)
                             .on_mouse_move({
@@ -389,7 +393,7 @@ pub fn render_folder_context_menu(
     folder_name: &str,
     cx: &mut Context<MainView>,
     theme: &Theme,
-    t: &dyn Fn(&str) -> String,
+    t: &dyn Fn(&str) -> SharedString,
 ) -> gpui::Div {
     let fid = folder_id.to_string();
     let fname = folder_name.to_string();
@@ -436,7 +440,7 @@ pub fn render_request_context_menu(
     request: &SavedRequest,
     cx: &mut Context<MainView>,
     theme: &Theme,
-    t: &dyn Fn(&str) -> String,
+    t: &dyn Fn(&str) -> SharedString,
 ) -> gpui::Div {
     let rid = request.id.clone();
     let rname = request.name.clone();

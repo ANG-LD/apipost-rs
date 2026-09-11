@@ -42,7 +42,12 @@ pub fn open_settings_dialog(app_state: &AppState, window: &mut Window, cx: &mut 
                 let lang_for_ui = lang_for_ui.clone();
                 let theme_for_ui = theme_for_ui.clone();
                 let app_state_for_click = dialog_app_state.clone();
-                move |content, _, _| {
+                move |content, window, _| {
+                    // 对话框内容可能超出屏幕：给内容区一个按窗口算出的确定高度，
+                    // 再用 gpui 原生滚动（不能用 Scrollable::overflow_y_scrollbar，
+                    // 它注入的 flex_1 + size_auto 会把滚动范围清零）
+                    let content_h = (window.bounds().size.height.as_f32() - 220.0).max(180.0);
+                    let scroll_h = content_h.min(520.0);
                     content
                         .child(
                             DialogHeader::new()
@@ -50,9 +55,13 @@ pub fn open_settings_dialog(app_state: &AppState, window: &mut Window, cx: &mut 
                         )
                         .child(
                             gpui::div()
+                                .id("settings-dialog-scroll")
                                 .p_4()
                                 .flex_col()
                                 .gap_4()
+                                .h(px(scroll_h))
+                                .min_h(px(0.0))
+                                .overflow_y_scroll()
                                 .child(language_section(
                                     &lang_for_ui,
                                     app_state_for_click.clone(),

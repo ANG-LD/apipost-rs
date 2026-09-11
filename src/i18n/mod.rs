@@ -5,26 +5,28 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// 翻译字典：值是 `Arc<str>`，查表后取出只需引用计数 +1，
+/// 界面每帧要取上百条文案，用 String 的话每帧就是上百次堆分配。
+pub type Translations = HashMap<String, Arc<str>>;
+
 /// 国际化管理器
 #[derive(Clone)]
 pub struct I18nManager {
     /// 当前语言
     language: String,
     /// 翻译字典（Arc 共享，Clone 零分配）
-    translations: Arc<HashMap<String, String>>,
+    translations: Arc<Translations>,
 }
 
 impl I18nManager {
     /// 创建新的国际化管理器
+    ///
+    /// 字典本身还是用 `HashMap<String, String>` 的字面量写，只在构造时转一次
+    /// `Arc<str>`，这样维护翻译表时不用改写法。
     pub fn new(language: &str) -> Self {
-        let translations = match language {
-            "en-US" | "en" => Self::english(),
-            _ => Self::chinese(),
-        };
-
         Self {
             language: language.to_string(),
-            translations: Arc::new(translations),
+            translations: Self::build(language),
         }
     }
 
@@ -32,13 +34,23 @@ impl I18nManager {
     pub fn get<'a>(&'a self, key: &'a str) -> &'a str {
         self.translations
             .get(key)
-            .map(|s| s.as_str())
+            .map(|s| &**s)
             .unwrap_or(key)
     }
 
     /// 获取翻译字典的 Arc（供外部缓存）
-    pub fn translations_arc(&self) -> Arc<HashMap<String, String>> {
+    pub fn translations_arc(&self) -> Arc<Translations> {
         Arc::clone(&self.translations)
+    }
+
+    /// 取文案并返回 `Arc<str>`：命中时是纯引用计数操作，不复制字符串。
+    /// 界面渲染走这条路径；`get()` 继续给需要 `&str` 的地方用。
+    pub fn get_shared(&self, key: &str) -> Arc<str> {
+        match self.translations.get(key) {
+            Some(value) => Arc::clone(value),
+            // 只有 key 不存在（翻译漏了）才会走到这里，才会真的分配
+            None => Arc::from(key),
+        }
     }
 
     /// 获取当前语言
@@ -49,10 +61,20 @@ impl I18nManager {
     /// 设置语言
     pub fn set_language(&mut self, language: &str) {
         self.language = language.to_string();
-        self.translations = Arc::new(match language {
+        self.translations = Self::build(language);
+    }
+
+    /// 按语言构建字典（字面量表 -> `Arc<str>`，构造时转一次）
+    fn build(language: &str) -> Arc<Translations> {
+        let raw = match language {
             "en-US" | "en" => Self::english(),
             _ => Self::chinese(),
-        });
+        };
+        Arc::new(
+            raw.into_iter()
+                .map(|(key, value)| (key, Arc::from(value)))
+                .collect(),
+        )
     }
 
     /// 中文翻译字典
@@ -127,7 +149,7 @@ impl I18nManager {
         map.insert("ui.add_to".to_string(), "Add to".to_string());
         map.insert("ui.header".to_string(), "Header".to_string());
         map.insert("ui.query".to_string(), "Query".to_string());
-        map.insert("ui.type".to_string(), "Type".to_string());
+        map.insert("ui.type".to_string(), "类型".to_string());
         map.insert("ui.click_send".to_string(), "点击发送按钮发送请求".to_string());
         map.insert("ui.no_env".to_string(), "无环境".to_string());
         map.insert("ui.online".to_string(), "在线".to_string());
@@ -141,8 +163,8 @@ impl I18nManager {
         map.insert("response.cookies".to_string(), "Cookies".to_string());
         map.insert("response.test_results".to_string(), "测试结果".to_string());
         map.insert("response.status".to_string(), "状态码".to_string());
-        map.insert("response.time".to_string(), "响应时间".to_string());
-        map.insert("response.size".to_string(), "响应大小".to_string());
+        map.insert("response.time".to_string(), "时间".to_string());
+        map.insert("response.size".to_string(), "大小".to_string());
         map.insert("response.preview".to_string(), "预览".to_string());
         map.insert("response.raw".to_string(), "原始".to_string());
         map.insert("response.format".to_string(), "格式化".to_string());
@@ -167,9 +189,12 @@ impl I18nManager {
         map.insert("env.name".to_string(), "变量名".to_string());
         map.insert("env.value".to_string(), "变量值".to_string());
         map.insert("env.no_env".to_string(), "未选择环境".to_string());
+        map.insert("env.empty_list".to_string(), "还没有环境，先新建一个".to_string());
+        map.insert("env.delete".to_string(), "删除环境".to_string());
+        map.insert("env.vars_edit".to_string(), "编辑变量".to_string());
+        map.insert("env.edit_vars_hint".to_string(), "点这里编辑该环境的变量".to_string());
         map.insert("env.edit".to_string(), "编辑环境".to_string());
         map.insert("env.create".to_string(), "新建环境".to_string());
-        map.insert("env.delete".to_string(), "删除".to_string());
         map.insert("env.save".to_string(), "保存".to_string());
         map.insert("env.save_env".to_string(), "保存环境".to_string());
         map.insert("env.cancel".to_string(), "取消".to_string());
@@ -204,6 +229,10 @@ impl I18nManager {
         map.insert("theme.forest".to_string(), "森林".to_string());
         map.insert("theme.monokai".to_string(), "摩卡".to_string());
         map.insert("theme.nord".to_string(), "北境".to_string());
+        map.insert("theme.dracula".to_string(), "德古拉".to_string());
+        map.insert("theme.tokyonight".to_string(), "东京夜".to_string());
+        map.insert("theme.gruvbox".to_string(), "格鲁夫".to_string());
+        map.insert("theme.latte".to_string(), "拿铁浅色".to_string());
 
         // 语言
         map.insert("language.title".to_string(), "语言".to_string());
@@ -228,6 +257,14 @@ impl I18nManager {
         map.insert("dialog.save_to_collections".to_string(), "保存到收藏夹".to_string());
         map.insert("dialog.title_label".to_string(), "标题".to_string());
         map.insert("dialog.cancel".to_string(), "取消".to_string());
+        map.insert("dialog.new_folder".to_string(), "新建文件夹".to_string());
+        map.insert("dialog.new_folder_hint".to_string(), "在收藏夹中创建一个新文件夹".to_string());
+        map.insert("dialog.rename_folder".to_string(), "重命名文件夹".to_string());
+        map.insert("dialog.rename_folder_hint".to_string(), "修改文件夹名称".to_string());
+        map.insert("dialog.rename_request".to_string(), "重命名请求".to_string());
+        map.insert("dialog.rename_request_hint".to_string(), "修改请求名称".to_string());
+        map.insert("dialog.folder_name".to_string(), "文件夹名称".to_string());
+        map.insert("dialog.request_name".to_string(), "请求名称".to_string());
         map.insert("dialog.save".to_string(), "保存".to_string());
 
         // 上下文菜单
@@ -250,6 +287,41 @@ impl I18nManager {
         map.insert("sidebar.new_request".to_string(), "新建请求".to_string());
 
         // 设置
+        map.insert("settings.title".to_string(), "设置".to_string());
+        map.insert("settings.about".to_string(), "关于".to_string());
+        map.insert("update.current".to_string(), "当前版本".to_string());
+        map.insert("update.check".to_string(), "检查更新".to_string());
+        map.insert("update.recheck".to_string(), "重新检查".to_string());
+        map.insert("update.checking".to_string(), "正在检查更新…".to_string());
+        map.insert("update.up_to_date".to_string(), "已是最新版本".to_string());
+        map.insert("update.available".to_string(), "发现新版本".to_string());
+        map.insert("update.download".to_string(), "下载新版本".to_string());
+        map.insert("update.release_page".to_string(), "打开发布页".to_string());
+        map.insert("update.failed".to_string(), "检查失败".to_string());
+        map.insert("update.hint".to_string(), "从 GitHub Releases 获取最新版本".to_string());
+        map.insert("update.published".to_string(), "发布于".to_string());
+        map.insert("settings.timeout".to_string(), "超时时间".to_string());
+        map.insert("settings.retries".to_string(), "重试次数".to_string());
+        map.insert("settings.follow_redirects".to_string(), "跟随重定向".to_string());
+        map.insert("settings.verify_ssl".to_string(), "验证 SSL 证书".to_string());
+        map.insert("settings.unit_seconds".to_string(), "秒".to_string());
+        map.insert("settings.unit_times".to_string(), "次".to_string());
+        map.insert("auth.type".to_string(), "认证类型".to_string());
+        map.insert("auth.none_hint".to_string(), "该请求不使用认证信息".to_string());
+        map.insert("auth.token".to_string(), "Token".to_string());
+        map.insert("auth.username".to_string(), "用户名".to_string());
+        map.insert("auth.password".to_string(), "密码".to_string());
+        map.insert("auth.key".to_string(), "键名".to_string());
+        map.insert("auth.value".to_string(), "键值".to_string());
+        map.insert("auth.add_to".to_string(), "添加到".to_string());
+        map.insert("auth.bearer_hint".to_string(), "会在请求头加上 Authorization: Bearer <token>".to_string());
+        map.insert("auth.basic_hint".to_string(), "使用 HTTP Basic 认证，用户名和密码会 Base64 编码后放进请求头".to_string());
+        map.insert("auth.apikey_hint".to_string(), "把键值对添加到请求头或 URL 查询参数".to_string());
+        map.insert("auth.effective".to_string(), "生效内容".to_string());
+        map.insert("env.vars".to_string(), "变量".to_string());
+        map.insert("env.vars_count".to_string(), "{} 个变量".to_string());
+        map.insert("env.no_vars".to_string(), "该环境暂无变量".to_string());
+        map.insert("env.name_required".to_string(), "环境名称不能为空".to_string());
         map.insert("settings.general".to_string(), "常规".to_string());
         map.insert("settings.auto_save".to_string(), "自动保存".to_string());
         map.insert("settings.proxy".to_string(), "代理".to_string());
@@ -381,9 +453,12 @@ impl I18nManager {
         map.insert("env.name".to_string(), "Variable".to_string());
         map.insert("env.value".to_string(), "Current Value".to_string());
         map.insert("env.no_env".to_string(), "No environment selected".to_string());
+        map.insert("env.empty_list".to_string(), "No environments yet — create one".to_string());
+        map.insert("env.delete".to_string(), "Delete Environment".to_string());
+        map.insert("env.vars_edit".to_string(), "Edit Variables".to_string());
+        map.insert("env.edit_vars_hint".to_string(), "Click to edit this environment's variables".to_string());
         map.insert("env.edit".to_string(), "Edit Environment".to_string());
         map.insert("env.create".to_string(), "New Environment".to_string());
-        map.insert("env.delete".to_string(), "Delete".to_string());
         map.insert("env.save".to_string(), "Save".to_string());
         map.insert("env.save_env".to_string(), "Save Environment".to_string());
         map.insert("env.cancel".to_string(), "Cancel".to_string());
@@ -418,6 +493,10 @@ impl I18nManager {
         map.insert("theme.forest".to_string(), "Forest".to_string());
         map.insert("theme.monokai".to_string(), "Monokai".to_string());
         map.insert("theme.nord".to_string(), "Nord".to_string());
+        map.insert("theme.dracula".to_string(), "Dracula".to_string());
+        map.insert("theme.tokyonight".to_string(), "Tokyo Night".to_string());
+        map.insert("theme.gruvbox".to_string(), "Gruvbox".to_string());
+        map.insert("theme.latte".to_string(), "Latte".to_string());
 
         // Language
         map.insert("language.title".to_string(), "Language".to_string());
@@ -442,6 +521,14 @@ impl I18nManager {
         map.insert("dialog.save_to_collections".to_string(), "Save to Collections".to_string());
         map.insert("dialog.title_label".to_string(), "Title".to_string());
         map.insert("dialog.cancel".to_string(), "Cancel".to_string());
+        map.insert("dialog.new_folder".to_string(), "New Folder".to_string());
+        map.insert("dialog.new_folder_hint".to_string(), "Create a new folder in your collections".to_string());
+        map.insert("dialog.rename_folder".to_string(), "Rename Folder".to_string());
+        map.insert("dialog.rename_folder_hint".to_string(), "Change the folder name".to_string());
+        map.insert("dialog.rename_request".to_string(), "Rename Request".to_string());
+        map.insert("dialog.rename_request_hint".to_string(), "Change the request name".to_string());
+        map.insert("dialog.folder_name".to_string(), "Folder Name".to_string());
+        map.insert("dialog.request_name".to_string(), "Request Name".to_string());
         map.insert("dialog.save".to_string(), "Save".to_string());
 
         // Context Menu
@@ -464,6 +551,41 @@ impl I18nManager {
         map.insert("sidebar.new_request".to_string(), "New Request".to_string());
 
         // Settings
+        map.insert("settings.title".to_string(), "Settings".to_string());
+        map.insert("settings.about".to_string(), "About".to_string());
+        map.insert("update.current".to_string(), "Current version".to_string());
+        map.insert("update.check".to_string(), "Check for updates".to_string());
+        map.insert("update.recheck".to_string(), "Check again".to_string());
+        map.insert("update.checking".to_string(), "Checking for updates…".to_string());
+        map.insert("update.up_to_date".to_string(), "Up to date".to_string());
+        map.insert("update.available".to_string(), "New version available".to_string());
+        map.insert("update.download".to_string(), "Download".to_string());
+        map.insert("update.release_page".to_string(), "Open release page".to_string());
+        map.insert("update.failed".to_string(), "Check failed".to_string());
+        map.insert("update.hint".to_string(), "Fetch the latest version from GitHub Releases".to_string());
+        map.insert("update.published".to_string(), "Published".to_string());
+        map.insert("settings.timeout".to_string(), "Timeout".to_string());
+        map.insert("settings.retries".to_string(), "Retries".to_string());
+        map.insert("settings.follow_redirects".to_string(), "Follow Redirects".to_string());
+        map.insert("settings.verify_ssl".to_string(), "Verify SSL Certificate".to_string());
+        map.insert("settings.unit_seconds".to_string(), "s".to_string());
+        map.insert("settings.unit_times".to_string(), "times".to_string());
+        map.insert("auth.type".to_string(), "Auth Type".to_string());
+        map.insert("auth.none_hint".to_string(), "This request does not use any authorization.".to_string());
+        map.insert("auth.token".to_string(), "Token".to_string());
+        map.insert("auth.username".to_string(), "Username".to_string());
+        map.insert("auth.password".to_string(), "Password".to_string());
+        map.insert("auth.key".to_string(), "Key".to_string());
+        map.insert("auth.value".to_string(), "Value".to_string());
+        map.insert("auth.add_to".to_string(), "Add To".to_string());
+        map.insert("auth.bearer_hint".to_string(), "Adds an Authorization: Bearer <token> header".to_string());
+        map.insert("auth.basic_hint".to_string(), "Uses HTTP Basic auth; the credentials are Base64 encoded".to_string());
+        map.insert("auth.apikey_hint".to_string(), "Adds the key/value pair to the request header or URL query".to_string());
+        map.insert("auth.effective".to_string(), "Effective".to_string());
+        map.insert("env.vars".to_string(), "Variables".to_string());
+        map.insert("env.vars_count".to_string(), "{} variables".to_string());
+        map.insert("env.no_vars".to_string(), "No variables in this environment".to_string());
+        map.insert("env.name_required".to_string(), "Environment name is required".to_string());
         map.insert("settings.general".to_string(), "General".to_string());
         map.insert("settings.auto_save".to_string(), "Auto Save".to_string());
         map.insert("settings.proxy".to_string(), "Proxy".to_string());
@@ -515,5 +637,47 @@ mod tests {
 
         i18n.set_language("zh-CN");
         assert_eq!(i18n.get("button.send"), "发送");
+    }
+
+    /// 表单/表格列标题必须中英都有（form-data 的 键/类型/值、urlencoded 与响应头的 键/值）
+    #[test]
+    fn test_table_header_keys_exist_in_both_languages() {
+        for lang in ["zh-CN", "en-US"] {
+            let i18n = I18nManager::new(lang);
+            for key in ["ui.key", "ui.value", "ui.type"] {
+                assert_ne!(i18n.get(key), key, "{lang} 缺少翻译键：{key}");
+            }
+        }
+        // 中文下 ui.type 不能还是英文 "Type"
+        let zh = I18nManager::new("zh-CN");
+        assert_eq!(zh.get("ui.type"), "类型");
+        assert_eq!(zh.get("ui.key"), "键");
+        assert_eq!(zh.get("ui.value"), "值");
+    }
+
+    /// 「关于 / 更新检查」用到的键中英必须都齐 —— 少一个界面上就直接显示键名了。
+    /// （get() 取不到时会原样返回 key，正好拿来判断）
+    #[test]
+    fn test_update_keys_exist_in_both_languages() {
+        let keys = [
+            "settings.about",
+            "update.current",
+            "update.check",
+            "update.recheck",
+            "update.checking",
+            "update.up_to_date",
+            "update.available",
+            "update.download",
+            "update.release_page",
+            "update.failed",
+            "update.hint",
+            "update.published",
+        ];
+        for lang in ["zh-CN", "en-US"] {
+            let i18n = I18nManager::new(lang);
+            for key in keys {
+                assert_ne!(i18n.get(key), key, "{lang} 缺少翻译键：{key}");
+            }
+        }
     }
 }

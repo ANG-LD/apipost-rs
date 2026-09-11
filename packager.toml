@@ -3,15 +3,32 @@ product-name = "ApiPost-Rs"
 version = "0.1.0"
 identifier = "com.apipost-rs.apipost-rs"
 description = "A Postman alternative built with Rust and gpui"
-homepage = "https://github.com/apipost-rs/apipost-rs"
+homepage = "https://github.com/ANG-LD/apipost-rs"
 authors = ["Lidong yang <735615901@qq.com>"]
 publisher = "Lidong yang <735615901@qq.com>"
 license-file = "LICENSE"
 copyright = "Copyright 2025 apipost-rs team"
 category = "Development"
 
+# 三个平台的图标都要给，缺一个那个平台的图标就是默认白板：
+#   Windows -> .ico（安装器 + exe 资源，桌面快捷方式图标取自 exe）
+#   macOS   -> .icns（App 包 CFBundleIconFile）
+#   Linux   -> .png（deb 装到 /usr/share/icons/hicolor/<尺寸>/apps/）
+#
+# Linux 的 PNG 必须是 hicolor 主题的标准尺寸：cargo-packager 按图片自身像素
+# 决定装进哪个目录，用 1024x1024 的母版会装到 hicolor/1024x1024/ 下，而
+# 该目录不在主题的 index.theme 里 → Icon= 解析不到 → 桌面/启动器图标空白。
+# 所以这里列的是从母版缩出的标准尺寸（assets/icons/ 下）。
 icons = [
-    "assets/icon.png",
+    "assets/icons/512x512.png",
+    "assets/icons/256x256.png",
+    "assets/icons/128x128.png",
+    "assets/icons/64x64.png",
+    "assets/icons/48x48.png",
+    "assets/icons/32x32.png",
+    "assets/icons/16x16.png",
+    "assets/icon.ico",
+    "assets/icon.icns",
 ]
 
 out-dir = "./dist"
@@ -21,10 +38,18 @@ binaries-dir = "target/release"
 [linux]
 generate-desktop-entry = true
 
+[macos]
+# gpui / winit 与 wgpu 的最低要求；写死避免默认值过高把老系统挡在门外
+minimum-system-version = "11.0"
+
 [deb]
 depends = ["libwebkit2gtk-4.1-0", "libgtk-3-0", "libglib2.0-0", "libc6", "libx11-6", "libwayland-client0"]
+# 用仓库里自己写的 desktop 条目（带 Keywords / StartupWMClass，任务栏图标分组更准）
+desktop-template = "assets/apipost-rs.desktop"
 section = "utils"
 priority = "optional"
 
 [nsis]
 installer-mode = "currentUser"
+# 安装器自己的图标（安装向导窗口/控制面板里显示的图标）
+installer-icon = "assets/icon.ico"

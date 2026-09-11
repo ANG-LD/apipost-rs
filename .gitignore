@@ -1,6 +1,7 @@
 # Rust build output
 /target/
-Cargo.lock
+# Cargo.lock 不忽略：这是二进制应用，且依赖里有 branch = "main" 的 git 依赖，
+# 不锁定版本的话各平台 CI 可能解析到不同提交，出现"本地能编、CI 编不过"。
 
 # IDE
 .idea/

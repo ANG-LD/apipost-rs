@@ -4,6 +4,11 @@
 
 use crate::app::database::Environment;
 use crate::app::AppState;
+use crate::ui::components::{
+    danger_button, ghost_button, icon_button, icon_text_button, primary_button, primary_button_sm,
+    CONTROL_H,
+    GAP_M, GAP_S, GAP_XS,
+};
 use crate::ui::Theme;
 use gpui::*;
 use gpui::prelude::FluentBuilder;
@@ -30,6 +35,8 @@ pub struct EnvDialogState {
     pub global_vars: Vec<(Entity<InputState>, Entity<InputState>)>,
     /// 保存后置为 true，MainView 检测后刷新环境列表
     pub needs_refresh: bool,
+    /// 环境名为空时高亮输入框并给出提示
+    pub name_error: bool,
 }
 
 impl EnvDialogState {
@@ -58,6 +65,7 @@ impl EnvDialogState {
             global_var_count: 1,
             global_vars,
             needs_refresh: false,
+            name_error: false,
         }
     }
 
@@ -71,13 +79,15 @@ impl EnvDialogState {
         self.env_id = env.map(|e| e.id.clone());
         self.is_edit = env.is_some();
         self.is_global_only = false;
+        self.name_error = false;
 
         if let Some(env) = env {
             self.name_input.update(cx, |s, cx| {
                 s.set_value(&env.name, window, cx);
             });
             if let Ok(vars) = serde_json::from_str::<HashMap<String, String>>(&env.variables) {
-                self.current_var_count = vars.len().min(MAX_VAR_SLOTS);
+                // 至少留一行，空环境也能直接开始输入
+                self.current_var_count = vars.len().min(MAX_VAR_SLOTS).max(1);
                 for (i, (k, v)) in vars.iter().enumerate() {
                     if i >= MAX_VAR_SLOTS { break; }
                     let (ref ki, ref vi) = self.current_vars[i];
@@ -89,7 +99,7 @@ impl EnvDialogState {
             self.name_input.update(cx, |s, cx| {
                 s.set_value("", window, cx);
             });
-            self.current_var_count = 0;
+            self.current_var_count = 1;
         }
         // 清除多余的当前环境变量槽位（避免上次编辑的残留数据）
         for i in self.current_var_count..MAX_VAR_SLOTS {
@@ -119,6 +129,7 @@ impl EnvDialogState {
         self.is_global_only = true;
         self.is_edit = false;
         self.env_id = None;
+        self.name_error = false;
         self.name_input.update(cx, |s, cx| s.set_value("", window, cx));
         self.current_var_count = 0;
         for i in 0..MAX_VAR_SLOTS {
@@ -191,7 +202,8 @@ pub fn render_env_dialog_overlay(
 
     let is_global_only = st.is_global_only;
     let title = if st.is_global_only {
-        "全局变量".to_string()
+        // 原来这里写死了中文，英文界面下不会切换
+        t("env.global_vars")
     } else if st.is_edit {
         t("env.edit")
     } else {
@@ -203,6 +215,11 @@ pub fn render_env_dialog_overlay(
     let global_var_count = st.global_var_count;
     let current_slots: Vec<(Entity<InputState>, Entity<InputState>)> = st.current_vars.clone();
     let global_slots: Vec<(Entity<InputState>, Entity<InputState>)> = st.global_vars.clone();
+    // 名称当前是否为空（用户输入后错误态自动消失，不必等再次点击保存）
+    let name_empty = st.name_input.read(cx).value().trim().is_empty();
+    let st_name_error = st.name_error && name_empty;
+    let is_edit = st.is_edit;
+    let editing_env_id = st.env_id.clone();
     drop(st);
 
     let state_c = state.clone();
@@ -221,6 +238,9 @@ pub fn render_env_dialog_overlay(
     let var_name_label = t("env.name");
     let var_value_label = t("env.value");
     let empty_hint = t("env.empty_hint");
+    let name_required_label = t("env.name_required");
+    let vars_count = |n: usize| t("env.vars_count").replace("{}", &n.to_string());
+    let name_error = st_name_error;
 
     div()
         .absolute()
@@ -272,22 +292,29 @@ pub fn render_env_dialog_overlay(
                         .child({
                             let s = state_c.clone();
                             let eid = entity_id;
-                            Button::new("close-env-dialog")
-                                .icon(IconName::Close)
-                                .small()
-                                .text_color(theme.muted_foreground)
-                                .on_click(move |_, _, cx| {
-                                    if let Ok(mut st) = s.lock() {
-                                        st.visible = false;
-                                    }
-                                    cx.notify(eid);
-                                })
+                            icon_button(
+                                "close-env-dialog",
+                                IconName::Close,
+                                theme,
+                                theme.muted_foreground,
+                                theme.foreground,
+                            )
+                            .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                                if let Ok(mut st) = s.lock() {
+                                    st.visible = false;
+                                }
+                                cx.notify(eid);
+                            })
                         }),
                 )
-                // 内容区
+                // 内容区：高度跟随变量行数，新建时不会留一大片空白
                 .child(
                     div()
-                        .h(px(420.0))
+                        .h(px(if is_global_only {
+                            (180.0 + 30.0 * global_var_count.max(1) as f32).min(420.0)
+                        } else {
+                            (180.0 + 30.0 * current_var_count.max(1) as f32).min(420.0)
+                        }))
                         .px_5()
                         .py_4()
                         .flex_col()
@@ -296,29 +323,40 @@ pub fn render_env_dialog_overlay(
                         // 环境名称（仅非全局模式显示）
                         .when(!is_global_only, |d| {
                             d.child(
-                                div().flex_col().gap_1p5()
+                                div().flex_col().gap(px(GAP_XS))
                                     .child(
                                         div()
                                             .flex()
                                             .items_center()
-                                            .gap_1p5()
-                                            .child(Icon::new(IconName::File).small().text_color(theme.accent))
+                                            .gap(px(GAP_XS))
+                                            .child(Icon::new(IconName::Globe).xsmall().text_color(theme.accent))
                                             .child(
                                                 div()
-                                                    .text_xs()
-                                                    .font_weight(FontWeight(500.0))
+                                                    .text_size(px(11.0))
+                                                    .font_weight(FontWeight(600.0))
                                                     .text_color(theme.muted_foreground)
                                                     .child(env_name_label.clone()),
                                             ),
                                     )
                                     .child(
                                         Input::new(&name_input)
-                                            .h(px(42.0))
+                                            .h(px(CONTROL_H))
                                             .w_full()
                                             .rounded_md()
-                                            .bg(theme.background)
+                                            .border_1()
+                                            // 名称为空时红框提示，而不是点了保存什么反应都没有
+                                            .border_color(if name_error { theme.error } else { theme.border })
+                                            .bg(theme.input_background)
                                             .text_color(theme.foreground),
-                                    ),
+                                    )
+                                    .when(name_error, |d| {
+                                        d.child(
+                                            div()
+                                                .text_size(px(11.0))
+                                                .text_color(theme.error)
+                                                .child(name_required_label.clone()),
+                                        )
+                                    }),
                             )
                         })
                         // 当前环境变量（仅非全局模式显示）
@@ -326,8 +364,9 @@ pub fn render_env_dialog_overlay(
                             d.child(render_var_section(
                                 &state_c, &current_vars_label,
                                 "add-cur", true, current_var_count,
-                                &current_slots, theme, entity_id, IconName::Globe,
+                                &current_slots, theme, entity_id,
                                 &add_var_label, &var_name_label, &var_value_label, &empty_hint,
+                                &vars_count(current_var_count),
                             ))
                         })
                         // 全局变量（仅全局模式显示）
@@ -335,8 +374,9 @@ pub fn render_env_dialog_overlay(
                             d.child(render_var_section(
                                 &state_c, &global_vars_label,
                                 "add-glob", false, global_var_count,
-                                &global_slots, theme, entity_id, IconName::Star,
+                                &global_slots, theme, entity_id,
                                 &add_var_label, &var_name_label, &var_value_label, &empty_hint,
+                                &vars_count(global_var_count),
                             ))
                         }),
                 )
@@ -346,19 +386,59 @@ pub fn render_env_dialog_overlay(
                         .h(px(48.0))
                         .flex()
                         .flex_row()
-                        .justify_end()
+                        .justify_between()
                         .items_center()
-                        .gap_3()
+                        .gap(px(GAP_M))
                         .px_5()
                         .border_t_1()
                         .border_color(theme.border)
                         .bg(theme.muted_background)
-                        .child({
+                        // 编辑已有环境时提供删除入口（原来只藏在列表的「⋯」菜单里）
+                        .child(if is_edit && !is_global_only {
+                            let del_app = app_state.clone();
+                            let del_state = state_c.clone();
+                            let del_id = editing_env_id.clone();
+                            let eid = entity_id;
+                            danger_button(
+                                "delete-env-btn",
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap(px(GAP_XS))
+                                    .child(Icon::new(IconName::Delete).xsmall())
+                                    .child(t("env.delete")),
+                                theme,
+                            )
+                            .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                                if let Some(id) = del_id.as_ref() {
+                                    if let Ok(app) = del_app.lock() {
+                                        if let Err(e) = app.db.delete_environment(id) {
+                                            log::error!("删除环境失败: {}", e);
+                                        }
+                                    }
+                                }
+                                if let Ok(mut st) = del_state.lock() {
+                                    st.visible = false;
+                                    st.needs_refresh = true;
+                                }
+                                cx.notify(eid);
+                            })
+                            .into_any_element()
+                        } else {
+                            div().into_any_element()
+                        })
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap(px(GAP_M))
+                                .child({
                             let s = state_c.clone();
                             let eid = entity_id;
-                            Button::new("cancel-env-btn")
-                                .label(cancel_label.clone())
-                                .on_click(move |_, _, cx| {
+                            ghost_button("cancel-env-btn", cancel_label.clone(), theme)
+                                .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                                     if let Ok(mut st) = s.lock() {
                                         st.visible = false;
                                     }
@@ -366,18 +446,26 @@ pub fn render_env_dialog_overlay(
                                 })
                         })
                         .child(
-                            Button::new("save-env-btn")
-                                .icon(IconName::Check)
-                                .label(save_env_label.clone())
-                                .bg(theme.accent)
-                                .text_color(rgb(0xffffff))
-                                .rounded_md()
-                                .on_click(move |_, _window, cx| {
-                                    let st = save_state.lock().unwrap();
+                            primary_button(
+                                "save-env-btn",
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap(px(GAP_XS))
+                                    .child(Icon::new(IconName::Check).xsmall())
+                                    .child(save_env_label.clone()),
+                                theme,
+                            )
+                            .on_mouse_down(MouseButton::Left, move |_, _window, cx| {
+                                    let mut st = save_state.lock().unwrap();
                                     let is_global_only = st.is_global_only;
                                     let env_name = st.name_input.read(cx).value().to_string();
                                     if !is_global_only && env_name.trim().is_empty() {
+                                        // 提示“名称不能为空”，而不是静默失败
+                                        st.name_error = true;
                                         drop(st);
+                                        cx.notify(save_entity_id);
                                         return;
                                     }
                                     let current_map: HashMap<String, String> = (0..st.current_var_count)
@@ -448,11 +536,50 @@ pub fn render_env_dialog_overlay(
                                     cx.notify(save_entity_id);
                                 }),
                         ),
+                        ),
                 ),
         )
         .into_any_element()
 }
 
+/// 删除第 i 行变量：后面的行整体上移，最后一行清空
+///
+/// 变量输入框是预先分配好的固定槽位（MAX_VAR_SLOTS），所以删除只能靠“搬移”，
+/// 原来这段逻辑在渲染闭包里写了两遍（当前变量 + 全局变量），这里收拢成一处。
+fn remove_var_row(
+    st: &mut EnvDialogState,
+    is_current: bool,
+    i: usize,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let (count, slots) = if is_current {
+        (st.current_var_count, st.current_vars.clone())
+    } else {
+        (st.global_var_count, st.global_vars.clone())
+    };
+    if i >= count {
+        return;
+    }
+    for j in i..count.saturating_sub(1) {
+        let (ref nk, ref nv) = slots[j + 1];
+        let (ref ck, ref cv) = slots[j];
+        let (nk_v, nv_v) = (nk.read(cx).value().to_string(), nv.read(cx).value().to_string());
+        ck.update(cx, |s, cx| s.set_value(&nk_v, window, cx));
+        cv.update(cx, |s, cx| s.set_value(&nv_v, window, cx));
+    }
+    if let Some((lk, lv)) = slots.get(count - 1) {
+        lk.update(cx, |s, cx| s.set_value("", window, cx));
+        lv.update(cx, |s, cx| s.set_value("", window, cx));
+    }
+    if is_current {
+        st.current_var_count -= 1;
+    } else {
+        st.global_var_count -= 1;
+    }
+}
+
+/// 变量编辑区：标题（图标 + 名称 + 数量 + 添加按钮）+ 变量卡片
 fn render_var_section(
     state: &Arc<Mutex<EnvDialogState>>,
     label: &str,
@@ -462,194 +589,221 @@ fn render_var_section(
     slots: &[(Entity<InputState>, Entity<InputState>)],
     theme: &Theme,
     entity_id: gpui::EntityId,
-    section_icon: IconName,
     add_label: &str,
     key_label: &str,
     value_label: &str,
     empty_hint: &str,
+    count_label: &str,
 ) -> gpui::Div {
     let s_add = state.clone();
+    let s_add_empty = state.clone();
     let s_del = state.clone();
     let label = label.to_string();
     let add_label = add_label.to_string();
     let key_label = key_label.to_string();
     let value_label = value_label.to_string();
     let empty_hint = empty_hint.to_string();
+    let count_label = count_label.to_string();
+    let at_cap = count >= MAX_VAR_SLOTS;
+    let input_h = CONTROL_H - 4.0;
 
     div()
         .flex_col()
-        .gap_2p5()
+        .gap(px(GAP_S))
         // 节标题行
         .child(
             div()
                 .flex()
                 .flex_row()
-                .justify_between()
                 .items_center()
+                .gap(px(GAP_S))
+                .child(
+                    Icon::new(if is_current { IconName::Globe } else { IconName::Star })
+                        .small()
+                        .text_color(theme.accent),
+                )
                 .child(
                     div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(Icon::new(section_icon).small().text_color(theme.accent))
-                        .child(
-                            div()
-                                .text_xs()
-                                .font_weight(FontWeight(500.0))
-                                .text_color(theme.muted_foreground)
-                                .child(label.clone()),
-                        ),
+                        .text_size(px(12.0))
+                        .font_weight(FontWeight(600.0))
+                        .text_color(theme.foreground)
+                        .child(label),
                 )
-                .child({
-                    Button::new(btn_id)
-                        .icon(IconName::Plus)
-                        .label(add_label.clone())
-                        .small()
-                        .compact()
-                        .my(px(2.0))
-                        .text_color(theme.accent)
-                        .on_click(move |_, _, cx| {
-                            if let Ok(mut st) = s_add.lock() {
-                                if is_current {
-                                    if st.current_var_count < MAX_VAR_SLOTS {
-                                        st.current_var_count += 1;
-                                    }
-                                } else {
-                                    if st.global_var_count < MAX_VAR_SLOTS {
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(count_label),
+                )
+                .child(div().flex_1())
+                // 槽位用满时不再显示添加按钮
+                .when(!at_cap, |d| {
+                    d.child(
+                        primary_button_sm(
+                            btn_id,
+                            div()
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap(px(2.0))
+                                .text_size(px(11.0))
+                                .child(Icon::new(IconName::Plus).xsmall())
+                                .child(add_label.clone()),
+                            theme,
+                        )
+                            // 上下各留 8px，不和上方输入框、下方变量卡片贴在一起
+                            .my(px(8.0))
+                            .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                                if let Ok(mut st) = s_add.lock() {
+                                    if is_current {
+                                        if st.current_var_count < MAX_VAR_SLOTS {
+                                            st.current_var_count += 1;
+                                        }
+                                    } else if st.global_var_count < MAX_VAR_SLOTS {
                                         st.global_var_count += 1;
                                     }
                                 }
-                            }
-                            cx.notify(entity_id);
-                        })
+                                cx.notify(entity_id);
+                            }),
+                    )
                 }),
         )
-        // 变量卡片容器
-        .child({
-            if count == 0 {
-                div()
-                    .ml(px(20.0))
-                    .rounded_lg()
-                    .border_1()
-                    .border_color(theme.border)
-                    .p_5()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(empty_hint.clone())
-            } else {
-                div()
-                    .ml(px(20.0))
-                    .rounded_lg()
-                    .border_1()
-                    .border_color(theme.border)
-                    .overflow_hidden()
-                    .flex_col()
-                    // 列头
-                    .child(
+        // 变量卡片
+        .child(
+            div()
+                .rounded_lg()
+                .border_1()
+                .border_color(theme.border)
+                .overflow_hidden()
+                .flex_col()
+                // 列头
+                .when(count > 0, |d| {
+                    d.child(
                         div()
                             .flex()
                             .flex_row()
-                            .px_3()
-                            .py_1p5()
+                            .items_center()
+                            .gap(px(GAP_S))
+                            .px(px(GAP_S + 2.0))
+                            .py(px(GAP_XS))
                             .bg(theme.muted_background)
                             .border_b_1()
                             .border_color(theme.border)
                             .child(
                                 div()
                                     .flex_1()
-                                    .text_xs()
-                                    .font_weight(FontWeight(500.0))
+                                    .text_size(px(11.0))
+                                    .font_weight(FontWeight(600.0))
                                     .text_color(theme.muted_foreground)
                                     .child(key_label.clone()),
                             )
-                            .child(div().w(px(12.0)))
                             .child(
                                 div()
+                                    .w(px(input_h))
                                     .flex_1()
-                                    .text_xs()
-                                    .font_weight(FontWeight(500.0))
+                                    .text_size(px(11.0))
+                                    .font_weight(FontWeight(600.0))
                                     .text_color(theme.muted_foreground)
                                     .child(value_label.clone()),
                             )
-                            .child(div().w(px(32.0))),
+                            .child(div().w(px(22.0))),
                     )
-                    .children(
-                        (0..count).map(move |i| {
-                            let (ref k, ref v) = slots[i];
-                            let s = s_del.clone();
-                            let theme = theme.clone();
-                            div()
-                                .flex()
-                                .flex_row()
-                                .gap_3()
-                                .items_center()
-                                .px_3()
-                                .py_2p5()
-                                .my(px(2.0))
-                                .when(i > 0, |d| d.border_t_1().border_color(theme.border))
-                                .bg(theme.background)
-                                .hover(|s| s.bg(theme.muted_background))
-                                .child(
-                                    Input::new(k)
-                                        .h(px(40.0))
-                                        .flex_1()
-                                        .rounded_md()
-                                        .bg(theme.background)
-                                        .text_color(theme.foreground),
-                                )
-                                .child(
-                                    Input::new(v)
-                                        .h(px(40.0))
-                                        .flex_1()
-                                        .rounded_md()
-                                        .bg(theme.background)
-                                        .text_color(theme.foreground),
-                                )
-                                .child({
-                                    Button::new(format!("del-var-{}-{}", if is_current { "c" } else { "g" }, i))
-                                        .icon(IconName::Delete)
-                                        .small()
-                                        .text_color(theme.muted_foreground)
-                                        .on_click(move |_, window, cx| {
-                                            if let Ok(mut st) = s.lock() {
-                                                if is_current && i < st.current_var_count {
-                                                    for j in i..st.current_var_count.saturating_sub(1) {
-                                                        let (ref next_k, ref next_v) = st.current_vars[j + 1].clone();
-                                                        let (ref cur_k, ref cur_v) = st.current_vars[j].clone();
-                                                        let nk = next_k.read(cx).value().to_string();
-                                                        let nv = next_v.read(cx).value().to_string();
-                                                        cur_k.update(cx, |s, cx| s.set_value(&nk, window, cx));
-                                                        cur_v.update(cx, |s, cx| s.set_value(&nv, window, cx));
-                                                    }
-                                                    let last = st.current_var_count - 1;
-                                                    let (ref lk, ref lv) = st.current_vars[last].clone();
-                                                    lk.update(cx, |s, cx| s.set_value("", window, cx));
-                                                    lv.update(cx, |s, cx| s.set_value("", window, cx));
-                                                    st.current_var_count -= 1;
-                                                } else if i < st.global_var_count && st.global_var_count > 1 {
-                                                    for j in i..st.global_var_count.saturating_sub(1) {
-                                                        let (ref next_k, ref next_v) = st.global_vars[j + 1].clone();
-                                                        let (ref cur_k, ref cur_v) = st.global_vars[j].clone();
-                                                        let nk = next_k.read(cx).value().to_string();
-                                                        let nv = next_v.read(cx).value().to_string();
-                                                        cur_k.update(cx, |s, cx| s.set_value(&nk, window, cx));
-                                                        cur_v.update(cx, |s, cx| s.set_value(&nv, window, cx));
-                                                    }
-                                                    let last = st.global_var_count - 1;
-                                                    let (ref lk, ref lv) = st.global_vars[last].clone();
-                                                    lk.update(cx, |s, cx| s.set_value("", window, cx));
-                                                    lv.update(cx, |s, cx| s.set_value("", window, cx));
-                                                    st.global_var_count -= 1;
-                                                }
-                                            }
-                                            cx.notify(entity_id);
-                                        })
-                                })
-                        })
+                })
+                .children((0..count).map(move |i| {
+                    let (ref k, ref v) = slots[i];
+                    let s = s_del.clone();
+                    let theme = theme.clone();
+                    div()
+                        .w_full()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(GAP_S))
+                        .px(px(GAP_S + 2.0))
+                        .py(px(GAP_S))
+                        .when(i > 0, |d| d.border_t_1().border_color(theme.border))
+                        .child(
+                            Input::new(k)
+                                .h(px(input_h))
+                                .flex_1()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(theme.border)
+                                .bg(theme.input_background)
+                                .text_color(theme.foreground),
+                        )
+                        .child(
+                            Input::new(v)
+                                .h(px(input_h))
+                                .flex_1()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(theme.border)
+                                .bg(theme.input_background)
+                                .text_color(theme.foreground),
+                        )
+                        .child(
+                            icon_button(
+                                SharedString::from(format!(
+                                    "del-var-{}-{}",
+                                    if is_current { "c" } else { "g" },
+                                    i
+                                )),
+                                IconName::Delete,
+                                &theme,
+                                theme.muted_foreground,
+                                theme.error,
+                            )
+                            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                if let Ok(mut st) = s.lock() {
+                                    remove_var_row(&mut st, is_current, i, window, cx);
+                                }
+                                cx.notify(entity_id);
+                            }),
+                        )
+                }))
+                // 空状态：整块可点，直接加一行变量
+                .when(count == 0, |d| {
+                    let s_empty = s_add_empty.clone();
+                    d.child(
+                        div()
+                            .id(SharedString::from(format!("empty-{}-add", btn_id)))
+                            .w_full()
+                            .px(px(GAP_S + 2.0))
+                            .py(px(GAP_S))
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .justify_center()
+                            .gap(px(GAP_XS))
+                            .rounded_md()
+                            .border_1()
+                            .border_color(theme.border)
+                            .text_size(px(11.0))
+                            .text_color(theme.accent)
+                            .cursor_pointer()
+                            .hover(move |st| st.bg(theme.muted_background))
+                            .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                                if let Ok(mut st) = s_empty.lock() {
+                                    if is_current {
+                                        if st.current_var_count < MAX_VAR_SLOTS {
+                                            st.current_var_count += 1;
+                                        }
+                                    } else if st.global_var_count < MAX_VAR_SLOTS {
+                                        st.global_var_count += 1;
+                                    }
+                                }
+                                cx.notify(entity_id);
+                            })
+                            .child(Icon::new(IconName::Plus).xsmall())
+                            .child(add_label.clone())
+                            .child(
+                                div()
+                                    .text_size(px(10.0))
+                                    .text_color(theme.muted_foreground)
+                                    .child(empty_hint.clone()),
+                            ),
                     )
-            }
-        })
+                }),
+        )
 }

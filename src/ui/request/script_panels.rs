@@ -11,7 +11,7 @@ pub fn render_pre_request_panel(
     _window: &mut Window,
     _cx: &mut Context<MainView>,
 ) -> impl IntoElement {
-    let theme = Theme::from_str(&this.app_state.lock().unwrap().theme_name);
+    let theme = this.cached_theme.clone();
     div()
         .flex_col()
         .flex_1()
@@ -48,7 +48,7 @@ pub fn render_tests_panel(
     _window: &mut Window,
     _cx: &mut Context<MainView>,
 ) -> impl IntoElement {
-    let theme = Theme::from_str(&this.app_state.lock().unwrap().theme_name);
+    let theme = this.cached_theme.clone();
     div()
         .flex_col()
         .flex_1()

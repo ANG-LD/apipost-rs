@@ -638,18 +638,27 @@ impl Database {
 
     /// 级联删除文件夹（删除所有子文件夹，子请求移回根目录）
     pub fn delete_folder_cascade(&self, id: &str) -> Result<()> {
-        let conn = self.conn.lock()
+        let mut conn = self.conn.lock()
             .map_err(|_| anyhow::anyhow!("数据库锁中毒"))?;
-        // 递归收集所有子孙文件夹 ID
-        let all_ids = self.collect_descendant_folder_ids(id)?;
+        // 递归收集所有子孙文件夹 ID。
+        //
+        // 这里必须用 _impl 版本（它假定调用方已持锁）：public 的
+        // collect_descendant_folder_ids 会再 `self.conn.lock()` 一次，而
+        // std::sync::Mutex 不可重入 —— 结果是自死锁，界面上表现为"点删除没反应"。
+        let mut all_ids = vec![id.to_string()];
+        Self::collect_descendant_ids_impl(&conn, id, &mut all_ids)?;
+        // 放进事务：移动请求与删除文件夹要么全成、要么全不成，避免删一半留下孤儿
+        let tx = conn.transaction()?;
         // 将所有这些文件夹下的请求移回根目录
         for fid in &all_ids {
-            conn.execute("UPDATE saved_requests SET folder_id = NULL WHERE folder_id = ?1", params![fid])?;
+            tx.execute("UPDATE saved_requests SET folder_id = NULL WHERE folder_id = ?1", params![fid])?;
         }
         // 删除所有子孙文件夹
         for fid in &all_ids {
-            conn.execute("DELETE FROM folders WHERE id = ?1", params![fid])?;
+            tx.execute("DELETE FROM folders WHERE id = ?1", params![fid])?;
         }
+        tx.commit()?;
+        log::info!("级联删除文件夹: id={}, 含子孙共 {} 个", id, all_ids.len());
         Ok(())
     }
 
@@ -760,6 +769,29 @@ pub struct SavedRequest {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    /// 回归测试：级联删除文件夹不能死锁。
+    ///
+    /// 曾经 delete_folder_cascade 先 `self.conn.lock()`，再调用内部同样会
+    /// `self.conn.lock()` 的 collect_descendant_folder_ids —— std::sync::Mutex
+    /// 不可重入，于是自死锁：界面上表现为"点删除没反应"。
+    /// （对照：add_history 在同一处特意 `drop(conn);` 后才调用 prune_history。）
+    #[test]
+    fn delete_folder_cascade_deletes_whole_subtree() {
+        let t = TestDb::new();
+        let parent = t.db.create_folder("父文件夹", None).unwrap();
+        let child = t.db.create_folder("子文件夹", Some(&parent.id)).unwrap();
+        let grand = t.db.create_folder("孙文件夹", Some(&child.id)).unwrap();
+        // 无关文件夹不应被误删
+        let other = t.db.create_folder("无关文件夹", None).unwrap();
+
+        t.db.delete_folder_cascade(&parent.id).unwrap();
+
+        let ids: Vec<String> = t.db.get_folders().unwrap().into_iter().map(|f| f.id).collect();
+        assert!(!ids.contains(&parent.id) && !ids.contains(&child.id) && !ids.contains(&grand.id),
+            "父/子/孙文件夹都应删除，实际剩余: {:?}", ids);
+        assert!(ids.contains(&other.id), "无关文件夹不能被删掉");
+    }
 
     struct TestDb {
         db: Database,

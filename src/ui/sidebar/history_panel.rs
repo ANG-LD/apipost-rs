@@ -13,7 +13,7 @@ use gpui_component::IndexPath;
 
 pub fn render_history_panel(
     history: &[HistoryEntry],
-    t: impl Fn(&str) -> String,
+    t: impl Fn(&str) -> SharedString,
     cx: &mut Context<MainView>,
     theme: &Theme,
 ) -> impl IntoElement {
@@ -280,7 +280,7 @@ pub fn render_history_panel(
                                             .unwrap_or(0),
                                         cookies: Vec::new(),
                                     };
-                                    this.response = Some(response);
+                                    this.response = Some(Arc::new(response));
                                     this.response_raw_format = RawFormat::detect(
                                         content_type.as_deref(),
                                         &resp_body,

@@ -82,6 +82,7 @@ pub fn render_folder_dialog_overlay(
     app_state: &Arc<Mutex<AppState>>,
     theme: &Theme,
     entity_id: gpui::EntityId,
+    t: &dyn Fn(&str) -> SharedString,
     cx: &mut Context<crate::ui::MainView>,
 ) -> AnyElement {
     // 提前获取渲染所需的字段，尽早释放锁
@@ -94,13 +95,34 @@ pub fn render_folder_dialog_overlay(
         return div().into_any_element();
     }
 
-    let t = theme.clone();
-    let (title_text, title_icon): (&str, IconName) = if is_request {
-        ("重命名请求", IconName::File)
+    let th = theme.clone();
+    // 新建文件夹 / 重命名文件夹 / 重命名请求 共用一套版式，只换图标、标题、副标题和字段名
+    let (title_text, hint_text, field_label, title_icon): (
+        SharedString,
+        SharedString,
+        SharedString,
+        IconName,
+    ) = if is_request {
+        (
+            t("dialog.rename_request"),
+            t("dialog.rename_request_hint"),
+            t("dialog.request_name"),
+            IconName::File,
+        )
     } else if is_edit {
-        ("重命名文件夹", IconName::FolderClosed)
+        (
+            t("dialog.rename_folder"),
+            t("dialog.rename_folder_hint"),
+            t("dialog.folder_name"),
+            IconName::FolderClosed,
+        )
     } else {
-        ("新建文件夹", IconName::FolderClosed)
+        (
+            t("dialog.new_folder"),
+            t("dialog.new_folder_hint"),
+            t("dialog.folder_name"),
+            IconName::FolderClosed,
+        )
     };
 
     div()
@@ -114,7 +136,7 @@ pub fn render_folder_dialog_overlay(
             div()
                 .absolute()
                 .inset_0()
-                .bg(rgba(0x00000044))
+                .bg(rgba(0x00000066))
                 .on_mouse_down(MouseButton::Left, {
                     let s = state.clone();
                     let eid = entity_id;
@@ -131,34 +153,64 @@ pub fn render_folder_dialog_overlay(
             // 对话框卡片（阻止事件冒泡到背景遮罩）
             div()
                 .relative()
-                .w(px(420.0))
+                .w(px(440.0))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| {
                     cx.stop_propagation();
                 })
                 .rounded_lg()
-                .bg(t.background)
+                .bg(th.background)
                 .border(px(1.0))
-                .border_color(t.muted_background)
+                .border_color(th.muted_background)
                 .shadow_lg()
+                .overflow_hidden()
                 .flex_col()
                 .child(
-                    // 标题栏
+                    // 头部：图标徽章 + 标题/副标题 + 关闭
                     div()
                         .flex()
                         .flex_row()
-                        .items_center()
+                        .items_start()
                         .justify_between()
-                        .px_4()
-                        .py_3()
-                        .border_b(px(1.0))
-                        .border_color(t.muted_background)
+                        .gap_3()
+                        .px_5()
+                        .pt_5()
+                        .pb_4()
                         .child(
                             div()
                                 .flex()
+                                .flex_row()
                                 .items_center()
-                                .gap_2()
-                                .child(Icon::new(title_icon).small().text_color(t.accent))
-                                .child(div().font_semibold().text_color(t.foreground).child(title_text)),
+                                .gap_3()
+                                .child(
+                                    // 图标徽章：用强调色的低透明度底，视觉上比裸图标更像一个"模块"
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .w(px(36.0))
+                                        .h(px(36.0))
+                                        .rounded_md()
+                                        .bg(rgba(0x6366f11f))
+                                        .child(Icon::new(title_icon).small().text_color(th.accent)),
+                                )
+                                .child(
+                                    div()
+                                        .flex_col()
+                                        .gap_1()
+                                        .child(
+                                            div()
+                                                .text_base()
+                                                .font_semibold()
+                                                .text_color(th.foreground)
+                                                .child(title_text),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(th.muted_foreground)
+                                                .child(hint_text),
+                                        ),
+                                ),
                         )
                         .child(
                             Button::new("close-folder-dialog")
@@ -177,40 +229,44 @@ pub fn render_folder_dialog_overlay(
                         ),
                 )
                 .child(
-                    // 内容区
+                    // 内容区：字段名 + 输入框
                     div()
-                        .px_4()
-                        .py_4()
+                        .px_5()
+                        .pb_2()
                         .flex_col()
                         .gap_2()
                         .child(
                             div()
                                 .text_xs()
-                                .text_color(t.muted_foreground)
-                                .child("文件夹名称"),
+                                .font_semibold()
+                                .text_color(th.muted_foreground)
+                                .child(field_label),
                         )
                         .child(
+                            // 用 code_background 作输入框底色，和卡片背景拉开层次
                             Input::new(&name_input)
                                 .h(px(38.0))
                                 .w_full()
-                                .bg(t.background)
-                                .text_color(t.foreground),
+                                .rounded_md()
+                                .bg(th.code_background)
+                                .text_color(th.foreground),
                         ),
                 )
                 .child(
-                    // 底部按钮
+                    // 底部按钮：取消（次要）+ 保存（主要，强调色）
                     div()
                         .flex()
                         .flex_row()
                         .justify_end()
                         .gap_2()
-                        .px_4()
-                        .py_3()
-                        .border_t(px(1.0))
-                        .border_color(t.muted_background)
+                        .px_5()
+                        .pt_2()
+                        .pb_5()
                         .child(
                             Button::new("cancel-folder")
-                                .label("取消")
+                                .label(t("dialog.cancel"))
+                                .outline()
+                                .rounded_md()
                                 .on_click({
                                     let s = state.clone();
                                     let eid = entity_id;
@@ -227,7 +283,10 @@ pub fn render_folder_dialog_overlay(
                             let save_app = app_state.clone();
                             let save_entity_id = entity_id;
                             Button::new("save-folder")
-                                .label("保存")
+                                .label(t("dialog.save"))
+                                .bg(th.accent)
+                                .text_color(th.accent_foreground)
+                                .rounded_md()
                                 .on_click(move |_, _, cx| {
                                     let name_input = save_state.lock().unwrap().name_input.clone();
                                     let name = name_input.read(cx).value().to_string();

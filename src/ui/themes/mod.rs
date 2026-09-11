@@ -60,7 +60,7 @@ pub fn dark_theme() -> Theme {
 }
 
 /// 扩展Theme结构以包含更多颜色
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct Theme {
     pub name: String,
     pub background: gpui::Rgba,
@@ -246,6 +246,110 @@ pub fn nord_theme() -> Theme {
     }
 }
 
+/// Dracula — 紫调高对比，夜间长时间编码友好
+pub fn dracula_theme() -> Theme {
+    Theme {
+        name: "dracula".to_string(),
+        background: rgb(0x282a36),
+        foreground: rgb(0xf8f8f2),
+        muted_foreground: rgb(0x6272a4),
+        accent: rgb(0xbd93f9),
+        accent_foreground: rgb(0x282a36),
+        input_background: rgb(0x44475a),
+        border: rgb(0x6272a4),
+        muted_background: rgb(0x44475a),
+        sidebar_background: rgb(0x21222c),
+        code_background: rgb(0x282a36),
+        success: rgb(0x50fa7b),
+        warning: rgb(0xf1fa8c),
+        error: rgb(0xff5555),
+        json_key: rgb(0x8be9fd),
+        json_string: rgb(0xf1fa8c),
+        json_number: rgb(0xbd93f9),
+        json_boolean: rgb(0xff79c6),
+        json_null: rgb(0x6272a4),
+        json_bracket: rgb(0xf8f8f2),
+    }
+}
+
+/// Tokyo Night — 深蓝夜色的霓虹感，冷色但不过分刺眼
+pub fn tokyonight_theme() -> Theme {
+    Theme {
+        name: "tokyonight".to_string(),
+        background: rgb(0x1a1b26),
+        foreground: rgb(0xc0caf5),
+        muted_foreground: rgb(0x565f89),
+        accent: rgb(0x7aa2f7),
+        accent_foreground: rgb(0x1a1b26),
+        input_background: rgb(0x24283b),
+        border: rgb(0x3b4261),
+        muted_background: rgb(0x24283b),
+        sidebar_background: rgb(0x16161e),
+        code_background: rgb(0x1f2335),
+        success: rgb(0x9ece6a),
+        warning: rgb(0xe0af68),
+        error: rgb(0xf7768e),
+        json_key: rgb(0x7aa2f7),
+        json_string: rgb(0x9ece6a),
+        json_number: rgb(0xff9e64),
+        json_boolean: rgb(0xbb9af7),
+        json_null: rgb(0x565f89),
+        json_bracket: rgb(0xc0caf5),
+    }
+}
+
+/// Gruvbox Dark — 复古暖色，低蓝光，长时间看不累
+pub fn gruvbox_theme() -> Theme {
+    Theme {
+        name: "gruvbox".to_string(),
+        background: rgb(0x282828),
+        foreground: rgb(0xebdbb2),
+        muted_foreground: rgb(0x928374),
+        accent: rgb(0xfabd2f),
+        accent_foreground: rgb(0x282828),
+        input_background: rgb(0x3c3836),
+        border: rgb(0x504945),
+        muted_background: rgb(0x3c3836),
+        sidebar_background: rgb(0x1d2021),
+        code_background: rgb(0x32302f),
+        success: rgb(0xb8bb26),
+        warning: rgb(0xfabd2f),
+        error: rgb(0xfb4934),
+        json_key: rgb(0x83a598),
+        json_string: rgb(0xb8bb26),
+        json_number: rgb(0xd3869b),
+        json_boolean: rgb(0xfabd2f),
+        json_null: rgb(0x928374),
+        json_bracket: rgb(0xebdbb2),
+    }
+}
+
+/// Catppuccin Latte — 浅色，柔和低对比的奶咖灰底，白天不刺眼
+pub fn latte_theme() -> Theme {
+    Theme {
+        name: "latte".to_string(),
+        background: rgb(0xeff1f5),
+        foreground: rgb(0x4c4f69),
+        muted_foreground: rgb(0x8c8fa1),
+        accent: rgb(0x7287fd),
+        accent_foreground: rgb(0xffffff),
+        input_background: rgb(0xe6e9ef),
+        border: rgb(0xccd0da),
+        muted_background: rgb(0xe6e9ef),
+        sidebar_background: rgb(0xe6e9ef),
+        code_background: rgb(0xf7f8fa),
+        success: rgb(0x40a02b),
+        warning: rgb(0xdf8e1d),
+        error: rgb(0xd20f39),
+        json_key: rgb(0x1e66f5),
+        json_string: rgb(0x40a02b),
+        json_number: rgb(0xfe640b),
+        json_boolean: rgb(0x8839ef),
+        json_null: rgb(0x8c8fa1),
+        json_bracket: rgb(0x4c4f69),
+    }
+}
+
 impl Theme {
     /// 从字符串获取主题
     pub fn from_str(s: &str) -> Self {
@@ -257,7 +361,25 @@ impl Theme {
             "forest" => forest_theme(),
             "monokai" => monokai_theme(),
             "nord" => nord_theme(),
+            "dracula" => dracula_theme(),
+            "tokyonight" => tokyonight_theme(),
+            "gruvbox" => gruvbox_theme(),
+            "latte" => latte_theme(),
             _ => dark_theme(),
         }
+    }
+
+    /// 全部主题名（顺序即 Ctrl+T 的循环顺序、设置面板的网格顺序）
+    pub const NAMES: &'static [&'static str] = &[
+        "dark", "light", "sepia", "ocean", "sunset", "forest", "monokai", "nord", "dracula",
+        "tokyonight", "gruvbox", "latte",
+    ];
+
+    /// 该主题是否属于浅色底色。
+    ///
+    /// 用于决定 gpui_component 组件库用 Light 还是 Dark 模式：
+    /// 底色浅而组件按 Dark 模式渲染会出现对比度问题。
+    pub fn is_light(name: &str) -> bool {
+        matches!(name, "light" | "latte")
     }
 }

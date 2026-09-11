@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 description = "A Postman alternative built with Rust and gpui"
 license = "MIT"
-authors = ["apipost-rs team"]
-repository = "https://github.com/apipost-rs/apipost-rs"
+authors = ["Lidong yang <735615901@qq.com>"]
+repository = "https://github.com/ANG-LD/apipost-rs"
 
 [dependencies]
 # GUI framework
@@ -56,6 +56,10 @@ smallvec = "1"
 log = "0.4"
 env_logger = "0.11"
 rfd = "0.17.2"
+
+# Windows 专属构建依赖：把 assets/icon.ico 写进 exe（桌面快捷方式图标取自这里）
+[target.'cfg(windows)'.build-dependencies]
+tauri-winres = "0.3"
 
 [dev-dependencies]
 tempfile = "3"

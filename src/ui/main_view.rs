@@ -6,14 +6,19 @@ use crate::app::database::{Environment, Folder, HistoryEntry, SavedRequest};
 use crate::app::history::CreateHistoryEntry;
 use crate::app::HttpResponse;
 use crate::http::HttpRequest;
-use crate::ui::components::{popup_panel, tooltip_popup};
+use crate::ui::components::{
+    ghost_button, popup_panel, primary_button_sm, section_divider, section_title, segment_button,
+    segment_group, tooltip_popup, GAP_M, GAP_S, GAP_XS,
+};
 use crate::ui::dialogs::{
     render_code_gen_dialog_overlay, render_env_dialog_overlay,
     render_folder_dialog_overlay, render_move_dialog_overlay, CodeGenDialogState,
     EnvDialogState, FolderDialogState, MoveDialogState,
 };
 use crate::ui::sidebar::CollectionItem;
-use crate::ui::sidebar::{build_collection_tree, render_collection_panel, DragItem};
+use crate::ui::sidebar::{
+    build_collection_tree, render_collection_panel, render_environment_panel, DragItem,
+};
 use crate::ui::sidebar::{render_folder_context_menu, render_request_context_menu};
 use crate::ui::{
     count_lines, json_editor, ApiKeyLocation, AuthState, AuthType, BodyState, BodyType,
@@ -55,6 +60,15 @@ fn sanitize_display_text(text: &str) -> String {
         .collect()
 }
 
+/// 请求标签的单个标签宽度（px）。标签定宽，标签过多时由标签条横向滚动，而不是压窄标签
+const REQUEST_TAB_WIDTH: f32 = 150.0;
+/// 请求标签条中相邻标签之间的间距（px），需与 `.gap_px()` 保持一致
+const REQUEST_TAB_GAP: f32 = 1.0;
+/// “新建标签”按钮宽度（px），固定在标签条右侧、不随标签条一起滚动
+const NEW_TAB_BUTTON_WIDTH: f32 = 36.0;
+/// 标签条左右滚动按钮宽度（px），仅在标签溢出时显示
+const TABS_SCROLL_BUTTON_WIDTH: f32 = 24.0;
+
 /// HTTP方法颜色
 fn method_color(method: &str) -> u32 {
     match method.to_uppercase().as_str() {
@@ -72,11 +86,11 @@ fn method_color(method: &str) -> u32 {
 /// 格式化字节大小为可读字符串
 fn format_size(bytes: i64) -> String {
     if bytes < 1024 {
-        format!("{} B", bytes)
+        format!("{}B", bytes)
     } else if bytes < 1024 * 1024 {
-        format!("{:.1} KB", bytes as f64 / 1024.0)
+        format!("{:.1}KB", bytes as f64 / 1024.0)
     } else {
-        format!("{:.2} MB", bytes as f64 / (1024.0 * 1024.0))
+        format!("{:.2}MB", bytes as f64 / (1024.0 * 1024.0))
     }
 }
 
@@ -119,7 +133,8 @@ pub struct TabState {
     pub api_key_value: String,
     pub api_key_location: ApiKeyLocation,
     pub settings: RequestSettings,
-    pub response: Option<HttpResponse>,
+    // 用 Arc 共享：渲染每帧都要做快照，裸 HttpResponse 会每帧克隆一份响应头 HashMap
+    pub response: Option<Arc<HttpResponse>>,
     pub response_raw_format: RawFormat,
     pub builder_tab: BuilderTab,
     pub timeout_secs: String,
@@ -215,14 +230,23 @@ pub struct MainView {
     /// 应用状态
     pub(crate) app_state: Arc<std::sync::Mutex<crate::app::AppState>>,
     /// 翻译字典缓存（从 I18nManager 提取，避免每次翻译都获取 Mutex 锁）
-    pub(crate) translations: Arc<std::collections::HashMap<String, String>>,
+    pub(crate) translations: Arc<crate::i18n::Translations>,
     /// 主题缓存（避免每个面板渲染时重复调用 Theme::from_str）
     pub(crate) cached_theme: Theme,
+    /// 响应体高亮缓存：解析 / 美化 / 分词只在响应或主题变化时做一次
+    pub(crate) response_highlight: Option<crate::ui::response_highlight::Cache>,
     pub method: String,
     pub url: String,
-    pub(crate) request_tabs: Vec<RequestTab>,
+    // Arc 共享：渲染每帧快照只做引用计数；写入走 Arc::make_mut（渲染期间无写操作，不触发拷贝）
+    pub(crate) request_tabs: Arc<Vec<RequestTab>>,
     pub(crate) active_tab: usize,
-    pub(crate) response: Option<HttpResponse>,
+    /// 请求标签条的横向滚动句柄（标签定宽，标签过多时左右滚动，并让当前标签始终可见）
+    pub(crate) tabs_scroll: gpui::ScrollHandle,
+    /// 启动/恢复工作区后，需要在首次布局完成时把当前标签滚动到可见区域
+    pub(crate) tabs_reveal_pending: bool,
+    /// 上次可见的标签条宽度（0 表示尚未布局），用于在窗口/侧边栏宽度变化后重新定位当前标签
+    pub(crate) tabs_viewport: f32,
+    pub(crate) response: Option<Arc<HttpResponse>>,
     pub(crate) response_tab: ResponseTab,
     pub(crate) body_view_mode: BodyViewMode,
     pub(crate) is_loading: bool,
@@ -231,23 +255,26 @@ pub struct MainView {
     pub(crate) sidebar_collapsed: bool,
     pub(crate) sidebar_tab: SidebarTab,
     pub(crate) show_settings_popover: bool,
+    /// 自动更新检查状态（设置面板「关于」区）
+    pub(crate) update_status: crate::app::updater::UpdateStatus,
+    /// 上次检查时间，用于自动检查节流
+    pub(crate) update_checked_at: Option<std::time::Instant>,
     pub(crate) context_menu_target: Option<String>,
     pub(crate) hovered_item_name: Option<String>,
     pub(crate) hovered_item_y: Option<f32>,
     pub(crate) hovered_item_x: Option<f32>,
     pub(crate) context_menu_pos: Option<(f32, f32)>,
-    pub(crate) env_menu_target: Option<String>,
-    pub(crate) env_menu_pos: Option<(f32, f32)>,
-    pub(crate) history: Vec<HistoryEntry>,
-    pub(crate) saved_requests: Vec<crate::app::database::SavedRequest>,
-    pub(crate) folders: Vec<crate::app::database::Folder>,
-    pub(crate) environments: Vec<crate::app::database::Environment>,
+    /// 历史记录（放在堆上共享：渲染时 clone 一次只是引用计数 +1，不再深拷贝整份列表）
+    pub(crate) history: Arc<Vec<HistoryEntry>>,
+    pub(crate) saved_requests: Arc<Vec<crate::app::database::SavedRequest>>,
+    pub(crate) folders: Arc<Vec<crate::app::database::Folder>>,
+    pub(crate) environments: Arc<Vec<crate::app::database::Environment>>,
     pub(crate) active_environment_name: Option<String>,
     pub(crate) env_dialog_state: Arc<Mutex<EnvDialogState>>,
     pub(crate) folder_dialog_state: Arc<Mutex<FolderDialogState>>,
     pub(crate) move_dialog_state: Arc<Mutex<MoveDialogState>>,
     pub(crate) expanded_folders: HashSet<String>,
-    pub(crate) collection_items: Vec<CollectionItem>,
+    pub(crate) collection_items: Arc<Vec<CollectionItem>>,
     pub(crate) needs_collections_refresh: bool,
     pub(crate) needs_drop_refresh: Arc<AtomicBool>,
     pub(crate) url_input: Entity<InputState>,
@@ -255,7 +282,7 @@ pub struct MainView {
     pub(crate) _param_input_subs: Vec<gpui::Subscription>,
     pub(crate) _header_subs: Vec<gpui::Subscription>,
     pub(crate) _form_data_type_subs: Vec<gpui::Subscription>,
-    pub(crate) method_select: Entity<SelectState<Vec<gpui::SharedString>>>,
+    pub(crate) method_select: Entity<SelectState<Vec<crate::ui::components::MethodItem>>>,
     pub(crate) builder_tab: BuilderTab,
     pub(crate) params: Vec<ParamEntry>,
     pub(crate) headers: Vec<HeaderEntry>,
@@ -344,42 +371,29 @@ impl gpui::Focusable for MainView {
     }
 }
 
-/// Token 渲染：将 highlight_json 返回的 token 列表渲染为带颜色的文本行
-fn render_highlighted_tokens(tokens: &[(String, gpui::Rgba)]) -> Vec<AnyElement> {
-    let mut elements: Vec<AnyElement> = Vec::new();
-    let mut line_parts: Vec<AnyElement> = Vec::new();
-
-    for (text, color) in tokens {
-        for ch in text.chars() {
-            if ch == '\n' {
-                elements.push(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .children(std::mem::take(&mut line_parts))
-                        .into_any_element(),
-                );
-            } else {
-                line_parts.push(
-                    div()
-                        .flex_none()
-                        .text_color(*color)
-                        .child(ch.to_string())
-                        .into_any_element(),
-                );
-            }
-        }
-    }
-    if !line_parts.is_empty() {
-        elements.push(
+/// 高亮文本渲染。
+///
+/// 片段是缓存的（`build()` 里算过一次），这里每帧只做两件事：
+/// `SharedString::clone()`（引用计数 +1）和建 div。
+/// 旧实现是「每个字符一个 div + 一次 `to_string()`」，
+/// 一段几十万字符的响应每帧要产生几十万次分配。
+fn render_highlighted_lines(lines: &[crate::ui::response_highlight::Line]) -> Vec<AnyElement> {
+    lines
+        .iter()
+        .map(|line| {
             div()
                 .flex()
                 .flex_row()
-                .children(std::mem::take(&mut line_parts))
-                .into_any_element(),
-        );
-    }
-    elements
+                .children(line.iter().map(|run| {
+                    div()
+                        .flex_none()
+                        .text_color(run.color)
+                        .child(run.text.clone())
+                        .into_any_element()
+                }))
+                .into_any_element()
+        })
+        .collect()
 }
 
 /// 根据 Content-Type 智能选择预览渲染方式
@@ -421,8 +435,10 @@ fn render_preview_body(
     body: &str,
     content_type: Option<&str>,
     theme: &Theme,
-    t: &dyn Fn(&str) -> String,
+    t: &dyn Fn(&str) -> SharedString,
     raw_body: Option<&[u8]>,
+    // 高亮结果由 MainView 缓存后传进来；None 只会在缓存缺失时出现
+    highlight: Option<&crate::ui::response_highlight::HighlightedBody>,
 ) -> AnyElement {
     let ct = content_type.unwrap_or("").to_lowercase();
 
@@ -611,22 +627,16 @@ fn render_preview_body(
             .into_any_element();
     }
 
-    // 文本类型及其他 — 尝试 JSON 语法高亮，否则纯文本
-    let formatted_body = if ct.contains("json")
-        || body.trim_start().starts_with('{')
-        || body.trim_start().starts_with('[')
-    {
-        serde_json::from_str::<serde_json::Value>(body)
-            .ok()
-            .and_then(|v| serde_json::to_string_pretty(&v).ok())
-            .unwrap_or_else(|| body.to_string())
-    } else {
-        body.to_string()
+    // 文本类型及其他 —— 解析 / 美化 / 分词的结果由 MainView 缓存，这里只负责摆放
+    let fallback;
+    let highlighted = match highlight {
+        Some(cached) => cached,
+        None => {
+            // 兜底：缓存还没建立时现算一次（正常每帧都命中缓存）
+            fallback = crate::ui::response_highlight::build(body, content_type, theme);
+            &fallback
+        }
     };
-
-    let is_json_like = ct.contains("json")
-        || body.trim_start().starts_with('{')
-        || body.trim_start().starts_with('[');
 
     div()
         .h_full()
@@ -638,22 +648,58 @@ fn render_preview_body(
         .rounded_md()
         .p_3()
         .text_sm()
-        .child(if is_json_like {
-            let tokens = crate::ui::highlight_json(&formatted_body, theme);
-            div().flex_col().children(render_highlighted_tokens(&tokens))
-        } else {
-            div().text_color(theme.foreground).child(formatted_body)
+        .child(match highlighted.plain.as_ref() {
+            // 非 JSON：直接复用响应体的 Arc<str>（零拷贝），保留原来的自动换行
+            Some(text) => div()
+                .text_color(theme.foreground)
+                .child(SharedString::from(Arc::clone(text))),
+            None => div().flex_col().children(render_highlighted_lines(&highlighted.lines)),
         })
         .into_any_element()
 }
 
 impl MainView {
     /// 获取翻译文本（从 Arc 缓存读取，无 Mutex 锁争用）
-    pub(crate) fn t(&self, key: &str) -> String {
-        self.translations
-            .get(key)
-            .cloned()
-            .unwrap_or_else(|| key.to_string())
+    ///
+    /// 返回 `Arc<str>`：命中时只是引用计数 +1，不再像以前那样
+    /// 每帧为界面上每一条文案都复制一个 String（每帧上百次堆分配）。
+    pub(crate) fn t(&self, key: &str) -> SharedString {
+        match self.translations.get(key) {
+            // 命中：Arc -> SharedString 是 O(1)，不复制字符串
+            Some(value) => SharedString::from(Arc::clone(value)),
+            // 只有翻译缺失才会走到这里
+            None => SharedString::from(key),
+        }
+    }
+
+    /// 按需重建响应体高亮缓存。
+    ///
+    /// 放在 render 开头：这里是唯一能同时拿到 `&mut self` 和「每帧都会执行」
+    /// 两个条件的地方。命中缓存时只是指针比较 + 一次主题比较，几乎免费；
+    /// 真正昂贵的 parse / 美化 / 分词只在响应到达或主题切换时跑一次。
+    fn ensure_response_highlight(&mut self) {
+        let Some(resp) = self.response.as_ref() else {
+            self.response_highlight = None;
+            return;
+        };
+
+        if let Some(cache) = self.response_highlight.as_ref() {
+            if cache.is_valid_for(&resp.body, &self.cached_theme) {
+                return;
+            }
+        }
+
+        // 走这里说明要重算：Content-Type 也一起取出来用（与旧实现同一套判断）
+        let content_type = resp.detect_content_type();
+        let highlighted = crate::ui::response_highlight::build(
+            &resp.body,
+            content_type.as_deref(),
+            &self.cached_theme,
+        );
+        let body = Arc::clone(&resp.body);
+        let theme = self.cached_theme.clone();
+        self.response_highlight =
+            Some(crate::ui::response_highlight::Cache::new(body, theme, highlighted));
     }
 
     /// 语言切换后更新翻译缓存
@@ -672,32 +718,12 @@ impl MainView {
     ) -> impl IntoElement {
         let theme = self.cached_theme.clone();
         let is_active = current_tab == tab;
-        div()
-            .id(id)
-            .min_w(px(72.0))
-            .px_3()
-            .py_1p5()
-            .text_xs()
-            .font_weight(if is_active { FontWeight(600.0) } else { FontWeight(400.0) })
-            .cursor_pointer()
-            .rounded_t_md()
-            .text_color(if is_active {
-                theme.foreground
-            } else {
-                theme.muted_foreground
-            })
-            .bg(if is_active {
-                theme.background
-            } else {
-                rgba(0x00000000)
-            })
-            .hover(|s| if is_active { s } else { s.bg(theme.code_background) })
-            .on_click(cx.listener(
-                move |this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
-                    this.set_builder_tab(tab, cx);
-                },
-            ))
-            .child(self.t(label_key))
+        // 与响应区标签页共用同一套样式（高度、下划线、hover），避免左右两栏观感不一致
+        crate::ui::components::pane_tab(id, self.t(label_key), is_active, &theme).on_click(
+            cx.listener(move |this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                this.set_builder_tab(tab, cx);
+            }),
+        )
     }
 
     /// 创建响应标签页按钮（带i18n支持）
@@ -711,32 +737,11 @@ impl MainView {
     ) -> impl IntoElement {
         let theme = self.cached_theme.clone();
         let is_active = current_tab == tab;
-        div()
-            .id(id)
-            .min_w(px(64.0))
-            .px_3()
-            .py_1()
-            .text_xs()
-            .font_weight(if is_active { FontWeight(600.0) } else { FontWeight(400.0) })
-            .cursor_pointer()
-            .rounded_t_md()
-            .text_color(if is_active {
-                theme.foreground
-            } else {
-                theme.muted_foreground
-            })
-            .bg(if is_active {
-                theme.background
-            } else {
-                rgba(0x00000000)
-            })
-            .hover(|s| if is_active { s } else { s.bg(theme.code_background) })
-            .on_click(cx.listener(
-                move |this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
-                    this.set_response_tab(tab, cx);
-                },
-            ))
-            .child(self.t(label_key))
+        crate::ui::components::pane_tab(id, self.t(label_key), is_active, &theme).on_click(
+            cx.listener(move |this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                this.set_response_tab(tab, cx);
+            }),
+        )
     }
 
     /// 创建新的主视图
@@ -749,6 +754,8 @@ impl MainView {
         let translations = app_state.lock().unwrap().i18n.translations_arc();
         // 缓存主题（避免每个面板渲染时重复调用 Theme::from_str）
         let cached_theme = Theme::from_str(&app_state.lock().unwrap().theme_name);
+        // 响应体高亮缓存：首帧渲染时按需建立
+        let response_highlight = None;
 
         // 加载历史记录
         let history = app_state
@@ -798,15 +805,11 @@ impl MainView {
         );
 
         // 创建HTTP方法选择状态
-        let methods: Vec<gpui::SharedString> = vec![
-            "GET".into(),
-            "POST".into(),
-            "PUT".into(),
-            "DELETE".into(),
-            "PATCH".into(),
-            "HEAD".into(),
-            "OPTIONS".into(),
-        ];
+        let methods: Vec<crate::ui::components::MethodItem> =
+            ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]
+                .iter()
+                .map(|m| crate::ui::components::MethodItem::new(*m))
+                .collect();
         let method_select =
             cx.new(|cx| SelectState::new(methods, Some(IndexPath::default()), window, cx));
 
@@ -969,6 +972,7 @@ impl MainView {
             app_state,
             translations,
             cached_theme,
+            response_highlight,
             method: "GET".to_string(),
             url: String::new(),
             request_tabs: vec![RequestTab {
@@ -977,8 +981,11 @@ impl MainView {
                 url: String::new(),
                 name: default_tab_name,
                 tab_state: TabState::default(),
-            }],
+            }].into(),
             active_tab: 0,
+            tabs_scroll: gpui::ScrollHandle::new(),
+            tabs_reveal_pending: true,
+            tabs_viewport: 0.0,
             response: None,
             response_tab: ResponseTab::Body,
             body_view_mode: BodyViewMode::Pretty,
@@ -988,25 +995,25 @@ impl MainView {
             sidebar_collapsed: false,
             sidebar_tab: SidebarTab::Collections,
             show_settings_popover: false,
+            update_status: crate::app::updater::UpdateStatus::Idle,
+            update_checked_at: None,
             context_menu_target: None,
             hovered_item_name: None,
             hovered_item_y: None,
             hovered_item_x: None,
             context_menu_pos: None,
-            env_menu_target: None,
-            env_menu_pos: None,
             expanded_folders: HashSet::new(),
-            collection_items: crate::ui::sidebar::build_collection_tree(
+            collection_items: Arc::new(crate::ui::sidebar::build_collection_tree(
                 &folders,
                 &saved_requests,
                 &HashSet::new(),
-            ),
+            )),
             needs_collections_refresh: false,
             needs_drop_refresh: Arc::new(AtomicBool::new(false)),
-            history,
-            saved_requests,
-            folders,
-            environments,
+            history: Arc::new(history),
+            saved_requests: Arc::new(saved_requests),
+            folders: Arc::new(folders),
+            environments: Arc::new(environments),
             active_environment_name,
             env_dialog_state,
             folder_dialog_state,
@@ -1291,6 +1298,9 @@ impl MainView {
                             {
                                 log::error!("保存历史记录失败: {}", e);
                             }
+                            // 包一次 Arc 再共享：MainView / TabState / 工作区快照都拿引用计数，
+                            // 后面还要读 response 的 body/headers，所以先包再用
+                            let response = Arc::new(response);
                             this.response = Some(response.clone());
                             let content_type = response.detect_content_type();
                             this.response_raw_format =
@@ -1311,7 +1321,7 @@ impl MainView {
                             this.update_pretty_editor(window, cx);
                             this.rebuild_response_header_inputs(&response.headers, window, cx);
                             if let Ok(hist) = this.app_state.lock().unwrap().db.get_history(50, 0) {
-                                this.history = hist;
+                                this.history = Arc::new(hist);
                             }
                             // 响应成功后立即保存工作区状态
                             this.save_workspace(cx);
@@ -1515,6 +1525,10 @@ impl MainView {
     /// 切换认证类型
     pub fn set_auth_type(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         let auth_type = AuthType::from_index(index);
+        // 重复点同一个类型直接返回：否则会把已填的 token / 账号密码清空
+        if self.get_auth_type() == auth_type {
+            return;
+        }
         self.auth_state = match auth_type {
             AuthType::NoAuth => AuthState::NoAuth,
             AuthType::BearerToken => {
@@ -1523,7 +1537,12 @@ impl MainView {
             }
             AuthType::BasicAuth => {
                 let username = cx.new(|cx| InputState::new(window, cx).default_value(""));
-                let password = cx.new(|cx| InputState::new(window, cx).default_value(""));
+                // 密码做遮蔽显示
+                let password = cx.new(|cx| {
+                    InputState::new(window, cx)
+                        .default_value("")
+                        .masked(true)
+                });
                 AuthState::Basic(crate::ui::BasicAuthData { username, password })
             }
             AuthType::ApiKey => {
@@ -1557,6 +1576,16 @@ impl MainView {
     pub fn toggle_api_key_location(&mut self, cx: &mut Context<Self>) {
         self.auth_state.toggle_api_key_location();
         cx.notify();
+    }
+
+    /// 设置 API Key 认证的位置（Header / Query）
+    pub fn set_api_key_location(&mut self, location: ApiKeyLocation, cx: &mut Context<Self>) {
+        if let AuthState::ApiKey(auth) = &mut self.auth_state {
+            if auth.location_value != location {
+                auth.location_value = location;
+                cx.notify();
+            }
+        }
     }
 
     /// 切换响应体软换行
@@ -2084,15 +2113,20 @@ impl MainView {
 
         let id = self.next_tab_id;
         self.next_tab_id += 1;
-        self.request_tabs.push(RequestTab {
+        // 先构造再 push：push 的实参里会借用 self（self.t(...)），
+        // 与 Arc::make_mut(&mut self.request_tabs) 的可变借用冲突
+        let new_tab_entry = RequestTab {
             id,
             method: "GET".to_string(),
             url: String::new(),
-            name: self.t("sidebar.new_request"),
+            name: self.t("sidebar.new_request").to_string(),
             tab_state: TabState::default(),
-        });
+        };
+        Arc::make_mut(&mut self.request_tabs).push(new_tab_entry);
         let new_idx = self.request_tabs.len() - 1;
         self.active_tab = new_idx;
+        // 让新标签滚动到可见区域
+        self.reveal_tab(new_idx, self.tabs_viewport);
 
         // 加载默认 TabState，重置所有 UI 组件（body/auth/settings/scripts 等）
         let new_tab = self.request_tabs[new_idx].clone();
@@ -2133,16 +2167,16 @@ impl MainView {
         if let Ok((json, active_tab)) = workspace {
             if let Ok(tabs) = serde_json::from_str::<Vec<TabState>>(&json) {
                 if !tabs.is_empty() {
-                    self.request_tabs.clear();
+                    Arc::make_mut(&mut self.request_tabs).clear();
                     for (i, ts) in tabs.into_iter().enumerate() {
                         let method = ts.method.clone();
                         let url = ts.url.clone();
                         let name = if ts.name.is_empty() {
-                            self.t("sidebar.new_request")
+                            self.t("sidebar.new_request").to_string()
                         } else {
                             ts.name.clone()
                         };
-                        self.request_tabs.push(RequestTab {
+                        Arc::make_mut(&mut self.request_tabs).push(RequestTab {
                             id: i,
                             method,
                             url,
@@ -2153,6 +2187,8 @@ impl MainView {
                     self.next_tab_id = self.request_tabs.len();
                     let idx = active_tab.min(self.request_tabs.len() - 1);
                     self.active_tab = idx;
+                    // 布局完成后把当前标签滚动到可见区域（标签较多时）
+                    self.tabs_reveal_pending = true;
                     let tab = self.request_tabs[idx].clone();
                     self.load_tab_meta(&tab, window, cx);
                     log::info!("工作区已恢复 ({} tabs)", self.request_tabs.len());
@@ -2163,12 +2199,55 @@ impl MainView {
     }
 
 
+    /// 把指定标签滚动到可见范围内。
+    ///
+    /// 标签是定宽（见 REQUEST_TAB_WIDTH），所以第 idx 个标签在标签条内的位置可以直接算出来；
+    /// 这里直接设置滚动偏移，避免依赖下一帧才生效的 scroll_to_item。
+    /// viewport 为标签条可视宽度，返回 false 表示宽度还未知（尚未布局）。
+    fn reveal_tab(&self, idx: usize, viewport: f32) -> bool {
+        /// 标签占位宽度：标签宽度 + 间距
+        const TAB_PITCH: f32 = REQUEST_TAB_WIDTH + REQUEST_TAB_GAP;
+
+        if viewport <= 0.0 {
+            return false;
+        }
+        let tab_left = TAB_PITCH * idx as f32;
+        // offset 为正数，表示内容向左滚动的距离
+        let mut offset = -self.tabs_scroll.offset().x.as_f32();
+        if tab_left < offset {
+            // 标签在可见区域左侧
+            offset = tab_left;
+        } else if tab_left + REQUEST_TAB_WIDTH > offset + viewport {
+            // 标签在可见区域右侧
+            offset = tab_left + REQUEST_TAB_WIDTH - viewport;
+        }
+        // 这里不按 max_offset 夹紧：新增标签时布局还没更新，max_offset 仍是旧值，
+        // 夹紧会导致新标签滚不出来；越界部分由 gpui 在 prepaint 时按最新布局夹紧
+        self.tabs_scroll
+            .set_offset(point(px(-offset.max(0.0)), px(0.0)));
+        true
+    }
+
+    /// 按整个标签为单位左右滚动标签条（供标签条两侧的左右按钮使用）。
+    /// 以标签宽度为步进，滚动后标签边界仍与可视区左边缘对齐。
+    fn scroll_tabs_by(&self, delta_tabs: i32) {
+        /// 标签占位宽度：标签宽度 + 间距
+        const TAB_PITCH: f32 = REQUEST_TAB_WIDTH + REQUEST_TAB_GAP;
+
+        let content = TAB_PITCH * self.request_tabs.len() as f32 - REQUEST_TAB_GAP;
+        let max = (content - self.tabs_viewport).max(0.0);
+        let current = -self.tabs_scroll.offset().x.as_f32();
+        let next = ((current / TAB_PITCH).round() + delta_tabs as f32) * TAB_PITCH;
+        self.tabs_scroll
+            .set_offset(point(px(-next.clamp(0.0, max)), px(0.0)));
+    }
+
     /// 关闭指定标签页（至少保留一个）
     pub fn close_tab(&mut self, tab_idx: usize, window: &mut Window, cx: &mut Context<Self>) {
         if self.request_tabs.len() <= 1 {
             return;
         }
-        self.request_tabs.remove(tab_idx);
+        Arc::make_mut(&mut self.request_tabs).remove(tab_idx);
 
         let new_active = if self.active_tab >= self.request_tabs.len() {
             self.request_tabs.len() - 1
@@ -2180,6 +2259,8 @@ impl MainView {
 
         // 直接加载目标标签数据
         self.active_tab = new_active;
+        // 关闭标签后确保当前标签仍可见
+        self.reveal_tab(new_active, self.tabs_viewport);
         let tab = self.request_tabs[new_active].clone();
         self.load_tab_meta(&tab, window, cx);
         self.save_workspace(cx);
@@ -2192,6 +2273,8 @@ impl MainView {
         }
         self.save_current_tab_meta(cx);
         self.active_tab = tab_idx;
+        // 切换到可见区域外的标签时自动滚动出来
+        self.reveal_tab(tab_idx, self.tabs_viewport);
         let tab = self.request_tabs[tab_idx].clone();
         self.load_tab_meta(&tab, window, cx);
         self.save_workspace(cx);
@@ -2214,10 +2297,10 @@ impl MainView {
         } else {
             url.clone()
         };
-        self.request_tabs[self.active_tab].url = url.clone();
-        self.request_tabs[self.active_tab].method = method.clone();
-        self.request_tabs[self.active_tab].name = if short.is_empty() {
-            self.t("sidebar.new_request")
+        Arc::make_mut(&mut self.request_tabs)[self.active_tab].url = url.clone();
+        Arc::make_mut(&mut self.request_tabs)[self.active_tab].method = method.clone();
+        Arc::make_mut(&mut self.request_tabs)[self.active_tab].name = if short.is_empty() {
+            self.t("sidebar.new_request").to_string()
         } else {
             short.clone()
         };
@@ -2371,7 +2454,7 @@ impl MainView {
             pre_request_script: self.script_state.pre_request_script.read(cx).value().to_string(),
             test_script: self.script_state.test_script.read(cx).value().to_string(),
         };
-        self.request_tabs[self.active_tab].tab_state = state;
+        Arc::make_mut(&mut self.request_tabs)[self.active_tab].tab_state = state;
     }
 
     /// 将标签元数据加载到表单控件
@@ -2469,8 +2552,11 @@ impl MainView {
             2 => AuthState::Basic(crate::ui::BasicAuthData {
                 username: cx
                     .new(|cx| InputState::new(window, cx).default_value(&state.basic_username)),
-                password: cx
-                    .new(|cx| InputState::new(window, cx).default_value(&state.basic_password)),
+                password: cx.new(|cx| {
+                    InputState::new(window, cx)
+                        .default_value(&state.basic_password)
+                        .masked(true)
+                }),
             }),
             3 => AuthState::ApiKey(crate::ui::ApiKeyAuthData {
                 key: cx.new(|cx| InputState::new(window, cx).default_value(&state.api_key_name)),
@@ -2744,7 +2830,7 @@ impl MainView {
     }
 
     /// 激活指定环境
-    fn activate_environment(&mut self, env_id: &str, _window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn activate_environment(&mut self, env_id: &str, _window: &mut Window, cx: &mut Context<Self>) {
         // Single lock acquisition to avoid re-entrant deadlock
         {
             let app = self.app_state.lock().unwrap();
@@ -2758,7 +2844,7 @@ impl MainView {
                 }
             }
             // env_manager 为 Arc 共享，更新即时对 HttpClient 可见
-            self.environments = app.db.get_environments().unwrap_or_default();
+            self.environments = Arc::new(app.db.get_environments().unwrap_or_default());
             self.active_environment_name = self
                 .environments
                 .iter()
@@ -2770,13 +2856,13 @@ impl MainView {
 
     /// 从数据库刷新环境列表
     fn load_environments(&mut self) {
-        self.environments = self
+        self.environments = Arc::new(self
             .app_state
             .lock()
             .unwrap()
             .db
             .get_environments()
-            .unwrap_or_default();
+            .unwrap_or_default());
         self.active_environment_name = self
             .environments
             .iter()
@@ -2785,7 +2871,7 @@ impl MainView {
     }
 
     /// 打开创建/编辑环境对话框
-    fn open_environment_dialog(
+    pub(crate) fn open_environment_dialog(
         &mut self,
         env_id: Option<String>,
         window: &mut Window,
@@ -2804,7 +2890,7 @@ impl MainView {
     }
 
     /// 打开全局变量编辑对话框
-    fn open_global_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open_global_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let globals = self.app_state.lock().unwrap().env_manager.get_all_globals();
         self.env_dialog_state
             .lock()
@@ -2831,14 +2917,60 @@ impl MainView {
         cx.notify();
     }
 
+    /// 关闭最上层的弹窗/浮层；返回是否真的关掉了东西（供 Esc 使用）
+    ///
+    /// 顺序即层级（从高到低）：右键菜单 > 代码生成 > 移动 > 文件夹 > 环境
+    /// > 保存请求 > 快捷键浮层 > 设置浮层。一次只关一层，符合"Esc 逐层退出"的直觉。
+    fn close_topmost_overlay(&mut self, cx: &mut Context<Self>) -> bool {
+        fn open<T>(state: &Arc<Mutex<T>>, f: impl Fn(&T) -> bool) -> bool {
+            state.lock().map(|s| f(&s)).unwrap_or(false)
+        }
+
+        if self.context_menu_target.is_some() {
+            self.context_menu_target = None;
+            self.context_menu_pos = None;
+        } else if open(&self.code_gen_dialog_state, |s| s.open) {
+            if let Ok(mut s) = self.code_gen_dialog_state.lock() {
+                s.open = false;
+            }
+        } else if open(&self.move_dialog_state, |s| s.visible) {
+            if let Ok(mut s) = self.move_dialog_state.lock() {
+                s.visible = false;
+            }
+        } else if open(&self.folder_dialog_state, |s| s.visible) {
+            if let Ok(mut s) = self.folder_dialog_state.lock() {
+                s.visible = false;
+            }
+        } else if open(&self.env_dialog_state, |s| s.visible) {
+            if let Ok(mut s) = self.env_dialog_state.lock() {
+                s.visible = false;
+            }
+        } else if open(&self.save_request_dialog, |s| s.visible) {
+            if let Ok(mut s) = self.save_request_dialog.lock() {
+                s.visible = false;
+                s.pending_request = None;
+            }
+        } else if self.show_shortcuts_popup {
+            self.show_shortcuts_popup = false;
+        } else if self.show_settings_popover {
+            self.show_settings_popover = false;
+        } else {
+            return false;
+        }
+        cx.notify();
+        true
+    }
+
     /// 切换主题 — 更新 AppState、gpui_component 主题并持久化
     fn switch_theme(&mut self, theme: &str, cx: &mut Context<Self>) {
         self.app_state.lock().unwrap().set_theme(theme);
         self.cached_theme = Theme::from_str(theme);
 
-        let mode = match theme {
-            "light" => gpui_component::theme::ThemeMode::Light,
-            _ => gpui_component::theme::ThemeMode::Dark,
+        // 底色浅的主题要切到组件库的 Light 模式，否则组件对比度不对
+        let mode = if Theme::is_light(theme) {
+            gpui_component::theme::ThemeMode::Light
+        } else {
+            gpui_component::theme::ThemeMode::Dark
         };
         gpui_component::theme::Theme::change(mode, None, cx);
 
@@ -2920,11 +3052,11 @@ impl MainView {
 
     /// 重建集合树
     fn rebuild_collections(&mut self) {
-        self.collection_items = crate::ui::sidebar::build_collection_tree(
+        self.collection_items = Arc::new(crate::ui::sidebar::build_collection_tree(
             &self.folders,
             &self.saved_requests,
             &self.expanded_folders,
-        );
+        ));
         log::debug!(
             "集合树已重建: {} 个项目 ({} 个文件夹, {} 个请求)",
             self.collection_items.len(),
@@ -2936,8 +3068,8 @@ impl MainView {
     /// 重新加载集合数据（从数据库）
     fn reload_collections(&mut self) {
         if let Ok(app) = self.app_state.lock() {
-            self.saved_requests = app.db.get_saved_requests().unwrap_or_default();
-            self.folders = app.db.get_folders().unwrap_or_default();
+            self.saved_requests = Arc::new(app.db.get_saved_requests().unwrap_or_default());
+            self.folders = Arc::new(app.db.get_folders().unwrap_or_default());
         }
         self.rebuild_collections();
     }
@@ -3003,7 +3135,9 @@ impl MainView {
         cx: &mut Context<Self>,
     ) {
         if let Ok(app) = self.app_state.lock() {
-            let _ = app.db.delete_folder_cascade(folder_id);
+            if let Err(e) = app.db.delete_folder_cascade(folder_id) {
+                log::error!("删除文件夹失败: id={}, err={}", folder_id, e);
+            }
         }
         self.reload_collections();
         cx.notify();
@@ -3063,66 +3197,108 @@ impl MainView {
         self.load_saved_request(request_id, method, url, name, None, None, window, cx);
     }
 
+    /// 检查 GitHub 上有没有新版本。
+    ///
+    /// 网络请求丢给 tokio 跑，结果通过 oneshot 回到 gpui 前台再刷界面 ——
+    /// 保证检查期间界面不卡（gpui 前台执行器里不能阻塞）。
+    pub(crate) fn check_for_updates(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::app::updater::{self, UpdateStatus};
+
+        if self.update_status.is_checking() {
+            return;
+        }
+        self.update_status = UpdateStatus::Checking;
+        self.update_checked_at = Some(std::time::Instant::now());
+        cx.notify();
+
+        // 检查更新也该走应用里配的代理，否则挂了代理的用户永远查不到
+        let proxy = {
+            let app = self.app_state.lock().unwrap();
+            if app.config.proxy.enabled && !app.config.proxy.url.trim().is_empty() {
+                Some(app.config.proxy.url.clone())
+            } else {
+                None
+            }
+        };
+        let rt = self.app_state.lock().unwrap().rt_handle.clone();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        rt.spawn(async move {
+            let _ = tx.send(updater::check(proxy).await);
+        });
+
+        cx.spawn_in(window, async move |this: WeakEntity<MainView>, cx| {
+            let status = match rx.await {
+                Ok(status) => status,
+                Err(_) => UpdateStatus::Failed("检查任务被中断".to_string()),
+            };
+            let _ = this.update_in(cx, |this, _window, cx| {
+                this.update_status = status;
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     /// 检查所有对话框刷新标志
     fn check_dialog_refresh_flags(&mut self) {
         // 环境变量对话框
         if self.env_dialog_state.lock().unwrap().needs_refresh {
             log::debug!("刷新: 环境变量对话框标记");
             self.load_environments();
-            self.saved_requests = self
+            self.saved_requests = Arc::new(self
                 .app_state
                 .lock()
                 .unwrap()
                 .db
                 .get_saved_requests()
-                .unwrap_or_default();
-            self.folders = self
+                .unwrap_or_default());
+            self.folders = Arc::new(self
                 .app_state
                 .lock()
                 .unwrap()
                 .db
                 .get_folders()
-                .unwrap_or_default();
+                .unwrap_or_default());
             self.env_dialog_state.lock().unwrap().needs_refresh = false;
             self.needs_collections_refresh = true;
         }
         // 文件夹对话框
         if self.folder_dialog_state.lock().unwrap().needs_refresh {
             log::debug!("刷新: 文件夹对话框标记");
-            self.folders = self
+            self.folders = Arc::new(self
                 .app_state
                 .lock()
                 .unwrap()
                 .db
                 .get_folders()
-                .unwrap_or_default();
-            self.saved_requests = self
+                .unwrap_or_default());
+            self.saved_requests = Arc::new(self
                 .app_state
                 .lock()
                 .unwrap()
                 .db
                 .get_saved_requests()
-                .unwrap_or_default();
+                .unwrap_or_default());
             self.folder_dialog_state.lock().unwrap().needs_refresh = false;
             self.needs_collections_refresh = true;
         }
         // 移动对话框
         if self.move_dialog_state.lock().unwrap().needs_refresh {
             log::debug!("刷新: 移动对话框标记");
-            self.folders = self
+            self.folders = Arc::new(self
                 .app_state
                 .lock()
                 .unwrap()
                 .db
                 .get_folders()
-                .unwrap_or_default();
-            self.saved_requests = self
+                .unwrap_or_default());
+            self.saved_requests = Arc::new(self
                 .app_state
                 .lock()
                 .unwrap()
                 .db
                 .get_saved_requests()
-                .unwrap_or_default();
+                .unwrap_or_default());
             self.move_dialog_state.lock().unwrap().needs_refresh = false;
             self.needs_collections_refresh = true;
         }
@@ -3132,39 +3308,39 @@ impl MainView {
             .swap(false, std::sync::atomic::Ordering::Relaxed)
         {
             log::debug!("刷新: 拖拽放置标记");
-            self.folders = self
+            self.folders = Arc::new(self
                 .app_state
                 .lock()
                 .unwrap()
                 .db
                 .get_folders()
-                .unwrap_or_default();
-            self.saved_requests = self
+                .unwrap_or_default());
+            self.saved_requests = Arc::new(self
                 .app_state
                 .lock()
                 .unwrap()
                 .db
                 .get_saved_requests()
-                .unwrap_or_default();
+                .unwrap_or_default());
             self.needs_collections_refresh = true;
         }
         // 保存到收藏夹对话框
         if self.save_request_dialog.lock().unwrap().needs_refresh {
             log::debug!("刷新: 保存到收藏夹对话框标记");
-            self.saved_requests = self
+            self.saved_requests = Arc::new(self
                 .app_state
                 .lock()
                 .unwrap()
                 .db
                 .get_saved_requests()
-                .unwrap_or_default();
-            self.folders = self
+                .unwrap_or_default());
+            self.folders = Arc::new(self
                 .app_state
                 .lock()
                 .unwrap()
                 .db
                 .get_folders()
-                .unwrap_or_default();
+                .unwrap_or_default());
             self.save_request_dialog.lock().unwrap().needs_refresh = false;
             self.needs_collections_refresh = true;
         }
@@ -3177,8 +3353,224 @@ impl MainView {
     }
 }
 
+/// 设置面板里的「关于」区：本地版本 + 从 GitHub Releases 检查更新
+///
+/// 状态来自 MainView.update_status，由 check_for_updates 异步写入。
+fn update_section(this: &MainView, cx: &mut Context<MainView>, theme: &Theme) -> gpui::Div {
+    use crate::app::updater::{UpdateStatus, CURRENT_VERSION};
+
+    let t_current = this.t("update.current");
+    let t_check = this.t("update.check");
+    let t_recheck = this.t("update.recheck");
+    let t_up_to_date = this.t("update.up_to_date");
+    let t_available = this.t("update.available");
+    let t_download = this.t("update.download");
+    let t_release_page = this.t("update.release_page");
+    let t_failed = this.t("update.failed");
+    let t_hint = this.t("update.hint");
+    let t_published = this.t("update.published");
+    let checking = this.update_status.is_checking();
+    // 按钮文案：检查中显示"正在检查"，查过一次显示"重新检查"，没查过显示"检查更新"
+    let has_checked = !matches!(this.update_status, UpdateStatus::Idle);
+    let check_label = if checking {
+        this.t("update.checking")
+    } else if has_checked {
+        t_recheck.clone()
+    } else {
+        t_check.clone()
+    };
+
+    // 状态行：图标 + 文案（颜色区分成功/失败/有新版本）
+    let (icon, icon_color, text, text_color) = match &this.update_status {
+        UpdateStatus::Idle => (
+            IconName::Info,
+            theme.muted_foreground,
+            t_hint.clone(),
+            theme.muted_foreground,
+        ),
+        UpdateStatus::Checking => (
+            IconName::LoaderCircle,
+            theme.accent,
+            this.t("update.checking"),
+            theme.muted_foreground,
+        ),
+        UpdateStatus::UpToDate { latest } => (
+            IconName::Check,
+            theme.success,
+            SharedString::from(format!("{t_up_to_date}（v{latest}）")),
+            theme.muted_foreground,
+        ),
+        UpdateStatus::Available(info) => (
+            IconName::TriangleAlert,
+            theme.accent,
+            SharedString::from(format!("{t_available} v{}", info.version())),
+            theme.foreground,
+        ),
+        UpdateStatus::Failed(err) => (
+            IconName::Close,
+            theme.error,
+            SharedString::from(format!("{t_failed}：{err}")),
+            theme.error,
+        ),
+    };
+
+    // 有新版本时补一行：发布日期 + 本平台安装包大小
+    let extra = match &this.update_status {
+        UpdateStatus::Available(info) => {
+            let mut parts: Vec<String> = Vec::new();
+            if !info.published_date().is_empty() {
+                parts.push(format!("{} {}", t_published, info.published_date()));
+            }
+            if let Some(asset) = info.asset_for_platform() {
+                parts.push(format!("{} · {}", asset.name, asset.size_text()));
+            }
+            if parts.is_empty() {
+                None
+            } else {
+                Some(parts.join("　"))
+            }
+        }
+        _ => None,
+    };
+
+    // 下载按钮：优先本平台安装包，没有再退化成打开发布页
+    let download_url = match &this.update_status {
+        UpdateStatus::Available(info) => Some(
+            info.asset_for_platform()
+                .map(|a| a.browser_download_url.clone())
+                .filter(|u| !u.is_empty())
+                .unwrap_or_else(|| info.html_url.clone()),
+        ),
+        _ => None,
+    };
+    let release_url = match &this.update_status {
+        UpdateStatus::Available(info) if !info.html_url.is_empty() => Some(info.html_url.clone()),
+        _ => None,
+    };
+
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(GAP_S))
+        // 当前版本
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .text_size(px(11.0))
+                        .text_color(theme.muted_foreground)
+                        .child(t_current),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.0))
+                        .font_weight(FontWeight(600.0))
+                        .text_color(theme.foreground)
+                        .child(format!("v{CURRENT_VERSION}")),
+                ),
+        )
+        // 状态
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_start()
+                .gap(px(GAP_XS + 2.0))
+                .child(Icon::new(icon).xsmall().text_color(icon_color))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .text_size(px(11.0))
+                        .text_color(text_color)
+                        .child(text),
+                ),
+        )
+        .when_some(extra, |d, extra| {
+            d.child(
+                div()
+                    .text_size(px(10.0))
+                    .text_color(theme.muted_foreground)
+                    .child(extra),
+            )
+        })
+        // 操作按钮
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(GAP_S))
+                .flex_wrap()
+                .child(
+                    ghost_button(
+                        "update-check-btn",
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(GAP_XS))
+                            .child(Icon::new(IconName::Replace).xsmall())
+                            .child(check_label.clone()),
+                        theme,
+                    )
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<MainView>| {
+                            this.check_for_updates(window, cx);
+                        }),
+                    ),
+                )
+                .when_some(release_url, |d, url| {
+                    d.child(
+                        ghost_button(
+                            "update-release-btn",
+                            div()
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap(px(GAP_XS))
+                                .child(Icon::new(IconName::ExternalLink).xsmall())
+                                .child(t_release_page.clone()),
+                            theme,
+                        )
+                        .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                            cx.open_url(&url);
+                        }),
+                    )
+                })
+                .when_some(download_url, |d, url| {
+                    d.child(
+                        primary_button_sm(
+                            "update-download-btn",
+                            div()
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap(px(2.0))
+                                .child(Icon::new(IconName::ArrowDown).xsmall())
+                                .child(t_download.clone()),
+                            theme,
+                        )
+                        .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                            cx.open_url(&url);
+                        }),
+                    )
+                }),
+        )
+}
+
 /// 设置浮层面板 — 在侧边栏 logo 下方展开
-fn settings_popover(this: &mut MainView, cx: &mut Context<MainView>, theme: &Theme) -> gpui::Div {
+fn settings_popover(
+    this: &mut MainView,
+    cx: &mut Context<MainView>,
+    theme: &Theme,
+    max_height: f32,
+) -> gpui::Div {
     let current_lang = this
         .app_state
         .lock()
@@ -3194,343 +3586,388 @@ fn settings_popover(this: &mut MainView, cx: &mut Context<MainView>, theme: &The
     let t_lang_zh = this.t("language.zh");
     let t_lang_en = this.t("language.en");
     let t_theme_title = this.t("theme.title");
-    let t_theme_dark = this.t("theme.dark");
-    let t_theme_light = this.t("theme.light");
-    let t_theme_sepia = this.t("theme.sepia");
     let t_settings_general = this.t("settings.general");
     let t_settings_auto_save = this.t("settings.auto_save");
     let t_settings_proxy = this.t("settings.proxy");
     let t_settings_proxy_enable = this.t("settings.proxy_enable");
     let t_settings_proxy_url = this.t("settings.proxy_url");
+    let t_shortcuts = this.t("settings.shortcuts");
+    let title = this.t("settings.title");
+    // 主题名（12 个）按 4 列 × 3 行排版，宽高一致
+    let theme_items: Vec<(SharedString, &'static str, String)> = vec![
+        (this.t("theme.dark"), "theme-dark", "dark".to_string()),
+        (this.t("theme.light"), "theme-light", "light".to_string()),
+        (this.t("theme.sepia"), "theme-sepia", "sepia".to_string()),
+        (this.t("theme.ocean"), "theme-ocean", "ocean".to_string()),
+        (this.t("theme.sunset"), "theme-sunset", "sunset".to_string()),
+        (this.t("theme.forest"), "theme-forest", "forest".to_string()),
+        (this.t("theme.monokai"), "theme-monokai", "monokai".to_string()),
+        (this.t("theme.nord"), "theme-nord", "nord".to_string()),
+        (this.t("theme.dracula"), "theme-dracula", "dracula".to_string()),
+        (this.t("theme.tokyonight"), "theme-tokyonight", "tokyonight".to_string()),
+        (this.t("theme.gruvbox"), "theme-gruvbox", "gruvbox".to_string()),
+        (this.t("theme.latte"), "theme-latte", "latte".to_string()),
+    ];
+    let shortcut_rows: Vec<(&'static str, SharedString)> = vec![
+        ("Ctrl+Enter / Ctrl+S", this.t("settings.shortcuts.send")),
+        ("Ctrl+N", this.t("settings.shortcuts.new_tab")),
+        ("Ctrl+W", this.t("settings.shortcuts.close_tab")),
+        ("Ctrl+H", this.t("settings.shortcuts.history")),
+        ("Ctrl+E", this.t("settings.shortcuts.env")),
+        ("Ctrl+T", this.t("settings.shortcuts.theme")),
+        ("Ctrl+L", this.t("settings.shortcuts.lang")),
+    ];
 
-    div()
-        .w(px(290.0))
-        .px_4()
-        .py_3()
-        .bg(theme.background)
-        .border_1()
-        .border_color(theme.border)
-        .rounded_md()
-        .shadow_lg()
-        .flex_col()
-        .gap_2()
-        .on_mouse_move(cx.listener(|this, _: &MouseMoveEvent, _window: &mut Window, cx: &mut Context<MainView>| {
-            this.proxy_tips_hovered = false;
-            cx.notify();
-        }))
-        .children([
-            // === 语言 ===
-            section_label(&t_lang_title, theme),
-            div()
-                .flex()
-                .gap_2()
-                .child(setting_option_btn(
-                    &t_lang_zh,
-                    "lang-zh",
-                    current_lang == "zh-CN",
-                    theme,
-                    cx,
-                    |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
-                        this.app_state.lock().unwrap().switch_language("zh-CN");
-                        this.refresh_translations();
-                        cx.notify();
-                    },
-                ))
-                .child(setting_option_btn(
-                    &t_lang_en,
-                    "lang-en",
-                    current_lang == "en-US",
-                    theme,
-                    cx,
-                    |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
-                        this.app_state.lock().unwrap().switch_language("en-US");
-                        this.refresh_translations();
-                        cx.notify();
-                    },
-                )),
-            // === 主题 ===
-            section_label(&t_theme_title, theme),
-            div()
-                .flex()
-                .flex_wrap()
-                .gap_2()
-                .child(setting_option_btn(
-                    &t_theme_dark,
-                    "theme-dark",
-                    current_theme == "dark",
-                    theme,
-                    cx,
-                    |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
-                        this.switch_theme("dark", cx);
-                    },
-                ))
-                .child(setting_option_btn(
-                    &t_theme_light,
-                    "theme-light",
-                    current_theme == "light",
-                    theme,
-                    cx,
-                    |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
-                        this.switch_theme("light", cx);
-                    },
-                ))
-                .child(setting_option_btn(
-                    &t_theme_sepia,
-                    "theme-sepia",
-                    current_theme == "sepia",
-                    theme,
-                    cx,
-                    |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
-                        this.switch_theme("sepia", cx);
-                    },
-                ))
-                .child(setting_option_btn(
-                    &this.t("theme.ocean"),
-                    "theme-ocean",
-                    current_theme == "ocean",
-                    theme,
-                    cx,
-                    |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
-                        this.switch_theme("ocean", cx);
-                    },
-                ))
-                .child(setting_option_btn(
-                    &this.t("theme.sunset"),
-                    "theme-sunset",
-                    current_theme == "sunset",
-                    theme,
-                    cx,
-                    |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
-                        this.switch_theme("sunset", cx);
-                    },
-                ))
-                .child(setting_option_btn(
-                    &this.t("theme.forest"),
-                    "theme-forest",
-                    current_theme == "forest",
-                    theme,
-                    cx,
-                    |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
-                        this.switch_theme("forest", cx);
-                    },
-                ))
-                .child(setting_option_btn(
-                    &this.t("theme.monokai"),
-                    "theme-monokai",
-                    current_theme == "monokai",
-                    theme,
-                    cx,
-                    |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
-                        this.switch_theme("monokai", cx);
-                    },
-                ))
-                .child(setting_option_btn(
-                    &this.t("theme.nord"),
-                    "theme-nord",
-                    current_theme == "nord",
-                    theme,
-                    cx,
-                    |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
-                        this.switch_theme("nord", cx);
-                    },
-                )),
-            // === 常规 ===
-            section_label(&t_settings_general, theme),
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(theme.foreground)
-                        .child(t_settings_auto_save.clone()),
-                )
-                .child(toggle_switch(
-                    "auto-save",
-                    auto_save,
-                    theme,
-                    cx,
-                    |this, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<MainView>| {
-                        let new_val = !this.app_state.lock().unwrap().config.general.auto_save;
-                        {
-                            let mut state = this.app_state.lock().unwrap();
-                            Arc::make_mut(&mut state.config).general.auto_save = new_val;
-                            let _ = state.config.save();
-                        }
-                        this.update_auto_save_task(window, cx);
-                        cx.notify();
-                    },
-                )),
-            // === 代理 ===
-            section_label(&t_settings_proxy, theme),
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(theme.foreground)
-                        .child(t_settings_proxy_enable.clone()),
-                )
-                .child(toggle_switch(
-                    "proxy-enabled",
-                    proxy_enabled,
-                    theme,
-                    cx,
-                    |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
-                        let new_val = !this.app_state.lock().unwrap().config.proxy.enabled;
-                        {
-                            let mut state = this.app_state.lock().unwrap();
-                            Arc::make_mut(&mut state.config).proxy.enabled = new_val;
-                            let _ = state.config.save();
-                        }
-                        let url = this.proxy_url_input.read(cx).value().to_string();
-                        this.app_state.lock().unwrap().update_proxy(new_val, &url);
-                        cx.notify();
-                    },
-                )),
-            div()
-                .relative()
-                .flex()
-                .flex_col()
-                .gap_1p5()
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            div()
-                                .text_xs()
-                                .font_weight(FontWeight(500.0))
-                                .text_color(theme.muted_foreground)
-                                .child(t_settings_proxy_url.clone()),
-                        )
-                        .child(
-                            div()
-                                .id("proxy-tips-icon")
-                                .w(px(16.0))
-                                .h(px(16.0))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded_full()
-                                .border_1()
-                                .border_color(if this.proxy_tips_hovered { theme.accent } else { theme.muted_foreground })
-                                .text_xs()
-                                .text_color(if this.proxy_tips_hovered { theme.accent } else { theme.muted_foreground })
-                                .cursor_default()
-                                .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _window: &mut Window, cx: &mut Context<MainView>| {
+    // ---- 各区块，统一 push 成 AnyElement 再交给 flex 容器 ----
+    let mut sections: Vec<AnyElement> = Vec::new();
+
+    // 语言
+    sections.push(section_title(t_lang_title, theme).into_any_element());
+    // 注意：两个选项按钮的闭包类型不同，必须用两次 .child()，放进同一个数组会因类型不同编译失败
+    sections.push(
+        div()
+            .flex()
+            .flex_row()
+            .gap(px(GAP_S))
+            .child(setting_option_btn(
+                &t_lang_zh,
+                "lang-zh",
+                current_lang == "zh-CN",
+                theme,
+                cx,
+                |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
+                    this.app_state.lock().unwrap().switch_language("zh-CN");
+                    this.refresh_translations();
+                    cx.notify();
+                },
+            ))
+            .child(setting_option_btn(
+                &t_lang_en,
+                "lang-en",
+                current_lang == "en-US",
+                theme,
+                cx,
+                |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
+                    this.app_state.lock().unwrap().switch_language("en-US");
+                    this.refresh_translations();
+                    cx.notify();
+                },
+            ))
+            .into_any_element(),
+    );
+
+    // 主题
+    sections.push(section_divider(theme).into_any_element());
+    sections.push(section_title(t_theme_title, theme).into_any_element());
+    for (row_index, chunk) in theme_items.chunks(4).enumerate() {
+        // 两行主题按钮之间留出小间距（容器 gap 在滚动包装下不生效，这里显式给）
+        let mut row = div().flex().flex_row().gap(px(GAP_S));
+        if row_index > 0 {
+            row = row.mt(px(GAP_XS + 2.0));
+        }
+        for (label, id, value) in chunk {
+            let value = value.clone();
+            let active = current_theme == value;
+            row = row.child(setting_option_btn(
+                label,
+                id,
+                active,
+                theme,
+                cx,
+                move |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
+                    this.switch_theme(&value, cx);
+                },
+            ));
+        }
+        sections.push(row.into_any_element());
+    }
+
+    // 常规
+    sections.push(section_divider(theme).into_any_element());
+    sections.push(section_title(t_settings_general, theme).into_any_element());
+    sections.push(
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .h(px(30.0))
+            .child(
+                div()
+                    .text_size(px(12.0))
+                    .text_color(theme.foreground)
+                    .child(t_settings_auto_save.clone()),
+            )
+            .child(
+                crate::ui::components::toggle_switch("auto-save", auto_save, theme).on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(
+                        |this, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<MainView>| {
+                            let new_val = !this.app_state.lock().unwrap().config.general.auto_save;
+                            {
+                                let mut state = this.app_state.lock().unwrap();
+                                Arc::make_mut(&mut state.config).general.auto_save = new_val;
+                                let _ = state.config.save();
+                            }
+                            this.update_auto_save_task(window, cx);
+                            cx.notify();
+                        },
+                    ),
+                ),
+            )
+            .into_any_element(),
+    );
+
+    // 代理
+    sections.push(section_divider(theme).into_any_element());
+    sections.push(section_title(t_settings_proxy, theme).into_any_element());
+    sections.push(
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .h(px(30.0))
+            .child(
+                div()
+                    .text_size(px(12.0))
+                    .text_color(theme.foreground)
+                    .child(t_settings_proxy_enable.clone()),
+            )
+            .child(
+                crate::ui::components::toggle_switch("proxy-enabled", proxy_enabled, theme)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(
+                            |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
+                                let new_val = !this.app_state.lock().unwrap().config.proxy.enabled;
+                                {
+                                    let mut state = this.app_state.lock().unwrap();
+                                    Arc::make_mut(&mut state.config).proxy.enabled = new_val;
+                                    let _ = state.config.save();
+                                }
+                                let url = this.proxy_url_input.read(cx).value().to_string();
+                                this.app_state.lock().unwrap().update_proxy(new_val, &url);
+                                cx.notify();
+                            },
+                        ),
+                    ),
+            )
+            .into_any_element(),
+    );
+    sections.push(
+        div()
+            .mt(px(GAP_S))
+            .flex()
+            .flex_col()
+            .gap(px(GAP_XS + 2.0))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(GAP_XS + 2.0))
+                    .child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(theme.muted_foreground)
+                            .child(t_settings_proxy_url.clone()),
+                    )
+                    .child(
+                        div()
+                            .id("proxy-tips-icon")
+                            .w(px(14.0))
+                            .h(px(14.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_full()
+                            .border_1()
+                            .border_color(if this.proxy_tips_hovered {
+                                theme.accent
+                            } else {
+                                theme.muted_foreground
+                            })
+                            .text_size(px(10.0))
+                            .text_color(if this.proxy_tips_hovered {
+                                theme.accent
+                            } else {
+                                theme.muted_foreground
+                            })
+                            .cursor_default()
+                            .on_mouse_move(cx.listener(
+                                |this, e: &MouseMoveEvent, _window: &mut Window, cx: &mut Context<MainView>| {
                                     cx.stop_propagation();
                                     this.proxy_tips_hovered = true;
                                     this.proxy_tips_x = Some(e.position.x.into());
                                     this.proxy_tips_y = Some(e.position.y.into());
                                     cx.notify();
-                                }))
-                                .child("?"),
-                        ),
-                )
-                .child(
-                    Input::new(&this.proxy_url_input)
-                        .small()
-                        .h(px(30.0))
-                        .w_full()
-                        .rounded_sm()
-                        .bg(theme.input_background)
-                        .text_color(theme.foreground),
-                ),
-            // 快捷键折叠说明
+                                },
+                            ))
+                            .child("?"),
+                    ),
+            )
+            .child(
+                Input::new(&this.proxy_url_input)
+                    .h(px(30.0))
+                    .w_full()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.input_background)
+                    .text_color(theme.foreground),
+            )
+            .into_any_element(),
+    );
+
+    // 快捷键（默认折叠）
+    sections.push(section_divider(theme).into_any_element());
+    let mut shortcuts = div()
+        .flex()
+        .flex_col()
+        .child(
             div()
                 .flex()
-                .flex_col()
+                .flex_row()
+                .items_center()
+                .gap(px(GAP_XS + 2.0))
+                .cursor_pointer()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _: &MouseDownEvent, _window, cx| {
+                        this.show_shortcuts_popup = !this.show_shortcuts_popup;
+                        cx.notify();
+                    }),
+                )
+                .child(
+                    Icon::new(if this.show_shortcuts_popup {
+                        IconName::ChevronDown
+                    } else {
+                        IconName::ChevronRight
+                    })
+                    .xsmall()
+                    .text_color(theme.muted_foreground),
+                )
                 .child(
                     div()
+                        .text_size(px(11.0))
+                        .font_weight(FontWeight(600.0))
+                        .text_color(theme.muted_foreground)
+                        .child(t_shortcuts),
+                ),
+        );
+    if this.show_shortcuts_popup {
+        let mut rows = div().mt(px(GAP_S)).flex().flex_col().gap(px(GAP_XS));
+        for (key, label) in shortcut_rows {
+            rows = rows.child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(GAP_S))
+                    .child(
+                        div()
+                            .min_w(px(112.0))
+                            .px(px(GAP_XS + 2.0))
+                            .py(px(2.0))
+                            .rounded_sm()
+                            .bg(theme.input_background)
+                            .border_1()
+                            .border_color(theme.border)
+                            .text_size(px(10.0))
+                            .text_color(theme.muted_foreground)
+                            .child(key),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(theme.muted_foreground)
+                            .child(label),
+                    ),
+            );
+        }
+        shortcuts = shortcuts.child(rows);
+    }
+    sections.push(shortcuts.into_any_element());
+
+    // 关于 / 更新检查
+    sections.push(section_divider(theme).into_any_element());
+    sections.push(section_title(this.t("settings.about"), theme).into_any_element());
+    sections.push(update_section(this, cx, theme).into_any_element());
+
+    div()
+        .w(px(300.0))
+        .max_h(px(max_height))
+        .flex_col()
+        // 裁剪：滚动区里的段落比可视区高，若无裁剪会画到面板之外，
+        // 那些段落本身没有底色 → 看起来就是「弹窗里能看到下层内容」
+        .overflow_hidden()
+        .child(
+            // 标题栏固定，内容区可滚动：窗口再矮也不会被截断
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .h(px(38.0))
+                .px(px(GAP_M))
+                .flex_shrink_0()
+                .border_b(px(1.0))
+                .border_color(theme.border)
+                .child(
+                    div()
+                        .text_size(px(13.0))
+                        .font_weight(FontWeight(600.0))
+                        .text_color(theme.foreground)
+                        .child(title),
+                )
+                .child(
+                    div()
+                        .id("settings-close")
+                        .w(px(24.0))
+                        .h(px(24.0))
                         .flex()
                         .items_center()
-                        .gap_2()
+                        .justify_center()
+                        .rounded_md()
                         .cursor_pointer()
+                        .text_color(theme.muted_foreground)
+                        .hover(|s| s.bg(theme.muted_background).text_color(theme.foreground))
                         .on_mouse_down(
                             MouseButton::Left,
-                            cx.listener(|this, _: &MouseDownEvent, _window, cx| {
-                                this.show_shortcuts_popup = !this.show_shortcuts_popup;
+                            cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
+                                this.show_settings_popover = false;
                                 cx.notify();
                             }),
                         )
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(theme.accent)
-                                .child(this.t("settings.shortcuts")),
-                        )
-                        .child(
-                            Icon::new(
-                                if this.show_shortcuts_popup {
-                                    IconName::ChevronDown
-                                } else {
-                                    IconName::ChevronRight
-                                },
-                            )
-                            .xsmall()
-                            .text_color(theme.accent),
-                        ),
-                )
-                .when(this.show_shortcuts_popup, |el| {
-                    el.child(
-                        div()
-                            .mt_2()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .children(
-                                [
-                                    ("Ctrl+Enter / Ctrl+S", "settings.shortcuts.send"),
-                                    ("Ctrl+N", "settings.shortcuts.new_tab"),
-                                    ("Ctrl+W", "settings.shortcuts.close_tab"),
-                                    ("Ctrl+H", "settings.shortcuts.history"),
-                                    ("Ctrl+E", "settings.shortcuts.env"),
-                                    ("Ctrl+T", "settings.shortcuts.theme"),
-                                    ("Ctrl+L", "settings.shortcuts.lang"),
-                                ]
-                                .iter()
-                                .map(|(key, label)| {
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .justify_between()
-                                        .px_3()
-                                        .py_1()
-                                        .rounded_sm()
-                                        .bg(theme.input_background)
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(theme.accent)
-                                                .child(key.to_string()),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(theme.muted_foreground)
-                                                .child(this.t(label)),
-                                        )
-                                })
-                                .collect::<Vec<_>>(),
-                            ),
-                    )
-                }),
-        ])
-}
-
-fn section_label(label: &str, theme: &Theme) -> gpui::Div {
-    div()
-        .text_xs()
-        .font_weight(FontWeight(600.0))
-        .text_color(theme.accent)
-        .pt_1()
-        .pb_0p5()
-        .child(label.to_string())
+                        .child(Icon::new(IconName::Close).xsmall()),
+                ),
+        )
+        .child(
+            div()
+                .id("settings-body")
+                .flex_col()
+                // 必须给滚动区**显式高度**：max_h 只约束外框，容器自身高度仍等于
+                // 内容高度，gpui 按容器高度算滚动范围 → 范围恒为 0（探针实测
+                // 容器 511px == 内容 511px，就是"没法滚动"）
+                // 38=标题栏，2=上下边框；不给足会被边框挤出去一点点
+                .h(px((max_height - 40.0).max(120.0)))
+                // 滚动区自带不透明底色：即使某处漏裁剪，也不会透出下层
+                .bg(theme.background)
+                // 抵消 flex 的自动最小高度，否则内容会把容器撑开、滚动范围归零
+                .min_h(px(0.0))
+                // 必须用 gpui 原生滚动：gpui_component 的 overflow_y_scrollbar
+                // 会给内容注入 size_auto + flex_1，滚动范围会被算成 0（就是"没法滚动"）
+                .overflow_y_scroll()
+                .child(
+                    div()
+                        .flex_none()
+                        .w_full()
+                        .flex_col()
+                        .children(sections),
+                ),
+        )
 }
 
 fn setting_option_btn(
@@ -3567,38 +4004,6 @@ fn setting_option_btn(
         .child(label.to_string())
 }
 
-fn toggle_switch(
-    _id: &'static str,
-    value: bool,
-    theme: &Theme,
-    cx: &mut Context<MainView>,
-    on_toggle: impl Fn(&mut MainView, &MouseDownEvent, &mut Window, &mut Context<MainView>) + 'static,
-) -> impl IntoElement {
-    div()
-        .cursor_pointer()
-        .min_w(px(42.0))
-        .px_2p5()
-        .py_0p5()
-        .rounded_sm()
-        .text_xs()
-        .font_weight(FontWeight(600.0))
-        .border_1()
-        .border_color(if value { theme.success } else { theme.border })
-        .bg(if value {
-            theme.success
-        } else {
-            theme.muted_background
-        })
-        .text_color(if value {
-            theme.accent_foreground
-        } else {
-            theme.muted_foreground
-        })
-        .hover(|s| if value { s } else { s.bg(theme.border) })
-        .on_mouse_down(MouseButton::Left, cx.listener(on_toggle))
-        .child(if value { "ON" } else { "OFF" })
-}
-
 impl Render for MainView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let sidebar_width = if self.sidebar_collapsed {
@@ -3630,6 +4035,21 @@ impl Render for MainView {
         let environments = self.environments.clone();
         let show_close = self.request_tabs.len() > 1;
         let theme = self.cached_theme.clone();
+        // 侧边栏内容区高度：窗口高度减掉顶部/底部 chrome。
+        // 侧边栏整条高度链是 auto，滚动区必须显式定高，否则滚动范围会算成 0
+        let sidebar_content_h = (window.bounds().size.height.as_f32() - 121.0).max(160.0);
+        // 请求标签条：标签定宽，标签过多时整体横向滚动，并据此决定是否显示左右箭头
+        let tabs_content_w = (REQUEST_TAB_WIDTH + REQUEST_TAB_GAP)
+            * self.request_tabs.len() as f32
+            - REQUEST_TAB_GAP;
+        let tabs_max = (tabs_content_w - self.tabs_viewport).max(0.0);
+        let tabs_offset = f32::from(self.tabs_scroll.offset().x);
+        let tabs_overflow = tabs_max > 0.5;
+        // 配置开关（代理 / 自动保存）：渲染期间只读，锁一次取出来
+        let (proxy_on, auto_save_on) = {
+            let state = self.app_state.lock().unwrap();
+            (state.config.proxy.enabled, state.config.general.auto_save)
+        };
 
         div()
             .relative()
@@ -3640,6 +4060,14 @@ impl Render for MainView {
             .relative()
             .track_focus(&self.root_focus_handle)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>| {
+                // Esc 逐层关闭弹窗/浮层（一次一层，没有可关的就不拦截事件）
+                if event.keystroke.key == "escape"
+                    && !event.keystroke.modifiers.control
+                    && this.close_topmost_overlay(cx)
+                {
+                    cx.stop_propagation();
+                    return;
+                }
                 if event.keystroke.modifiers.control {
                     match event.keystroke.key.as_str() {
                         "enter" | "s" => {
@@ -3674,9 +4102,7 @@ impl Render for MainView {
                         }
                         "t" => {
                             cx.stop_propagation();
-                            const THEMES: &[&str] = &[
-                                "dark", "light", "sepia", "ocean", "sunset", "forest", "monokai", "nord",
-                            ];
+                            const THEMES: &[&str] = Theme::NAMES;
                             let current = this.app_state.lock().unwrap().config.general.theme.clone();
                             let idx = THEMES.iter().position(|t| *t == current).unwrap_or(0);
                             let next = THEMES[(idx + 1) % THEMES.len()];
@@ -3705,6 +4131,9 @@ impl Render for MainView {
                         div()
                             .relative()
                             .w(sidebar_width)
+                            // 侧边栏宽度必须固定：否则主工作区（请求标签栏等）的 min-content
+                            // 过大时会把侧边栏压缩，导致收藏夹/历史/环境变量切换时宽度不一致
+                            .flex_shrink_0()
                             .h_full()
                             .flex()
                             .flex_col()
@@ -3738,8 +4167,18 @@ impl Render for MainView {
                                             .cursor_pointer()
                                             .bg(if self.show_settings_popover { theme.muted_background } else { theme.input_background })
                                             .hover(|s| s.bg(theme.muted_background))
-                                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>| {
                                                 this.show_settings_popover = !this.show_settings_popover;
+                                                // 打开设置面板时顺手查一次更新，10 分钟内不重复打 GitHub
+                                                if this.show_settings_popover {
+                                                    let stale = this
+                                                        .update_checked_at
+                                                        .map(|at| at.elapsed().as_secs() >= 600)
+                                                        .unwrap_or(true);
+                                                    if stale {
+                                                        this.check_for_updates(window, cx);
+                                                    }
+                                                }
                                                 cx.notify();
                                             }))
                                             .child(
@@ -3749,6 +4188,11 @@ impl Render for MainView {
                                 // 标签页按钮
                                 div()
                                     .flex()
+                                    // 设置浮层盖住的就是这块区域：浮层挂在侧边栏子树里，
+                                    // 标签行排在它之后绘制，会压在浮层上面（表现为"弹窗里还看得见
+                                    // 收藏夹/历史/环境变量图标"）。让它在浮层打开时不可见即可 ——
+                                    // 区域本就被浮层完全遮住，视觉上无差别，且不依赖绘制顺序。
+                                    .opacity(if self.show_settings_popover { 0.0 } else { 1.0 })
                                     .when(self.sidebar_collapsed, |s| s.flex_col().flex_1())
                                     .when(!self.sidebar_collapsed, |s| s.flex_row().h(px(40.0)))
                                     .children([
@@ -3800,10 +4244,17 @@ impl Render for MainView {
                                     ]),
                                 // 侧边栏内容
                                 if !self.sidebar_collapsed {
+                                    // 注意：这里必须是 flex_col。
+                                    // 用 flex()（row）时，子元素的 flex_1 作用于宽度，
+                                    // 高度只剩「内容高度」，里面的 overflow_y_scroll 就没有
+                                    // 可滚动边界了 —— 表现就是列表滚不动。
                                     div()
-                                        .flex()
-                                        .flex_1()
-                                        .h(px(600.0))
+                                        .flex_col()
+                                        .h(px(sidebar_content_h))
+                                        // 必须解除 flex 子项的自动最小高度(=内容高度)，
+                                        // 否则显式高度会被内容顶开，列表超出窗口被裁掉且滚不动
+                                        .min_h(px(0.0))
+                                        .flex_shrink_0()
                                         .overflow_hidden()
                                         .children([
                                             if sidebar_tab == SidebarTab::History { // 历史记录
@@ -3814,25 +4265,37 @@ impl Render for MainView {
                                                         .text_sm()
                                                         .text_color(theme.muted_foreground)
                                                         .child(self.t("ui.no_history"))
+                                                        .into_any_element()
                                                 } else {
+                                                    // 滚动容器：确定高度 + 原生滚动（gpui 自带滚动条）
                                                     div()
-                                                        .id("history-list")
-                                                        .w_full()
+                                                        .id("history-scroll")
+                                                        .size_full()
                                                         .flex_col()
-                                                        .gap_1()
                                                         .overflow_y_scroll()
-                                                        .p_2()
-                                                        .children(history.iter().map(|entry| {
-                                                            let method_clr = method_color(&entry.method);
-                                                            let entry_clone = entry.clone();
-                                                            let entry_response_body = entry.response_body.clone();
-                                                            let entry_response_headers = entry.response_headers.clone();
+                                                        .child(
+                                                            // 内容：自然高度，绝不能被 flex_shrink 压缩
+                                                            div()
+                                                                .id("history-list")
+                                                                .w_full()
+                                                                .flex_none()
+                                                                .flex_col()
+                                                                .gap_1()
+                                                                .p_2().pb(px(24.0))
+                                                                .children(history.iter().enumerate().map(|(history_idx, entry)| {
+let method_clr = method_color(&entry.method);
+                                                            // 每行只做一次 Arc 引用计数，不再 clone 整个 entry 和响应体：
+                                                            // 这些数据只在点击时才需要，没必要每帧复制
+                                                            let history_row = self.history.clone();
                                                             let entry_response_time_ms = entry.response_time_ms;
                                                             let entry_response_size = entry.response_size.or_else(|| entry.response_body.as_ref().map(|b| b.len() as i64));
                                                             let display_method = entry.method.clone();
                                                             let display_url = entry.url.clone();
                                                             div()
                                                                 .w_full()
+                                                                // 关键：flex 子项默认 flex_shrink=1，会被压缩到刚好装下，
+                                                                // 内容高度等于容器高度就永远滚不动
+                                                                .flex_none()
                                                                 .flex_col()
                                                                 .gap_1()
                                                                 .p_2()
@@ -3840,20 +4303,22 @@ impl Render for MainView {
                                                                 .cursor_pointer()
                                                                 .hover(|s| s.bg(theme.code_background)).bg(theme.muted_background)
                                                                 .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                    // 从共享的 Arc 里按下标取，避免每帧复制大对象
+                                                                    let Some(entry) = history_row.get(history_idx) else { return; };
                                                                     this.load_saved_request(
-                                                                        &entry_clone.id,
-                                                                        &entry_clone.method,
-                                                                        &entry_clone.url,
+                                                                        &entry.id,
+                                                                        &entry.method,
+                                                                        &entry.url,
                                                                         "",
-                                                                        entry_clone.headers.as_deref(),
-                                                                        entry_clone.body.as_deref(),
+                                                                        entry.headers.as_deref(),
+                                                                        entry.body.as_deref(),
                                                                         _window,
                                                                         cx,
                                                                     );
 
-                                                                    if let Some(status) = entry_clone.response_status {
-                                                                        let resp_body = entry_response_body.clone().unwrap_or_default();
-                                                                        let resp_headers: std::collections::HashMap<String, String> = entry_response_headers.as_ref().and_then(|h| serde_json::from_str(h).ok()).unwrap_or_default();
+                                                                    if let Some(status) = entry.response_status {
+                                                                        let resp_body = entry.response_body.clone().unwrap_or_default();
+                                                                        let resp_headers: std::collections::HashMap<String, String> = entry.response_headers.as_ref().and_then(|h| serde_json::from_str(h).ok()).unwrap_or_default();
                                                                         let content_type = resp_headers.get("content-type").cloned();
                                                                         // 在 resp_headers 被移动前重建 header inputs
                                                                         this.rebuild_response_header_inputs(&resp_headers, _window, cx);
@@ -3880,7 +4345,7 @@ impl Render for MainView {
                                                                             size_bytes: entry_response_size.unwrap_or(0),
                                                                             cookies: Vec::new(),
                                                                         };
-                                                                        this.response = Some(response);
+                                                                        this.response = Some(Arc::new(response));
                                                                         this.update_pretty_editor(_window, cx);
                                                                     } else {
                                                                         this.response = None;
@@ -3905,7 +4370,7 @@ impl Render for MainView {
                                                                         div().px_1().py_px().rounded_sm().bg(rgb(method_clr))
                                                                             .text_xs().text_color(theme.accent_foreground)
                                                                             .child(display_method),
-                                                                        div().flex_1().text_ellipsis().text_xs().text_color(theme.foreground)
+                                                                        div().flex_1().min_w(px(0.0)).truncate().text_xs().text_color(theme.foreground)
                                                                             .child(display_url),
                                                                     ]),
                                                                     if let Some(status) = entry.response_status {
@@ -3917,6 +4382,8 @@ impl Render for MainView {
                                                                     },
                                                                 ])
                                                         }))
+                                                        )
+                                                        .into_any_element()
                                                 }
                                             } else if sidebar_tab == SidebarTab::Collections { // 收藏夹
                                                 log::debug!("渲染收藏夹面板: collection_items={}, saved_requests={}, folders={}",
@@ -3928,7 +4395,6 @@ impl Render for MainView {
                                                     .flex_1()
                                                     .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                         this.context_menu_target = None;
-                                                        this.env_menu_target = None;
                                                         cx.notify();
                                                     }))
                                                     .on_mouse_move(cx.listener(|this, _: &MouseMoveEvent, _window: &mut Window, cx: &mut Context<Self>| {
@@ -3974,10 +4440,15 @@ impl Render for MainView {
                                                             let drop_eid = cx.entity_id();
                                                             div()
                                                                 .id("sidebar-collections-scroll")
-                                                                .flex_1()
+                                                                // 直接给显式高度：这条高度链上 flex_1/100% 都拿不到父容器的确定高度
+                                                                .h(px(sidebar_content_h))
+                                                                .min_h(px(0.0))
+                                                                .flex_shrink_0()
+                                                                .flex_col()
+                                                                // 原生滚动（见历史记录处的说明：Scrollable 会把内容
+                                                                // 压成容器高度，可滚动范围变成 0）
                                                                 .overflow_y_scroll()
                                                                 .overflow_x_hidden()
-                                                                .p_2()
                                                                 .drag_over::<DragItem>(|style, _data, _window, _cx| {
                                                                     style.bg(rgba(0x88888822))
                                                                 })
@@ -3992,180 +4463,32 @@ impl Render for MainView {
                                                                     drop_flag.store(true, std::sync::atomic::Ordering::Relaxed);
                                                                     cx.notify(drop_eid);
                                                                 })
-                                                                .child(render_collection_panel(&collection_items, &self.context_menu_target, &self.hovered_item_name, cx, &theme, &self.app_state, self.needs_drop_refresh.clone()))
+                                                                .child(
+                                                                    // 内容层：自然高度
+                                                                    div()
+                                                                        .id("sidebar-collections-list")
+                                                                        .w_full()
+                                                                        .flex_none()
+                                                                        .flex_col()
+                                                                        .p_2().pb(px(40.0))
+                                                                        .child(render_collection_panel(&collection_items, &self.context_menu_target, &self.hovered_item_name, cx, &theme, &self.app_state, self.needs_drop_refresh.clone())),
+                                                                )
                                                                 .into_any_element()
                                                         }
                                                     )
+                                                                        .into_any_element()
                                             } else {
-                                                div()
-                                                    .id("sidebar-environments")
-                                                    .relative()
-                                                    .flex_col()
-                                                    .flex_1()
-                                                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
-                                                        this.context_menu_target = None;
-                                                        this.env_menu_target = None;
-                                                        cx.notify();
-                                                    }))
-                                                    .child(
-                                                        div()
-                                                            .flex()
-                                                            .flex_row()
-                                                            .items_center()
-                                                            .justify_between()
-                                                            .px_2()
-                                                            .py_1()
-                                                            .child(
-                                                                div()
-                                                                    .flex()
-                                                                    .items_center()
-                                                                    .gap_1()
-                                                                    .child(Icon::new(IconName::Globe).xsmall().text_color(theme.accent))
-                                                                    .child(
-                                                                        div()
-                                                                            .text_sm()
-                                                                            .text_color(theme.muted_foreground)
-                                                                            .child(self.t("sidebar.env")),
-                                                                    ),
-                                                            )
-                                                            .child({
-                                                                Button::new("add-env-btn")
-                                                                    .icon(IconName::Plus)
-                                                                    .xsmall()
-                                                                    .on_click(cx.listener(|this, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>| {
-                                                                        this.open_environment_dialog(None, window, cx);
-                                                                    }))
-                                                            }),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .id("sidebar-env-scroll")
-                                                            .flex_1()
-                                                            .overflow_y_scroll()
-                                                            .overflow_x_hidden()
-                                                            .child(
-                                                        if environments.is_empty() {
-                                                            div()
-                                                                .id("sidebar-env-empty")
-                                                                .px_2()
-                                                                .py_4()
-                                                                .flex()
-                                                                .justify_center()
-                                                                .text_xs()
-                                                                .text_color(theme.muted_foreground)
-                                                                .child(self.t("env.no_env"))
-                                                        } else {
-                                                            div()
-                                                                .id("sidebar-env-list")
-                                                                .flex_col()
-                                                                .w_full()
-                                                                .gap_1()
-                                                                .py_1()
-                                                                .pl_3()
-                                                                .pr_1()
-                                                                .child(
-                                                                    // 全局变量行（首行）
-                                                                    div()
-                                                                        .w_full()
-                                                                        .relative()
-                                                                        .flex()
-                                                                        .flex_row()
-                                                                        .items_center()
-                                                                        .py_1()
-                                                                        .px_1()
-                                                                        .gap_1()
-                                                                        .rounded_sm()
-                                                                        .cursor_pointer()
-                                                                        .hover(|s| s.bg(theme.code_background))
-                                                                        .bg(theme.background)
-                                                                        .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>| {
-                                                                            this.open_global_dialog(window, cx);
-                                                                        }))
-                                                                        .child(Icon::new(IconName::Star).xsmall().text_color(theme.accent))
-                                                                        .child(
-                                                                            div().flex_1().text_sm().text_color(theme.foreground).child(self.t("sidebar.global_vars"))
-                                                                        ),
-                                                                )
-                                                                .children(environments.iter().map(|env| {
-                                                                    let env_id = env.id.clone();
-                                                                    let env_name = env.name.clone();
-                                                                    let display_name = if env_name.chars().count() > 12 {
-                                                                        format!("{}...", env_name.chars().take(12).collect::<String>())
-                                                                    } else {
-                                                                        env_name.clone()
-                                                                    };
-                                                                    let env_id_edit = env.id.clone();
-                                                                    let env_id_del = env.id.clone();
-                                                                    let is_active = env.is_active;
-                                                                    div()
-                                                                        .w_full()
-                                                                        .relative()
-                                                                        .flex()
-                                                                        .flex_row()
-                                                                        .items_center()
-                                                                        .gap(px(1.0))
-                                                                        .px_1()
-                                                                        .py_1()
-                                                                        .pr(px(28.0))
-                                                                        .rounded_md()
-                                                                        .cursor_pointer()
-                                                                        .hover(|s| s.bg(theme.code_background))
-                                                                        .bg(if is_active { theme.muted_background } else { theme.background })
-                                                                        .children([
-                                                                            div()
-                                                                                .w(px(7.0))
-                                                                                .h(px(7.0))
-                                                                                .rounded_full()
-                                                                                .flex_shrink_0()
-                                                                                .bg(if is_active { theme.success } else { theme.muted_foreground }),
-                                                                            div()
-                                                                                .text_sm()
-                                                                                .text_color(if is_active { theme.foreground } else { theme.muted_foreground })
-                                                                                .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>| {
-                                                                                    this.activate_environment(&env_id, window, cx);
-                                                                                }))
-                                                                                .child(display_name),
-                                                                        ])
-                                                                        .child(
-                                                                            div()
-                                                                                .absolute()
-                                                                                .right(px(2.0))
-                                                                                .top(px(0.0))
-                                                                                .h_full()
-                                                                                .flex().items_center()
-                                                                                .px(px(2.0))
-                                                                                .bg(theme.background)
-                                                                                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                                                                                .child(
-                                                                                    div()
-                                                                                        .w(px(24.0)).h(px(24.0))
-                                                                                        .flex().items_center().justify_center()
-                                                                                        .rounded_sm()
-                                                                                        .cursor_pointer()
-                                                                                        .hover(|s| s.bg(theme.muted_background))
-                                                                                        .on_mouse_down(MouseButton::Left, cx.listener({
-                                                                                            let id = env_id_edit.clone();
-                                                                                            move |this, e: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
-                                                                                                cx.stop_propagation();
-                                                                                                this.env_menu_pos = Some((e.position.x.into(), e.position.y.into()));
-                                                                                                this.env_menu_target = if this.env_menu_target.as_ref() == Some(&id) {
-                                                                                                    None
-                                                                                                } else {
-                                                                                                    Some(id.clone())
-                                                                                                };
-                                                                                                cx.notify();
-                                                                                            }
-                                                                                        }))
-                                                                                        .child(
-                                                                                            Icon::new(IconName::Ellipsis).xsmall().text_color(theme.muted_foreground),
-                                                                                        ),
-                                                                                ),
-                                                                        )
-                                                                }))
-                                                        }
-                                                    )
-                                                    )
-                                            },
+                                                // 环境列表已抽到 src/ui/sidebar/environment_panel.rs
+                                                render_environment_panel(
+                                                    &environments,
+                                                    self.active_env_id(),
+                                                    &self.app_state,
+                                                    &theme,
+                                                    sidebar_content_h,
+                                                    cx,
+                                                )
+                                                                        .into_any_element()
+                                            }
                                         ])
                                 } else {
                                     div().flex_1()
@@ -4190,9 +4513,9 @@ impl Render for MainView {
                                     } else {
                                         Icon::new(IconName::PanelLeftClose).small()
                                     }),
-                            // 设置浮层面板（绝对定位、最后渲染以确保在最上层）
+                            // 设置浮层面板（绝对定位，贴在侧边栏左上角）
                             if self.show_settings_popover {
-                                settings_popover(self, cx, &theme)
+                                settings_popover(self, cx, &theme, window.bounds().size.height.as_f32() - 64.0)
                                     .absolute()
                                     .top(px(48.0))
                                     .left(px(0.0))
@@ -4207,11 +4530,13 @@ impl Render for MainView {
                         div()
                             .relative()
                             .flex_1()
+                            // min_w(0)：主工作区的 min-content（请求标签栏等定宽内容）不应向上传递，
+                            // 否则窗口变窄时会撑破整行、把侧边栏挤窄或裁掉右侧按钮
+                            .min_w(px(0.0))
                             .flex()
                             .flex_col()
                             .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                 this.context_menu_target = None;
-                                this.env_menu_target = None;
                                 cx.notify();
                             }))
                             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window: &mut Window, cx: &mut Context<Self>| {
@@ -4232,95 +4557,158 @@ impl Render for MainView {
                                 // 请求标签栏
                                 div()
                                     .h(px(36.0))
+                                    .w_full()
                                     .flex()
                                     .flex_row()
                                     .items_end()
                                     .bg(theme.muted_background)
                                     .border_b(px(1.0))
                                     .border_color(theme.border)
-                                    .gap_px()
-                                    .children(request_tabs.iter().enumerate().map(|(i, tab)| {
-                                        let is_active = i == active_tab;
-                                        let method_clr = method_color(&tab.method);
-                                        let tab_method = tab.method.clone();
-                                        // 如果是默认标签名称，使用i18n
-                                        let tab_display_name = if tab.name == "新建请求" || tab.name == "New Request" {
-                                            self.t("sidebar.new_request")
-                                        } else {
-                                            tab.name.clone()
-                                        };
-                                        let show_close = show_close;
-
+                                    // 标签条：每个标签定宽，标签过多时整条左右滚动（滚轮即可横向滚动）
+                                    .child(
                                         div()
+                                            .id("request-tabs-scroll")
+                                            .flex_1()
+                                            .min_w(px(0.0))
+                                            // 用显式高度（而非 h_full）：滚动容器的 hitbox 必须覆盖指针位置，
+                                            // 否则 gpui 不会把滚轮事件交给它
                                             .h(px(36.0))
-                                            .w(px(150.0))
-                                            .pl_3()
-                                            .pr_1()
                                             .flex()
-                                            .items_center()
-                                            .gap_1()
-                                            .bg(if is_active { theme.background } else { rgba(0x00000000) })
-                                            .rounded_t_md()
-                                            .border_b_2()
-                                            .border_b(if is_active { px(2.0) } else { px(0.0) })
-                                            .border_color(if is_active { theme.accent } else { rgba(0x00000000) })
-                                            .hover(|s| if is_active { s } else { s.bg(theme.code_background) })
-                                            .text_xs()
-                                            .relative()
-                                            .child(
+                                            .flex_row()
+                                            .items_end()
+                                            .gap_px()
+                                            .overflow_x_scroll()
+                                            .track_scroll(&self.tabs_scroll)
+                                            .children(request_tabs.iter().enumerate().map(|(i, tab)| {
+                                                let is_active = i == active_tab;
+                                                let method_clr = method_color(&tab.method);
+                                                let tab_method = tab.method.clone();
+                                                // 如果是默认标签名称，使用i18n
+                                                let tab_display_name: SharedString = if tab.name == "新建请求" || tab.name == "New Request" {
+                                                    self.t("sidebar.new_request")
+                                                } else {
+                                                    SharedString::from(tab.name.clone())
+                                                };
+                                                let show_close = show_close;
+
                                                 div()
+                                                    .h(px(36.0))
+                                                    .w(px(REQUEST_TAB_WIDTH))
+                                                    // 标签定宽且不收缩：标签过多时由标签条横向滚动，
+                                                    // 而不是把每个标签压窄
+                                                    .flex_shrink_0()
+                                                    .pl_3()
+                                                    .pr_1()
                                                     .flex()
                                                     .items_center()
-                                                    .gap_2()
-                                                    .rounded_sm()
-                                                    .px_1()
-                                                    .py_px()
-                                                    .cursor_pointer()
-                                                    .hover(|s| s.bg(theme.muted_background))
-                                                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
-                                                        this.switch_tab(i, _window, cx);
-                                                    }))
-                                                    .children([
-                                                        div().px_1().py_px().rounded_sm()
-                                                            .bg(rgb(method_clr))
-                                                            .text_xs().text_color(theme.accent_foreground)
-                                                            .child(tab_method),
+                                                    .gap_1()
+                                                    .bg(if is_active { theme.background } else { rgba(0x00000000) })
+                                                    .rounded_t_md()
+                                                    .border_b_2()
+                                                    .border_b(if is_active { px(2.0) } else { px(0.0) })
+                                                    .border_color(if is_active { theme.accent } else { rgba(0x00000000) })
+                                                    .hover(|s| if is_active { s } else { s.bg(theme.code_background) })
+                                                    .text_xs()
+                                                    .relative()
+                                                    .child(
                                                         div()
-                                                            .text_color(if is_active { theme.foreground } else { theme.muted_foreground })
-                                                            .max_w(px(90.0))
-                                                            .overflow_hidden()
-                                                            .text_ellipsis()
-                                                            .child(tab_display_name.clone()),
-                                                    ]),
-                                            )
-                                            .when(show_close, |this| {
-                                                this.child(
-                                                    div()
-                                                        .absolute()
-                                                        .top(px(2.0))
-                                                        .right(px(2.0))
-                                                        .w(px(16.0))
-                                                        .h(px(16.0))
-                                                        .flex()
-                                                        .items_center()
-                                                        .justify_center()
-                                                        .rounded_sm()
-                                                        .cursor_pointer()
-                                                        .hover(|s| s.bg(theme.muted_background))
-                                                        .text_color(theme.muted_foreground)
-                                                        .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
-                                                            this.close_tab(i, _window, cx);
+                                                            .flex()
+                                                            .items_center()
+                                                            .gap_2()
+                                                            .rounded_sm()
+                                                            .px_1()
+                                                            .py_px()
+                                                            .cursor_pointer()
+                                                            .hover(|s| s.bg(theme.muted_background))
+                                                            .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                this.switch_tab(i, _window, cx);
+                                                            }))
+                                                            .children([
+                                                                div().px_1().py_px().rounded_sm()
+                                                                    .bg(rgb(method_clr))
+                                                                    .text_xs().text_color(theme.accent_foreground)
+                                                                    .child(tab_method),
+                                                                div()
+                                                                    .text_color(if is_active { theme.foreground } else { theme.muted_foreground })
+                                                                    .max_w(px(90.0))
+                                                                    .overflow_hidden()
+                                                                    .text_ellipsis()
+                                                                    .child(tab_display_name.clone()),
+                                                            ]),
+                                                    )
+                                                    .when(show_close, |this| {
+                                                        this.child(
+                                                            div()
+                                                                .absolute()
+                                                                .top(px(2.0))
+                                                                .right(px(2.0))
+                                                                .w(px(16.0))
+                                                                .h(px(16.0))
+                                                                .flex()
+                                                                .items_center()
+                                                                .justify_center()
+                                                                .rounded_sm()
+                                                                .cursor_pointer()
+                                                                .hover(|s| s.bg(theme.muted_background))
+                                                                .text_color(theme.muted_foreground)
+                                                                .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                    this.close_tab(i, _window, cx);
+                                                                }))
+                                                                .child(Icon::new(IconName::Close).xsmall()),
+                                                        )
+                                                    })
+                                            }))
+                                    )
+                                    // 左右滚动按钮：只在标签溢出时出现，某方向没有更多标签时置灰不可点
+                                    // （鼠标滚轮悬停在标签条上也可以直接横向滚动）
+                                    .when(tabs_overflow, |el| {
+                                        let can_left = tabs_offset > 0.5;
+                                        let can_right = tabs_offset < tabs_max - 0.5;
+                                        el.child(
+                                            div()
+                                                .id("tabs-scroll-left")
+                                                .h(px(36.0))
+                                                .w(px(TABS_SCROLL_BUTTON_WIDTH))
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .text_color(if can_left { theme.foreground } else { theme.border })
+                                                .when(can_left, |btn| {
+                                                    btn.cursor_pointer()
+                                                        .hover(|s| s.bg(theme.code_background))
+                                                        .on_click(cx.listener(|this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                            this.scroll_tabs_by(-1);
+                                                            cx.notify();
                                                         }))
-                                                        .child(Icon::new(IconName::Close).xsmall()),
-                                                )
-                                            })
-                                    }))
+                                                })
+                                                .child(Icon::new(IconName::ChevronLeft).small()),
+                                        )
+                                        .child(
+                                            div()
+                                                .id("tabs-scroll-right")
+                                                .h(px(36.0))
+                                                .w(px(TABS_SCROLL_BUTTON_WIDTH))
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .text_color(if can_right { theme.foreground } else { theme.border })
+                                                .when(can_right, |btn| {
+                                                    btn.cursor_pointer()
+                                                        .hover(|s| s.bg(theme.code_background))
+                                                        .on_click(cx.listener(|this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                            this.scroll_tabs_by(1);
+                                                            cx.notify();
+                                                        }))
+                                                })
+                                                .child(Icon::new(IconName::ChevronRight).small()),
+                                        )
+                                    })
                                     // 新增标签按钮
                                     .child(
                                         div()
                                             .id("new-tab-btn")
                                             .h(px(40.0))
-                                            .w(px(36.0))
+                                            .w(px(NEW_TAB_BUTTON_WIDTH))
                                             .flex()
                                             .items_center()
                                             .justify_center()
@@ -4345,8 +4733,11 @@ impl Render for MainView {
                                         div()
                                             .flex()
                                             .flex_row()
+                                            .items_center()
+                                            .h(px(crate::ui::components::TAB_H))
+                                            .px(px(crate::ui::components::GAP_S))
                                             .border_b(px(1.0))
-                                            .border_color(theme.muted_background)
+                                            .border_color(theme.border)
                                             .children([
                                                 self.builder_tab_button(cx, "request.params", BuilderTab::Params, builder_tab, "builder-params").into_any_element(),
                                                 self.builder_tab_button(cx, "request.auth", BuilderTab::Authorization, builder_tab, "builder-auth").into_any_element(),
@@ -4395,12 +4786,10 @@ impl Render for MainView {
                                         div()
                                             .flex()
                                             .flex_row()
-                                            .h(px(32.0))
-                                            .px_3()
+                                            .h(px(crate::ui::components::TAB_H))
+                                            .px(px(crate::ui::components::GAP_S))
                                             .items_center()
                                             .gap_0()
-                                            .bg(theme.muted_background)
-                                            .rounded_t_md()
                                             .border_b(px(1.0))
                                             .border_color(theme.border)
                                             .children([
@@ -4446,13 +4835,12 @@ impl Render for MainView {
                                                         .w_full()
                                                         .mb_3()
                                                         .children([
-                                                            // 状态信息组
+                                                            // 左侧：状态徽章 + 响应时间 + 响应大小（原本 Time/Size 在右、切换按钮飘在中间）
                                                             div()
                                                                 .flex()
                                                                 .items_center()
                                                                 .gap_3()
                                                                 .children([
-                                                                    // 状态徽章
                                                                     div()
                                                                         .px_2p5()
                                                                         .py_px()
@@ -4462,76 +4850,44 @@ impl Render for MainView {
                                                                         .text_xs()
                                                                         .font_weight(FontWeight(600.0))
                                                                         .child(format!("{} {}", resp.status, resp.status_text())),
-                                                                ]),
-                                                            // 模式选择按钮（仅 Body tab 显示）
+                                                                    div()
+                                                                        .text_xs()
+                                                                        .text_color(theme.muted_foreground)
+                                                                        .child(format!("{} {}ms", self.t("response.time"), resp.time_ms)),
+                                                                    div()
+                                                                        .text_xs()
+                                                                        .text_color(theme.muted_foreground)
+                                                                        .child(format!("{} {}", self.t("response.size"), format_size(resp.size_bytes))),
+                                                                ])
+                                                                .into_any_element(),
+                                                            // 右侧：查看模式切换（仅响应体标签页），三个按钮样式完全一致
                                                             if response_tab == ResponseTab::Body {
-                                                                div()
-                                                                    .flex()
-                                                                    .flex_row()
-                                                                    .gap_1()
-                                                                    .bg(theme.muted_background)
-                                                                    .rounded_md()
-                                                                    .p_px()
+                                                                segment_group(&theme)
                                                                     .children([
-                                                                        Button::new("pretty")
-                                                                            .min_w(px(60.0))
-                                                                            .label(self.t("ui.pretty"))
-                                                                            .small()
-                                                                            .px_2()
-                                                                            .py_px()
-                                                                            .rounded_md()
-                                                                            .text_xs()
-                                                                            .bg(if self.body_view_mode == BodyViewMode::Pretty { theme.background } else { rgba(0x00000000) })
-                                                                            .text_color(if self.body_view_mode == BodyViewMode::Pretty { theme.foreground } else { theme.muted_foreground })
-                                                                            .shadow_sm()
+                                                                        segment_button("pretty", self.t("ui.pretty"), self.body_view_mode == BodyViewMode::Pretty, &theme)
                                                                             .on_click(cx.listener(|this, _: &gpui::ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                                                 this.body_view_mode = BodyViewMode::Pretty;
                                                                                 cx.notify();
-                                                                            })),
-                                                                        Button::new("raw")
-                                                                            .min_w(px(60.0))
-                                                                            .label(self.t("ui.raw"))
-                                                                            .small()
-                                                                            .px_2()
-                                                                            .py_px()
-                                                                            .rounded_md()
-                                                                            .text_xs()
-                                                                            .bg(if self.body_view_mode == BodyViewMode::Raw { theme.background } else { rgba(0x00000000) })
-                                                                            .text_color(if self.body_view_mode == BodyViewMode::Raw { theme.foreground } else { theme.muted_foreground })
-                                                                            .shadow_sm()
+                                                                            }))
+                                                                            .into_any_element(),
+                                                                        segment_button("raw", self.t("ui.raw"), self.body_view_mode == BodyViewMode::Raw, &theme)
                                                                             .on_click(cx.listener(|this, _: &gpui::ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                                                 this.body_view_mode = BodyViewMode::Raw;
                                                                                 cx.notify();
-                                                                            })),
-                                                                        Button::new("preview")
-                                                                            .min_w(px(70.0))
-                                                                            .label(self.t("ui.preview"))
-                                                                            .small()
-                                                                            .px_3()
-                                                                            .py_1()
-                                                                            .rounded_sm()
-                                                                            .text_sm()
-                                                                            .bg(if self.body_view_mode == BodyViewMode::Preview { theme.accent } else { theme.input_background })
-                                                                            .text_color(if self.body_view_mode == BodyViewMode::Preview { theme.accent_foreground } else { theme.muted_foreground })
+                                                                            }))
+                                                                            .into_any_element(),
+                                                                        segment_button("preview", self.t("ui.preview"), self.body_view_mode == BodyViewMode::Preview, &theme)
                                                                             .on_click(cx.listener(|this, _: &gpui::ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                                                 this.body_view_mode = BodyViewMode::Preview;
                                                                                 cx.notify();
-                                                                            })),
+                                                                            }))
+                                                                            .into_any_element(),
                                                                     ])
+                                                                    .into_any_element()
                                                             } else {
-                                                                div()
+                                                                div().into_any_element()
                                                             },
-                                                            // Time 和 Size 在右边
-                                                            div()
-                                                                .flex()
-                                                                .flex_row()
-                                                                .gap_4()
-                                                                .children([
-                                                                    div().text_color(theme.muted_foreground).child(format!("Time: {}ms", resp.time_ms)),
-                                                                    div().text_color(theme.muted_foreground).child(format!("Size: {}", format_size(resp.size_bytes))),
-                                                        ])
                                                         ]);
-
                                                     // 根据视图模式显示内容
                                                     let content: Div = if response_tab == ResponseTab::Headers {
                                                         div()
@@ -4550,8 +4906,9 @@ impl Render for MainView {
                                                                     .gap_2()
                                                                     .mb_1()
                                                                     .children([
-                                                                        div().flex_1().text_xs().text_color(theme.muted_foreground).child("Key"),
-                                                                        div().flex_1().text_xs().text_color(theme.muted_foreground).child("Value"),
+                                                                        // 响应头表格的列标题同样跟着语言切换
+                                                                        div().flex_1().text_xs().text_center().text_color(theme.muted_foreground).child(self.t("ui.key")),
+                                                                        div().flex_1().text_xs().text_center().text_color(theme.muted_foreground).child(self.t("ui.value")),
                                                                     ])
                                                             )
                                                             .child(
@@ -4559,7 +4916,7 @@ impl Render for MainView {
                                                                     .flex_col()
                                                                     .gap_1()
                                                                     .h(px(300.0))
-                                                                    .overflow_y_scrollbar()
+                                                .overflow_y_scrollbar()
                                                                     .children(self.response_header_inputs.iter().map(|(key_input, val_input)| {
                                                                         div()
                                                                             .flex()
@@ -4787,6 +5144,9 @@ impl Render for MainView {
                                                                             &theme,
                                                                             &t,
                                                                             resp.raw_body.as_deref(),
+                                                                            self.response_highlight
+                                                                                .as_ref()
+                                                                                .map(|cache| cache.highlighted.as_ref()),
                                                                         ).into_any_element())
                                                                 }
                                                             } else {
@@ -4814,39 +5174,29 @@ impl Render for MainView {
                                                             let is_text = self.response_raw_format == RawFormat::Text;
                                                             let is_html = self.response_raw_format == RawFormat::Html;
                                                             area.child(
+                                                                // 与请求侧共用同一套分段按钮：原来这里选中/未选中用的是同一个底色（深色主题下 muted==input），
+                                                                // 根本看不出选中了哪个格式
                                                                 div()
                                                                     .flex()
                                                                     .flex_row()
                                                                     .items_center()
-                                                                    .gap_1()
-                                                                    .px_2()
-                                                                    .py_px()
-                                                                    .children([
-                                                                        div()
-                                                                            .text_xs().cursor_pointer().px_2().py_px().rounded_sm()
-                                                                            .bg(if is_json { theme.muted_background } else { theme.input_background })
-                                                                            .text_color(if is_json { theme.foreground } else { theme.muted_foreground })
-                                                                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| { this.set_response_raw_format(0, _window, cx); }))
-                                                                            .child("JSON"),
-                                                                        div()
-                                                                            .text_xs().cursor_pointer().px_2().py_px().rounded_sm()
-                                                                            .bg(if is_xml { theme.muted_background } else { theme.input_background })
-                                                                            .text_color(if is_xml { theme.foreground } else { theme.muted_foreground })
-                                                                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| { this.set_response_raw_format(1, _window, cx); }))
-                                                                            .child("XML"),
-                                                                        div()
-                                                                            .text_xs().cursor_pointer().px_2().py_px().rounded_sm()
-                                                                            .bg(if is_text { theme.muted_background } else { theme.input_background })
-                                                                            .text_color(if is_text { theme.foreground } else { theme.muted_foreground })
-                                                                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| { this.set_response_raw_format(2, _window, cx); }))
-                                                                            .child("Text"),
-                                                                        div()
-                                                                            .text_xs().cursor_pointer().px_2().py_px().rounded_sm()
-                                                                            .bg(if is_html { theme.muted_background } else { theme.input_background })
-                                                                            .text_color(if is_html { theme.foreground } else { theme.muted_foreground })
-                                                                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| { this.set_response_raw_format(3, _window, cx); }))
-                                                                            .child("HTML"),
-                                                                    ]),
+                                                                    .px(px(GAP_S))
+                                                                    .child(
+                                                                        segment_group(&theme).children([
+                                                                            segment_button("resp-fmt-json", "JSON", is_json, &theme)
+                                                                                .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| { this.set_response_raw_format(0, _window, cx); }))
+                                                                                .into_any_element(),
+                                                                            segment_button("resp-fmt-xml", "XML", is_xml, &theme)
+                                                                                .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| { this.set_response_raw_format(1, _window, cx); }))
+                                                                                .into_any_element(),
+                                                                            segment_button("resp-fmt-text", "Text", is_text, &theme)
+                                                                                .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| { this.set_response_raw_format(2, _window, cx); }))
+                                                                                .into_any_element(),
+                                                                            segment_button("resp-fmt-html", "HTML", is_html, &theme)
+                                                                                .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| { this.set_response_raw_format(3, _window, cx); }))
+                                                                                .into_any_element(),
+                                                                        ]),
+                                                                    ),
                                                             ).child(content)
                                                         } else {
                                                             area.child(content)
@@ -4889,33 +5239,66 @@ impl Render for MainView {
                             ]),
                     ]),
                 // ==================== 底部状态栏 ====================
+                // 左：当前环境（+ 代理开启提示）；右：自动保存状态点 + 版本号
+                // 之前这里是 "Online / Console / Ready" 和 "*"、"Bearer Token" 之类的占位文字，既不美观也没信息量
                 div()
                     .h(px(26.0))
                     .flex()
                     .flex_row()
                     .items_center()
                     .justify_between()
-                    .px_3()
+                    .px(px(crate::ui::components::GAP_M))
                     .bg(theme.muted_background)
                     .border_t(px(1.0))
                     .border_color(theme.border)
-                    .text_xs()
+                    .text_size(px(11.0))
                     .text_color(theme.muted_foreground)
                     .children([
-                        div().flex().items_center().gap_4().children([
-                            div().child(
-                                self.active_environment_name
-                                    .clone()
-                                    .unwrap_or_else(|| self.t("env.no_env"))
-                            ),
-                            div().child("*"),
-                            div().child("Bearer Token"),
-                        ]),
-                        div().flex().items_center().gap_4().children([
-                            div().child("Online"),
-                            div().child("Console"),
-                            div().child("Ready"),
-                        ]),
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(crate::ui::components::GAP_S))
+                            .children([
+                                div().child(Icon::new(IconName::Globe).xsmall()),
+                                div().child(
+                                    self.active_environment_name
+                                        .clone()
+                                        .map(SharedString::from)
+                                        .unwrap_or_else(|| self.t("env.no_env"))
+                                ),
+                                if proxy_on {
+                                    div()
+                                        .px(px(6.0))
+                                        .rounded_sm()
+                                        .bg(theme.border)
+                                        .text_color(theme.foreground)
+                                        .child(self.t("settings.proxy"))
+                                } else {
+                                    div()
+                                },
+                            ]),
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(crate::ui::components::GAP_M))
+                            .children([
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap(px(crate::ui::components::GAP_XS + 2.0))
+                                    .children([
+                                        div()
+                                            .w(px(6.0))
+                                            .h(px(6.0))
+                                            .rounded_full()
+                                            .bg(if auto_save_on { theme.success } else { theme.border }),
+                                        div().child(self.t("settings.auto_save")),
+                                    ]),
+                                div().child(format!("v{}", env!("CARGO_PKG_VERSION"))),
+                            ]),
                     ]),
             ])
             .when(
@@ -4939,6 +5322,7 @@ impl Render for MainView {
                         &self.app_state,
                         &theme,
                         cx.entity_id(),
+                        &|key| self.t(key),
                         cx,
                     )
                 )
@@ -4988,54 +5372,6 @@ impl Render for MainView {
                             .absolute()
                             .left(px((x - 120.0).max(0.0)))
                             .top(px(y + 4.0));
-                    }
-                    d.child(menu)
-                },
-            )
-            .when(
-                self.env_menu_target.is_some() && self.env_menu_pos.is_some(),
-                |d| {
-                    let target_id = self.env_menu_target.clone().unwrap_or_default();
-                    let (x, y) = self.env_menu_pos.unwrap_or((0.0, 0.0));
-                    let env = self.environments.iter().find(|e| e.id == target_id);
-                    let mut menu = popup_panel(&theme)
-                        .absolute()
-                        .left(px((x - 120.0).max(0.0)))
-                        .top(px(y + 4.0))
-                        .min_w(px(120.0));
-                    if let Some(env) = env {
-                        let edit_id = env.id.clone();
-                        let del_id = env.id.clone();
-                        menu = menu
-                            .child(
-                                div()
-                                    .flex().flex_row().items_center().gap_2()
-                                    .px_3().py_1p5()
-                                    .cursor_pointer()
-                                    .hover(|s| s.bg(theme.muted_background))
-                                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>| {
-                                        this.env_menu_target = None;
-                                        this.open_environment_dialog(Some(edit_id.clone()), window, cx);
-                                        cx.notify();
-                                    }))
-                                    .child(Icon::new(IconName::Replace).xsmall().text_color(theme.muted_foreground))
-                                    .child(div().text_sm().text_color(theme.foreground).child("重命名")),
-                            )
-                            .child(div().w_full().h(px(1.0)).bg(theme.muted_background))
-                            .child(
-                                div()
-                                    .flex().flex_row().items_center().gap_2()
-                                    .px_3().py_1p5()
-                                    .cursor_pointer()
-                                    .hover(|s| s.bg(theme.error))
-                                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>| {
-                                        this.env_menu_target = None;
-                                        this.delete_environment(&del_id, window, cx);
-                                        cx.notify();
-                                    }))
-                                    .child(Icon::new(IconName::Delete).xsmall().text_color(theme.muted_foreground))
-                                    .child(div().text_sm().text_color(theme.foreground).child("删除")),
-                            );
                     }
                     d.child(menu)
                 },
@@ -5177,3 +5513,4 @@ impl Render for MainView {
             )
     }
 }
+

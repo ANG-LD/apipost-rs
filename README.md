@@ -52,6 +52,12 @@ PostMan替代工具是一个使用Rust语言和gpui框架构建的开源API测�
 - 国际化框架支持
 - 本地化资源管理
 
+### 🔄 应用内更新检查
+- 设置面板「关于」区显示当前版本
+- 打开设置面板时自动查 GitHub 最新 Release（10 分钟节流，也可手动点「检查更新」）
+- 按语义化版本号对比，有新版本时给出对应平台安装包的下载入口
+- 网络异常/API 限流/仓库还没发过 Release 都只提示，不影响正常使用
+
 ### 🖥️ UI界面
 - 现代化美观的界面设计
 - 响应式布局适应不同屏幕尺寸
@@ -115,6 +121,10 @@ cargo build --release
 ```bash
 cargo run --release
 ```
+
+> 需要打 Windows / macOS / Linux 安装包（图标、签名、通用二进制等）见 [docs/packaging.md](docs/packaging.md)。
+>
+> 改 UI 之前建议先读 [docs/gpui-gotchas.md](docs/gpui-gotchas.md)：滚动区高度、`Select` 文字颜色、无头验证手法等踩过的坑，里面的显式高度、`min_h(px(0.0))`、`flex_none()`、尾部留白都不是冗余样式，删掉会复现 bug。
 
 ### 安装到系统
 

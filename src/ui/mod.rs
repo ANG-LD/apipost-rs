@@ -2,6 +2,10 @@
 //!
 //! 使用gpui构建用户界面
 
+#[cfg(test)]
+mod perf_snapshot;
+#[cfg(test)]
+mod theme_tests;
 mod authorization;
 mod body;
 mod components;
@@ -17,6 +21,7 @@ pub mod sidebar;
 pub mod request;
 pub mod response;
 pub mod dialogs;
+pub mod response_highlight;
 
 pub use authorization::*;
 pub use body::*;

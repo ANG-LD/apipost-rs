@@ -3,7 +3,8 @@
 //! 一个使用Rust和gpui框架构建的PostMan替代工具
 //! 提供API测试、环境变量管理、历史记录等功能
 
-#![windows_subsystem = "windows"]
+// Windows 发布版不弹控制台窗口；debug 构建保留控制台，方便 cargo run 时看日志
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
 mod config;
@@ -49,7 +50,19 @@ fn main() {
 
     let tee = TeeWriter { file: std::sync::Mutex::new(log_file) };
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-        .format_timestamp_millis()
+        // 默认的 format_timestamp_millis 打的是 UTC（形如 08:53:56.506Z），
+        // 和界面/数据库里的本地时间对不上，这里改成带时区偏移的本地时间
+        .format(|buf, record| {
+            use std::io::Write;
+            writeln!(
+                buf,
+                "[{} {:5} {}] {}",
+                chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.3f%:z"),
+                record.level(),
+                record.target(),
+                record.args()
+            )
+        })
         .target(env_logger::Target::Pipe(Box::new(tee)))
         .init();
 

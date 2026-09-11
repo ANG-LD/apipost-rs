@@ -82,7 +82,7 @@ pub fn render_code_gen_dialog_overlay(
     state: &Arc<Mutex<CodeGenDialogState>>,
     theme: &Theme,
     entity_id: EntityId,
-    t: &dyn Fn(&str) -> String,
+    t: &dyn Fn(&str) -> SharedString,
     window: &mut Window,
     cx: &mut Context<crate::ui::MainView>,
 ) -> impl IntoElement {
@@ -208,7 +208,7 @@ pub fn render_code_gen_dialog_overlay(
                         .pb_3()
                         .min_h(px(200.0))
                         .when_some(code_input, move |d, input| {
-                            d.child(code_editor_view(&input, bg))
+                            d.child(code_editor_view(&input, bg, theme.foreground))
                         })
                 })
                 .child(

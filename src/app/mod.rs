@@ -5,6 +5,7 @@
 pub mod database;
 pub mod environment;
 pub mod history;
+pub mod updater;
 
 pub use database::{Database, Environment, HistoryEntry, SavedRequest};
 pub use environment::{EnvConfig, EnvVariable, EnvironmentManager};
