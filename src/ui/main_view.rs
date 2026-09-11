@@ -3982,7 +3982,11 @@ fn setting_option_btn(
         .id(id)
         .text_xs()
         .cursor_pointer()
-        .min_w(px(60.0))
+        // 固定宽度：主题/语言等按钮等宽排列；flex+居中：文字左右内边距一致
+        .w(px(78.0))
+        .flex()
+        .items_center()
+        .justify_center()
         .px_2p5()
         .py_1()
         .rounded_sm()
@@ -4045,6 +4049,32 @@ impl Render for MainView {
         let tabs_max = (tabs_content_w - self.tabs_viewport).max(0.0);
         let tabs_offset = f32::from(self.tabs_scroll.offset().x);
         let tabs_overflow = tabs_max > 0.5;
+        // 设置浮层：挂到**根容器**渲染。
+        // 1) 原先在侧边栏子树里，比侧边栏宽的部分会被主工作区盖住（内容被截断）
+        // 2) 根容器是 flex_col，绝对定位子元素会被当作 flex 项 —— 所以外面必须包一层
+        //    全窗口 overlay（与根级模态弹窗同一套做法），弹层再相对它定位
+        let settings_overlay_el = if self.show_settings_popover {
+            Some(
+                div()
+                    .absolute()
+                    .top(px(0.0))
+                    .left(px(0.0))
+                    .w_full()
+                    .h_full()
+                    .child(
+                        settings_popover(self, cx, &theme, window.bounds().size.height.as_f32() - 64.0)
+                            .absolute()
+                            .top(px(48.0))
+                            .left(px(0.0))
+                            .w(px(290.0))
+                            .shadow_md()
+                            .occlude(),
+                    )
+                    .into_any_element(),
+            )
+        } else {
+            None
+        };
         // 配置开关（代理 / 自动保存）：渲染期间只读，锁一次取出来
         let (proxy_on, auto_save_on) = {
             let state = self.app_state.lock().unwrap();
@@ -4188,11 +4218,6 @@ impl Render for MainView {
                                 // 标签页按钮
                                 div()
                                     .flex()
-                                    // 设置浮层盖住的就是这块区域：浮层挂在侧边栏子树里，
-                                    // 标签行排在它之后绘制，会压在浮层上面（表现为"弹窗里还看得见
-                                    // 收藏夹/历史/环境变量图标"）。让它在浮层打开时不可见即可 ——
-                                    // 区域本就被浮层完全遮住，视觉上无差别，且不依赖绘制顺序。
-                                    .opacity(if self.show_settings_popover { 0.0 } else { 1.0 })
                                     .when(self.sidebar_collapsed, |s| s.flex_col().flex_1())
                                     .when(!self.sidebar_collapsed, |s| s.flex_row().h(px(40.0)))
                                     .children([
@@ -4513,18 +4538,6 @@ let method_clr = method_color(&entry.method);
                                     } else {
                                         Icon::new(IconName::PanelLeftClose).small()
                                     }),
-                            // 设置浮层面板（绝对定位，贴在侧边栏左上角）
-                            if self.show_settings_popover {
-                                settings_popover(self, cx, &theme, window.bounds().size.height.as_f32() - 64.0)
-                                    .absolute()
-                                    .top(px(48.0))
-                                    .left(px(0.0))
-                                    .w(px(290.0))
-                                    .shadow_md()
-                                    .occlude()
-                            } else {
-                                div()
-                            },
                             ]),
                         // ==================== 主工作区 ====================
                         div()
@@ -5301,6 +5314,8 @@ let method_clr = method_color(&entry.method);
                             ]),
                     ]),
             ])
+            // 设置浮层：在侧边栏/主工作区之后绘制，因此不再被请求区域截断或盖住
+            .when_some(settings_overlay_el, |d, el| d.child(el))
             .when(
                 self.env_dialog_state.lock().map(|s| s.visible).unwrap_or(false),
                 |d| d.child(
