@@ -3659,9 +3659,9 @@ fn settings_popover(
     // 主题
     sections.push(section_divider(theme).into_any_element());
     sections.push(section_title(t_theme_title, theme).into_any_element());
-    for (row_index, chunk) in theme_items.chunks(4).enumerate() {
+    for (row_index, chunk) in theme_items.chunks(3).enumerate() {
         // 两行主题按钮之间留出小间距（容器 gap 在滚动包装下不生效，这里显式给）
-        let mut row = div().flex().flex_row().gap(px(GAP_S));
+        let mut row = div().flex().flex_row().gap(px(GAP_XS));
         if row_index > 0 {
             row = row.mt(px(GAP_XS + 2.0));
         }
@@ -3897,7 +3897,10 @@ fn settings_popover(
     sections.push(update_section(this, cx, theme).into_any_element());
 
     div()
-        .w(px(300.0))
+        // 宽度与左侧边栏保持一致（280）；边线颜色跟随主题
+        .w(px(280.0))
+        .border_1()
+        .border_color(theme.border)
         .max_h(px(max_height))
         .flex_col()
         // 裁剪：滚动区里的段落比可视区高，若无裁剪会画到面板之外，
@@ -3984,6 +3987,8 @@ fn setting_option_btn(
         .cursor_pointer()
         // 固定宽度：主题/语言等按钮等宽排列；flex+居中：文字左右内边距一致
         .w(px(78.0))
+        // 禁止被 flex 压缩：否则同一行里各按钮按文字长短被压成不同宽度
+        .flex_shrink_0()
         .flex()
         .items_center()
         .justify_center()
@@ -4066,7 +4071,7 @@ impl Render for MainView {
                             .absolute()
                             .top(px(48.0))
                             .left(px(0.0))
-                            .w(px(290.0))
+                            .w(px(280.0))
                             .shadow_md()
                             .occlude(),
                     )
