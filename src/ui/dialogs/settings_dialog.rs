@@ -31,7 +31,8 @@ pub fn open_settings_dialog(app_state: &AppState, window: &mut Window, cx: &mut 
     let dialog_app_state = Arc::new(Mutex::new(app_state.clone()));
     let lang_for_ui = current_lang.clone();
     let theme_for_ui = current_theme.clone();
-    let ui_theme = Theme::from_str(&current_theme);
+    // Arc 共享：下面那个闭包每帧都会被调用，裸 Theme 的 clone 每帧都要复制一份 name 字符串
+    let ui_theme = Arc::new(Theme::from_str(&current_theme));
 
     window.open_dialog(cx, move |dialog, _, _| {
         let ui_theme = ui_theme.clone();

@@ -13,6 +13,10 @@ pub fn render_params_panel(
 ) -> impl IntoElement {
     let theme = this.cached_theme.clone();
     let hover_bg = theme.muted_background;
+    // 颜色值先取出来：`theme` 现在是 Arc，move 闭包里没法像以前那样只捕获
+    // `theme.error` 这一个 Copy 字段（Deref 之后取字段只能整个 Arc 移动进闭包），
+    // 提前取出 Rgba 既避免移动 Arc，也不产生任何分配。
+    let error_color = theme.error;
 
     div()
         .flex_col()
@@ -104,7 +108,7 @@ pub fn render_params_panel(
                                 .rounded_md()
                                 .cursor_pointer()
                                 .text_color(theme.muted_foreground)
-                                .hover(move |s| s.bg(hover_bg).text_color(theme.error))
+                                .hover(move |s| s.bg(hover_bg).text_color(error_color))
                                 .on_mouse_down(MouseButton::Left, cx.listener(
                                     move |this,
                                           _: &MouseDownEvent,

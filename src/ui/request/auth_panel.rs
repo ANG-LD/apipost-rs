@@ -117,7 +117,7 @@ pub fn render_auth_panel(
                 .into_any_element(),
         ))
         .child(section_divider(&theme))
-        .child(match &auth_state {
+        .child(match auth_state.as_ref() {
             AuthState::NoAuth => div()
                 .py(px(GAP_M))
                 .child(hint(this.t("auth.none_hint"), &theme))

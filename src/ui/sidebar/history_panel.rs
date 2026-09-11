@@ -97,8 +97,9 @@ pub fn render_history_panel(
                                     let formatted_body =
                                         RawFormat::Json.format_body(body_content);
                                     // 设置 body 类型和格式
-                                    this.body_state.body_type = BodyType::Raw;
-                                    this.body_state.raw_format = detected_format;
+                                    let body_state = Arc::make_mut(&mut this.body_state);
+                                    body_state.body_type = BodyType::Raw;
+                                    body_state.raw_format = detected_format;
                                     let rf_idx = detected_format.to_index();
                                     this.raw_format_select.update(cx, |state, cx| {
                                         state.set_selected_index(Some(IndexPath::new(rf_idx)), _window, cx);
@@ -149,7 +150,7 @@ pub fn render_history_panel(
                                     );
                                 } else {
                                     // 无 body 时重置为 None
-                                    this.body_state.body_type = BodyType::None;
+                                    Arc::make_mut(&mut this.body_state).body_type = BodyType::None;
                                     this.body_state.raw_content.update(cx, |state, cx| {
                                         state.set_value("", _window, cx);
                                     });
@@ -169,7 +170,7 @@ pub fn render_history_panel(
                                 }
 
                                 if let Some(ref headers_text) = entry_clone.headers {
-                                    this.headers.clear();
+                                    Arc::make_mut(&mut this.headers).clear();
                                     for line in headers_text.lines() {
                                         if let Some(colon_pos) = line.find(':') {
                                             let key = line[..colon_pos]
@@ -179,14 +180,15 @@ pub fn render_history_panel(
                                                 .trim()
                                                 .to_string();
                                             if !key.is_empty() {
-                                                this.headers.push(
+                                                Arc::make_mut(&mut this.headers).push(
                                                     HeaderEntry::new(
                                                         _window, cx,
                                                     ),
                                                 );
-                                                let len = this.headers.len();
+                                                let headers = Arc::make_mut(&mut this.headers);
+                                                let len = headers.len();
                                                 let header =
-                                                    &mut this.headers[len - 1];
+                                                    &mut headers[len - 1];
                                                 header.key.update(
                                                     cx,
                                                     |state, cx| {
@@ -211,10 +213,10 @@ pub fn render_history_panel(
                                         }
                                     }
                                 } else {
-                                    this.headers.clear();
+                                    Arc::make_mut(&mut this.headers).clear();
                                 }
 
-                                this.params.clear();
+                                Arc::make_mut(&mut this.params).clear();
                                 if let Some(query_start) = entry_url.find('?') {
                                     let query_string =
                                         &entry_url[query_start + 1..];
@@ -245,7 +247,7 @@ pub fn render_history_panel(
                                                 InputState::new(_window, cx)
                                                     .default_value(&value)
                                             });
-                                            this.params.push(ParamEntry {
+                                            Arc::make_mut(&mut this.params).push(ParamEntry {
                                                 key: key_entity,
                                                 value: value_entity,
                                                 enabled: true,

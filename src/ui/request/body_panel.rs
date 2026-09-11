@@ -3,6 +3,7 @@ use crate::ui::json_editor;
 use crate::ui::main_view::MainView;
 use crate::ui::components::{ghost_button, segment_button, segment_group};
 use crate::ui::themes::Theme;
+use std::sync::Arc;
 use gpui::*;
 use gpui::prelude::FluentBuilder;
 use gpui_component::button::Button;
@@ -76,7 +77,8 @@ fn body_type_tab(
 
 fn render_body_content(
     this: &mut MainView,
-    body_state: BodyState,
+    // 传 Arc 而不是裸 BodyState：面板每帧都会取一份快照，Arc 只做引用计数
+    body_state: Arc<BodyState>,
     window: &mut Window,
     cx: &mut Context<MainView>,
 ) -> AnyElement {

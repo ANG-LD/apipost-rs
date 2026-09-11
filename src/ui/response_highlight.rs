@@ -28,13 +28,27 @@ pub struct Run {
 /// 一行由若干着色片段拼成
 pub type Line = Vec<Run>;
 
+/// 整块响应体的渲染计划：一段拼好的正文 + 一张 run 长度表。
+///
+/// 渲染每帧只需要按它构造 `Vec<TextRun>`：正文用 `SharedString` 共享（引用计数），
+/// `runs[i] = (字节长度, 颜色)` 与正文按顺序一一对应，长度之和恰好等于正文长度。
+/// 行与行之间的换行由正文自己的 `'\n'` 承载，因此整块响应体只需要**一个**元素，
+/// 不再像旧实现那样「每行一个 div + 每个片段一个 div」。
+#[derive(Clone, Debug, Default)]
+pub struct StyledBody {
+    pub text: SharedString,
+    pub runs: Vec<(u32, Rgba)>,
+}
+
 /// 一段响应体的高亮结果
 #[derive(Clone, Debug, Default)]
 pub struct HighlightedBody {
-    /// 逐行片段；JSON 走这里
+    /// 逐行片段；JSON 走这里（渲染不再用它建元素，保留给测试与按行统计）
     pub lines: Vec<Line>,
     /// 非 JSON 原文：直接持有响应体的 `Arc<str>`，渲染时零拷贝
     pub plain: Option<Arc<str>>,
+    /// 整块渲染计划；JSON 走这里，`plain` 为 `Some` 时是空的
+    pub styled: StyledBody,
 }
 
 impl HighlightedBody {
@@ -104,6 +118,7 @@ pub fn build(body: &str, content_type: Option<&str>, theme: &Theme) -> Highlight
         return HighlightedBody {
             lines: Vec::new(),
             plain: Some(Arc::from(body)),
+            styled: StyledBody::default(),
         };
     }
 
@@ -114,9 +129,56 @@ pub fn build(body: &str, content_type: Option<&str>, theme: &Theme) -> Highlight
     };
 
     let colored = colorize(&formatted, theme);
+    let lines = split_lines(&formatted, &colored);
     HighlightedBody {
-        lines: split_lines(&formatted, &colored),
+        styled: compress(&lines, theme),
+        lines,
         plain: None,
+    }
+}
+
+/// 把「逐行片段」压成「整块正文 + run 长度表」。
+///
+/// 换行符并入它前面那个 run：`TextRun` 只是一段字节长度，正文里的 `'\n'` 必须落在
+/// 某个 run 里，而换行本身不可见，挂在哪个颜色上都一样。这样 run 长度之和
+/// 恰好等于正文长度（`StyledText::with_runs` 会严格校验这件事，对不上会 panic）。
+fn compress(lines: &[Line], theme: &Theme) -> StyledBody {
+    // 先按「正文 + 行间换行」算准容量，避免反复扩容
+    let total: usize = lines
+        .iter()
+        .flat_map(|line| line.iter())
+        .map(|run| run.text.len())
+        .sum::<usize>()
+        + lines.len().saturating_sub(1);
+    let mut text = String::with_capacity(total);
+    let mut runs: Vec<(u32, Rgba)> = Vec::new();
+
+    for (index, line) in lines.iter().enumerate() {
+        if index > 0 {
+            text.push('\n');
+            match runs.last_mut() {
+                // 换行并进上一个 run
+                Some(last) => last.0 += 1,
+                // 空行开头：正文以换行起头，得先有个 run 承载它
+                None => runs.push((1, theme.json_bracket)),
+            }
+        }
+        for run in line {
+            // 单个片段超过 4GB 才会溢出；真到了那个量级宁可在这里直接报错，
+            // 也不要静默截断长度表（那会让 run 长度之和和正文对不上）
+            let len = u32::try_from(run.text.len()).expect("单个着色片段超过 4GB");
+            text.push_str(&run.text);
+            // 相邻同色直接并进上一个 run，run 数与行内片段数一致
+            match runs.last_mut() {
+                Some(last) if last.1 == run.color => last.0 += len,
+                _ => runs.push((len, run.color)),
+            }
+        }
+    }
+
+    StyledBody {
+        text: SharedString::from(text),
+        runs,
     }
 }
 

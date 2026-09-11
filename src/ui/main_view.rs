@@ -231,8 +231,9 @@ pub struct MainView {
     pub(crate) app_state: Arc<std::sync::Mutex<crate::app::AppState>>,
     /// 翻译字典缓存（从 I18nManager 提取，避免每次翻译都获取 Mutex 锁）
     pub(crate) translations: Arc<crate::i18n::Translations>,
-    /// 主题缓存（避免每个面板渲染时重复调用 Theme::from_str）
-    pub(crate) cached_theme: Theme,
+    /// 主题缓存（避免每个面板渲染时重复调用 Theme::from_str）。
+    /// 用 Arc 共享：每个面板每帧都要取一份，裸 Theme 的 clone 会连 name 的 String 一起复制。
+    pub(crate) cached_theme: Arc<Theme>,
     /// 响应体高亮缓存：解析 / 美化 / 分词只在响应或主题变化时做一次
     pub(crate) response_highlight: Option<crate::ui::response_highlight::Cache>,
     pub method: String,
@@ -284,15 +285,17 @@ pub struct MainView {
     pub(crate) _form_data_type_subs: Vec<gpui::Subscription>,
     pub(crate) method_select: Entity<SelectState<Vec<crate::ui::components::MethodItem>>>,
     pub(crate) builder_tab: BuilderTab,
-    pub(crate) params: Vec<ParamEntry>,
-    pub(crate) headers: Vec<HeaderEntry>,
-    pub(crate) body_state: BodyState,
+    /// Arc 共享：请求编辑状态每帧都要取一份快照，写成 Arc 后快照只是引用计数 +1；
+    /// 写入统一走 Arc::make_mut（正常情况引用计数为 1，不会真的复制）。
+    pub(crate) params: Arc<Vec<ParamEntry>>,
+    pub(crate) headers: Arc<Vec<HeaderEntry>>,
+    pub(crate) body_state: Arc<BodyState>,
     pub(crate) body_type_select: Entity<SelectState<Vec<gpui::SharedString>>>,
     pub(crate) raw_format_select: Entity<SelectState<Vec<gpui::SharedString>>>,
     pub(crate) auth_type_select: Entity<SelectState<Vec<gpui::SharedString>>>,
-    pub(crate) auth_state: AuthState,
+    pub(crate) auth_state: Arc<AuthState>,
     pub(crate) script_state: ScriptState,
-    pub(crate) settings: RequestSettings,
+    pub(crate) settings: Arc<RequestSettings>,
     pub(crate) settings_inputs: SettingsInputs,
     pub(crate) is_importing_curl: bool,
     pub(crate) last_synced_url: String,
@@ -371,29 +374,39 @@ impl gpui::Focusable for MainView {
     }
 }
 
-/// 高亮文本渲染。
+/// 高亮响应体渲染：整块正文只产生**一个** `StyledText` 元素。
 ///
-/// 片段是缓存的（`build()` 里算过一次），这里每帧只做两件事：
-/// `SharedString::clone()`（引用计数 +1）和建 div。
-/// 旧实现是「每个字符一个 div + 一次 `to_string()`」，
-/// 一段几十万字符的响应每帧要产生几十万次分配。
-fn render_highlighted_lines(lines: &[crate::ui::response_highlight::Line]) -> Vec<AnyElement> {
-    lines
+/// 每个着色片段对应一个 `TextRun`；行与行之间的换行由正文自己的 `'\n'` 承载，
+/// 所以既没有「每行一个 div」，也没有「每个片段一个 div」。
+/// 正文和 run 长度表都在 `response_highlight::build()` 里算好并缓存，
+/// 这里每帧只做一件事：按长度表把 run 铺出来（旧实现每帧要建几万个元素）。
+fn highlighted_styled_text(
+    styled: &crate::ui::response_highlight::StyledBody,
+    window: &mut Window,
+) -> StyledText {
+    // `with_runs` 的 run 自带完整字体信息，**不会**继承父元素的文字样式，
+    // 所以要把容器上的 `.text_sm()` 合并进基准样式，否则字号会从 sm 变回基础字号。
+    let mut base = window.text_style();
+    base.refine(&body_text_refinement());
+    let runs: Vec<TextRun> = styled
+        .runs
         .iter()
-        .map(|line| {
-            div()
-                .flex()
-                .flex_row()
-                .children(line.iter().map(|run| {
-                    div()
-                        .flex_none()
-                        .text_color(run.color)
-                        .child(run.text.clone())
-                        .into_any_element()
-                }))
-                .into_any_element()
+        .map(|(len, color)| {
+            let mut run = base.to_run(*len as usize);
+            run.color = (*color).into();
+            run
         })
-        .collect()
+        .collect();
+    StyledText::new(styled.text.clone()).with_runs(runs)
+}
+
+/// 响应体容器的文字样式（等价于容器上那层 `.text_sm()`）。
+///
+/// 不写字号常量：让 gpui 的 `Styled` 先算一遍再取回来，
+/// 这样框架/组件库改了 `text_sm` 的定义也不会和 run 的字体脱节。
+fn body_text_refinement() -> gpui::TextStyleRefinement {
+    let mut probe = div().text_sm();
+    probe.style().text.clone()
 }
 
 /// 根据 Content-Type 智能选择预览渲染方式
@@ -439,6 +452,8 @@ fn render_preview_body(
     raw_body: Option<&[u8]>,
     // 高亮结果由 MainView 缓存后传进来；None 只会在缓存缺失时出现
     highlight: Option<&crate::ui::response_highlight::HighlightedBody>,
+    // 只有 StyledText 的 run 需要窗口里的文字样式，其余分支用不到
+    window: &mut Window,
 ) -> AnyElement {
     let ct = content_type.unwrap_or("").to_lowercase();
 
@@ -653,7 +668,11 @@ fn render_preview_body(
             Some(text) => div()
                 .text_color(theme.foreground)
                 .child(SharedString::from(Arc::clone(text))),
-            None => div().flex_col().children(render_highlighted_lines(&highlighted.lines)),
+            // JSON：整块只建一个 StyledText；外面这层 div 只负责「不自动换行」——
+            // 旧实现每行是 flex_row + flex_none，长行同样不会折行，观感保持一致
+            None => div()
+                .whitespace_nowrap()
+                .child(highlighted_styled_text(&highlighted.styled, window)),
         })
         .into_any_element()
 }
@@ -697,7 +716,8 @@ impl MainView {
             &self.cached_theme,
         );
         let body = Arc::clone(&resp.body);
-        let theme = self.cached_theme.clone();
+        // Cache 内部存的是裸 Theme（只用来判断主题变没变），这里显式取一份值
+        let theme = (*self.cached_theme).clone();
         self.response_highlight =
             Some(crate::ui::response_highlight::Cache::new(body, theme, highlighted));
     }
@@ -753,7 +773,7 @@ impl MainView {
         // 缓存翻译字典（Arc 共享，避免每次翻译都获取 Mutex 锁）
         let translations = app_state.lock().unwrap().i18n.translations_arc();
         // 缓存主题（避免每个面板渲染时重复调用 Theme::from_str）
-        let cached_theme = Theme::from_str(&app_state.lock().unwrap().theme_name);
+        let cached_theme = Arc::new(Theme::from_str(&app_state.lock().unwrap().theme_name));
         // 响应体高亮缓存：首帧渲染时按需建立
         let response_highlight = None;
 
@@ -1025,15 +1045,15 @@ impl MainView {
             _form_data_type_subs: Vec::new(),
             method_select,
             builder_tab: BuilderTab::Params,
-            params,
-            headers,
-            body_state,
+            params: Arc::new(params),
+            headers: Arc::new(headers),
+            body_state: Arc::new(body_state),
             body_type_select,
             raw_format_select,
             auth_type_select,
-            auth_state,
+            auth_state: Arc::new(auth_state),
             script_state,
-            settings,
+            settings: Arc::new(settings),
             settings_inputs,
             is_importing_curl: false,
             last_synced_url: String::new(),
@@ -1441,7 +1461,7 @@ impl MainView {
 
     /// 格式化 JSON
     pub fn format_json(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.body_state.format_json(window, cx);
+        Arc::make_mut(&mut self.body_state).format_json(window, cx);
     }
 
     // ==================== Params 操作 ====================
@@ -1450,7 +1470,7 @@ impl MainView {
     pub fn add_param(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let key = cx.new(|cx| InputState::new(window, cx).default_value(""));
         let value = cx.new(|cx| InputState::new(window, cx).default_value(""));
-        self.params.push(ParamEntry {
+        Arc::make_mut(&mut self.params).push(ParamEntry {
             key,
             value,
             enabled: true,
@@ -1463,7 +1483,7 @@ impl MainView {
     /// 删除指定索引的参数行
     pub fn remove_param(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         if index < self.params.len() {
-            self.params.remove(index);
+            Arc::make_mut(&mut self.params).remove(index);
             self.rebuild_param_subscriptions(window, cx);
             self.sync_params_to_url(window, cx);
             cx.notify();
@@ -1473,7 +1493,8 @@ impl MainView {
     /// 切换参数启用状态
     pub fn toggle_param(&mut self, index: usize, _window: &mut Window, cx: &mut Context<Self>) {
         if index < self.params.len() {
-            self.params[index].enabled = !self.params[index].enabled;
+            let params = Arc::make_mut(&mut self.params);
+            params[index].enabled = !params[index].enabled;
             self.sync_params_to_url(_window, cx);
             cx.notify();
         }
@@ -1483,7 +1504,7 @@ impl MainView {
 
     /// 添加新的 Header 行
     pub fn add_header(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.headers.push(HeaderEntry::new(window, cx));
+        Arc::make_mut(&mut self.headers).push(HeaderEntry::new(window, cx));
         self.rebuild_header_subscriptions(window, cx);
         cx.notify();
     }
@@ -1506,7 +1527,7 @@ impl MainView {
 
     pub fn remove_header(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         if index < self.headers.len() {
-            self.headers.remove(index);
+            Arc::make_mut(&mut self.headers).remove(index);
             self.rebuild_header_subscriptions(window, cx);
             cx.notify();
         }
@@ -1515,7 +1536,8 @@ impl MainView {
     /// 切换 Header 启用状态
     pub fn toggle_header(&mut self, index: usize, cx: &mut Context<Self>) {
         if index < self.headers.len() {
-            self.headers[index].enabled = !self.headers[index].enabled;
+            let headers = Arc::make_mut(&mut self.headers);
+            headers[index].enabled = !headers[index].enabled;
             cx.notify();
         }
     }
@@ -1529,7 +1551,7 @@ impl MainView {
         if self.get_auth_type() == auth_type {
             return;
         }
-        self.auth_state = match auth_type {
+        self.auth_state = Arc::new(match auth_type {
             AuthType::NoAuth => AuthState::NoAuth,
             AuthType::BearerToken => {
                 let token = cx.new(|cx| InputState::new(window, cx).default_value(""));
@@ -1558,13 +1580,13 @@ impl MainView {
                     location_value: ApiKeyLocation::Header,
                 })
             }
-        };
+        });
         cx.notify();
     }
 
     /// 获取当前认证类型
     pub fn get_auth_type(&self) -> AuthType {
-        match &self.auth_state {
+        match self.auth_state.as_ref() {
             AuthState::NoAuth => AuthType::NoAuth,
             AuthState::Bearer(_) => AuthType::BearerToken,
             AuthState::Basic(_) => AuthType::BasicAuth,
@@ -1574,13 +1596,13 @@ impl MainView {
 
     /// 切换 API Key 认证的位置
     pub fn toggle_api_key_location(&mut self, cx: &mut Context<Self>) {
-        self.auth_state.toggle_api_key_location();
+        Arc::make_mut(&mut self.auth_state).toggle_api_key_location();
         cx.notify();
     }
 
     /// 设置 API Key 认证的位置（Header / Query）
     pub fn set_api_key_location(&mut self, location: ApiKeyLocation, cx: &mut Context<Self>) {
-        if let AuthState::ApiKey(auth) = &mut self.auth_state {
+        if let AuthState::ApiKey(auth) = Arc::make_mut(&mut self.auth_state) {
             if auth.location_value != location {
                 auth.location_value = location;
                 cx.notify();
@@ -1598,7 +1620,7 @@ impl MainView {
 
     /// 设置 Body 类型
     pub fn set_body_type(&mut self, index: usize, cx: &mut Context<Self>) {
-        self.body_state.body_type = BodyType::from_index(index);
+        Arc::make_mut(&mut self.body_state).body_type = BodyType::from_index(index);
         cx.notify();
     }
 
@@ -1609,7 +1631,7 @@ impl MainView {
 
     /// 设置 Raw 格式
     pub fn set_raw_format(&mut self, index: usize, cx: &mut Context<Self>) {
-        self.body_state.raw_format = RawFormat::from_index(index);
+        Arc::make_mut(&mut self.body_state).raw_format = RawFormat::from_index(index);
         cx.notify();
     }
 
@@ -1655,19 +1677,21 @@ impl MainView {
 
     /// 切换跟随重定向设置
     pub fn toggle_follow_redirects(&mut self, cx: &mut Context<Self>) {
-        self.settings.follow_redirects = !self.settings.follow_redirects;
+        let settings = Arc::make_mut(&mut self.settings);
+        settings.follow_redirects = !settings.follow_redirects;
         cx.notify();
     }
 
     /// 切换 SSL 验证设置
     pub fn toggle_verify_ssl(&mut self, cx: &mut Context<Self>) {
-        self.settings.verify_ssl = !self.settings.verify_ssl;
+        let settings = Arc::make_mut(&mut self.settings);
+        settings.verify_ssl = !settings.verify_ssl;
         cx.notify();
     }
 
     /// 添加 form-data 条目
     pub fn add_form_data_entry(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.body_state.add_form_data_entry(window, cx);
+        Arc::make_mut(&mut self.body_state).add_form_data_entry(window, cx);
         self.rebuild_form_data_type_subscriptions(window, cx);
     }
 
@@ -1678,13 +1702,13 @@ impl MainView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.body_state.remove_form_data_entry(index);
+        Arc::make_mut(&mut self.body_state).remove_form_data_entry(index);
         self.rebuild_form_data_type_subscriptions(window, cx);
     }
 
     /// 切换 form-data 条目启用状态
     pub fn toggle_form_data_entry(&mut self, index: usize, cx: &mut Context<Self>) {
-        self.body_state.toggle_form_data_entry(index);
+        Arc::make_mut(&mut self.body_state).toggle_form_data_entry(index);
         cx.notify();
     }
 
@@ -1696,7 +1720,7 @@ impl MainView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.body_state
+        Arc::make_mut(&mut self.body_state)
             .set_form_data_param_type(index, param_type, window, cx);
         cx.notify();
     }
@@ -1705,7 +1729,8 @@ impl MainView {
     pub fn pick_file_for_binary(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use rfd::FileDialog;
         if let Some(file_path) = FileDialog::new().pick_file() {
-            self.body_state.binary_file_path = Some(file_path.to_string_lossy().to_string());
+            Arc::make_mut(&mut self.body_state).binary_file_path =
+                Some(file_path.to_string_lossy().to_string());
             cx.notify();
         }
     }
@@ -1730,7 +1755,7 @@ impl MainView {
         // 打开文件选择对话框
         if let Some(file_path) = FileDialog::new().pick_file() {
             let path_str = file_path.to_string_lossy().to_string();
-            self.body_state
+            Arc::make_mut(&mut self.body_state)
                 .update_form_data_file_path(index, &path_str, window, cx);
             cx.notify();
         }
@@ -1744,19 +1769,19 @@ impl MainView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.body_state
+        Arc::make_mut(&mut self.body_state)
             .set_urlencoded_param_type(index, param_type, window, cx);
         cx.notify();
     }
 
     /// 添加 url-encoded 条目
     pub fn add_urlencoded_entry(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.body_state.add_urlencoded_entry(window, cx);
+        Arc::make_mut(&mut self.body_state).add_urlencoded_entry(window, cx);
     }
 
     /// 删除 url-encoded 条目
     pub fn remove_urlencoded_entry(&mut self, index: usize) {
-        self.body_state.remove_urlencoded_entry(index);
+        Arc::make_mut(&mut self.body_state).remove_urlencoded_entry(index);
     }
 
     // ==================== URL 与 Params 同步 ====================
@@ -1769,7 +1794,7 @@ impl MainView {
         cx: &mut Context<Self>,
     ) {
         // 清空现有params
-        self.params.clear();
+        Arc::make_mut(&mut self.params).clear();
 
         // 解析URL中的query string
         if let Some(query_start) = url.find('?') {
@@ -1794,7 +1819,7 @@ impl MainView {
                     let value_entity =
                         cx.new(|cx| InputState::new(window, cx).default_value(&decoded_value));
 
-                    self.params.push(ParamEntry {
+                    Arc::make_mut(&mut self.params).push(ParamEntry {
                         key: key_entity,
                         value: value_entity,
                         enabled: true,
@@ -1807,7 +1832,7 @@ impl MainView {
                         cx.new(|cx| InputState::new(window, cx).default_value(&decoded_key));
                     let value_entity = cx.new(|cx| InputState::new(window, cx).default_value(""));
 
-                    self.params.push(ParamEntry {
+                    Arc::make_mut(&mut self.params).push(ParamEntry {
                         key: key_entity,
                         value: value_entity,
                         enabled: true,
@@ -1880,7 +1905,7 @@ impl MainView {
         cx: &mut Context<Self>,
     ) {
         self._param_input_subs.clear();
-        for param in &self.params {
+        for param in self.params.iter() {
             let key = param.key.clone();
             let value = param.value.clone();
             let key_sub = cx.subscribe_in(&key, window, move |this, _state, event, _window, cx| {
@@ -1906,7 +1931,7 @@ impl MainView {
         cx: &mut Context<Self>,
     ) {
         self._header_subs.clear();
-        for header in &self.headers {
+        for header in self.headers.iter() {
             let key = header.key.clone();
             let value = header.value.clone();
             let key_sub = cx.subscribe_in(&key, window, move |this, _state, event, _window, cx| {
@@ -1985,7 +2010,7 @@ impl MainView {
             {
                 // 切换到 Raw
                 if self.body_state.body_type != BodyType::Raw {
-                    self.body_state.body_type = BodyType::Raw;
+                    Arc::make_mut(&mut self.body_state).body_type = BodyType::Raw;
                     let bt_idx = BodyType::Raw.to_index();
                     self.body_type_select.update(cx, |state, cx| {
                         state.set_selected_index(Some(IndexPath::new(bt_idx)), window, cx);
@@ -1994,7 +2019,7 @@ impl MainView {
                 // 检测格式
                 let detected = RawFormat::detect(Some(&ct), "");
                 if self.body_state.raw_format != detected {
-                    self.body_state.raw_format = detected;
+                    Arc::make_mut(&mut self.body_state).raw_format = detected;
                     let rf_idx = detected.to_index();
                     self.raw_format_select.update(cx, |state, cx| {
                         state.set_selected_index(Some(IndexPath::new(rf_idx)), window, cx);
@@ -2047,8 +2072,8 @@ impl MainView {
         });
 
         // 清空现有params和headers
-        self.params.clear();
-        self.headers.clear();
+        Arc::make_mut(&mut self.params).clear();
+        Arc::make_mut(&mut self.headers).clear();
 
         // 解析query string为params
         if let Some(query) = query_string {
@@ -2070,7 +2095,7 @@ impl MainView {
 
                 let key_entity = cx.new(|cx| InputState::new(window, cx).default_value(&key));
                 let value_entity = cx.new(|cx| InputState::new(window, cx).default_value(&value));
-                self.params.push(ParamEntry {
+                Arc::make_mut(&mut self.params).push(ParamEntry {
                     key: key_entity,
                     value: value_entity,
                     enabled: true,
@@ -2082,7 +2107,7 @@ impl MainView {
         for (key, value) in request.headers {
             let key_entity = cx.new(|cx| InputState::new(window, cx).default_value(&key));
             let value_entity = cx.new(|cx| InputState::new(window, cx).default_value(&value));
-            self.headers.push(HeaderEntry {
+            Arc::make_mut(&mut self.headers).push(HeaderEntry {
                 key: key_entity,
                 value: value_entity,
                 enabled: true,
@@ -2091,7 +2116,7 @@ impl MainView {
 
         // 如果有body，设置到body_state
         if let Some(body) = request.body {
-            self.body_state.body_type = crate::ui::BodyType::Raw;
+            Arc::make_mut(&mut self.body_state).body_type = crate::ui::BodyType::Raw;
             let body_owned = body.clone();
             self.body_state.raw_content.update(cx, move |this, cx| {
                 this.set_value(&body_owned, window, cx);
@@ -2314,7 +2339,7 @@ impl MainView {
             api_key_name,
             api_key_value,
             api_key_location,
-        ) = match &self.auth_state {
+        ) = match self.auth_state.as_ref() {
             AuthState::NoAuth => (
                 0,
                 String::new(),
@@ -2403,7 +2428,7 @@ impl MainView {
             api_key_name,
             api_key_value,
             api_key_location,
-            settings: self.settings.clone(),
+            settings: (*self.settings).clone(),
             response: self.response.clone(),
             response_raw_format: self.response_raw_format,
             builder_tab: self.builder_tab,
@@ -2462,8 +2487,8 @@ impl MainView {
         let state = &tab.tab_state;
         self.method = state.method.clone();
         self.url = state.url.clone();
-        self.params.clear();
-        self.headers.clear();
+        Arc::make_mut(&mut self.params).clear();
+        Arc::make_mut(&mut self.headers).clear();
         self.error_message = None;
         self.response_header_inputs.clear();
 
@@ -2495,8 +2520,8 @@ impl MainView {
         self.is_importing_curl = false;
 
         // 恢复 Body 状态
-        self.body_state.body_type = state.body_type;
-        self.body_state.raw_format = state.raw_format;
+        Arc::make_mut(&mut self.body_state).body_type = state.body_type;
+        Arc::make_mut(&mut self.body_state).raw_format = state.raw_format;
         self.body_state.raw_content.update(cx, |s, cx| {
             s.set_value(&state.raw_json, window, cx);
         });
@@ -2524,7 +2549,7 @@ impl MainView {
         for (key, value, enabled) in &state.params {
             let key_input = cx.new(|cx| InputState::new(window, cx).default_value(key));
             let value_input = cx.new(|cx| InputState::new(window, cx).default_value(value));
-            self.params.push(ParamEntry {
+            Arc::make_mut(&mut self.params).push(ParamEntry {
                 key: key_input,
                 value: value_input,
                 enabled: *enabled,
@@ -2536,7 +2561,7 @@ impl MainView {
         for (key, value, enabled) in &state.headers {
             let key_input = cx.new(|cx| InputState::new(window, cx).default_value(key));
             let value_input = cx.new(|cx| InputState::new(window, cx).default_value(value));
-            self.headers.push(HeaderEntry {
+            Arc::make_mut(&mut self.headers).push(HeaderEntry {
                 key: key_input,
                 value: value_input,
                 enabled: *enabled,
@@ -2545,7 +2570,7 @@ impl MainView {
         self.rebuild_header_subscriptions(window, cx);
 
         // 恢复 Auth 状态
-        self.auth_state = match state.auth_type_index {
+        self.auth_state = Arc::new(match state.auth_type_index {
             1 => AuthState::Bearer(crate::ui::BearerTokenAuthData {
                 token: cx.new(|cx| InputState::new(window, cx).default_value(&state.bearer_token)),
             }),
@@ -2573,13 +2598,13 @@ impl MainView {
                 location_value: state.api_key_location,
             }),
             _ => AuthState::NoAuth,
-        };
+        });
         self.auth_type_select.update(cx, |s, cx| {
             s.set_selected_index(Some(IndexPath::new(state.auth_type_index)), window, cx);
         });
 
         // 恢复 Form Data
-        self.body_state.form_data.clear();
+        Arc::make_mut(&mut self.body_state).form_data.clear();
         for e in &state.form_data {
             let key_input = cx.new(|cx| InputState::new(window, cx).default_value(&e.key));
             let type_select = FormDataParamType::create_select(window, cx);
@@ -2593,7 +2618,8 @@ impl MainView {
                 let input = cx.new(|cx| InputState::new(window, cx).default_value(&e.value));
                 FormDataValue::Text(input)
             };
-            self.body_state.form_data.push(FormDataEntry {
+            Arc::make_mut(&mut self.body_state)
+                .form_data.push(FormDataEntry {
                 key: key_input,
                 value,
                 enabled: e.enabled,
@@ -2603,7 +2629,7 @@ impl MainView {
         }
 
         // 恢复 URL-encoded Data
-        self.body_state.urlencoded_data.clear();
+        Arc::make_mut(&mut self.body_state).urlencoded_data.clear();
         for e in &state.urlencoded_data {
             let key_input = cx.new(|cx| InputState::new(window, cx).default_value(&e.key));
             let type_select = FormDataParamType::create_select(window, cx);
@@ -2614,7 +2640,8 @@ impl MainView {
                 let input = cx.new(|cx| InputState::new(window, cx).default_value(&e.value));
                 FormDataValue::Text(input)
             };
-            self.body_state.urlencoded_data.push(FormDataEntry {
+            Arc::make_mut(&mut self.body_state)
+                .urlencoded_data.push(FormDataEntry {
                 key: key_input,
                 value,
                 enabled: e.enabled,
@@ -2633,7 +2660,7 @@ impl MainView {
         });
 
         // 恢复设置
-        self.settings = state.settings.clone();
+        self.settings = Arc::new(state.settings.clone());
         self.settings_inputs.timeout_input.update(cx, |s, cx| {
             s.set_value(&state.timeout_secs, window, cx);
         });
@@ -2726,14 +2753,14 @@ impl MainView {
             state.set_selected_index(Some(IndexPath::new(method_idx)), window, cx);
         });
 
-        self.headers.clear();
+        Arc::make_mut(&mut self.headers).clear();
         if let Some(headers_text) = headers {
             for line in headers_text.lines() {
                 if let Some(colon_pos) = line.find(':') {
                     let key = line[..colon_pos].trim().to_string();
                     let value = line[colon_pos + 1..].trim().to_string();
                     if !key.is_empty() {
-                        self.headers.push(HeaderEntry::new(window, cx));
+                        Arc::make_mut(&mut self.headers).push(HeaderEntry::new(window, cx));
                         let last = self.headers.len() - 1;
                         self.headers[last].key.update(cx, |state, cx| {
                             state.set_value(&key, window, cx);
@@ -2759,8 +2786,9 @@ impl MainView {
                     }
                 })
             });
-            self.body_state.body_type = BodyType::Raw;
-            self.body_state.raw_format = RawFormat::detect(content_type.as_deref(), &body_owned);
+            Arc::make_mut(&mut self.body_state).body_type = BodyType::Raw;
+            Arc::make_mut(&mut self.body_state).raw_format =
+                RawFormat::detect(content_type.as_deref(), &body_owned);
             // 同步 body_type_select
             let bt_idx = BodyType::Raw.to_index();
             self.body_type_select.update(cx, |state, cx| {
@@ -2787,7 +2815,7 @@ impl MainView {
                 state.set_value(&body_owned, window, cx);
             });
         } else {
-            self.body_state.body_type = BodyType::None;
+            Arc::make_mut(&mut self.body_state).body_type = BodyType::None;
             let bt_idx = BodyType::None.to_index();
             self.body_type_select.update(cx, |state, cx| {
                 state.set_selected_index(Some(IndexPath::new(bt_idx)), window, cx);
@@ -2798,7 +2826,7 @@ impl MainView {
         }
 
         // 从 URL 解析 query params
-        self.params.clear();
+        Arc::make_mut(&mut self.params).clear();
         if let Some(query_start) = url_owned.find('?') {
             let query_string = &url_owned[query_start + 1..];
             for param in query_string.split('&') {
@@ -2812,7 +2840,7 @@ impl MainView {
                     let key_entity = cx.new(|cx| InputState::new(window, cx).default_value(&key));
                     let value_entity =
                         cx.new(|cx| InputState::new(window, cx).default_value(&value));
-                    self.params.push(ParamEntry {
+                    Arc::make_mut(&mut self.params).push(ParamEntry {
                         key: key_entity,
                         value: value_entity,
                         enabled: true,
@@ -2964,7 +2992,7 @@ impl MainView {
     /// 切换主题 — 更新 AppState、gpui_component 主题并持久化
     fn switch_theme(&mut self, theme: &str, cx: &mut Context<Self>) {
         self.app_state.lock().unwrap().set_theme(theme);
-        self.cached_theme = Theme::from_str(theme);
+        self.cached_theme = Arc::new(Theme::from_str(theme));
 
         // 底色浅的主题要切到组件库的 Light 模式，否则组件对比度不对
         let mode = if Theme::is_light(theme) {
@@ -4058,16 +4086,9 @@ impl Render for MainView {
         let response = self.response.clone();
         let error_message = self.error_message.clone();
         let history = self.history.clone();
-        let method = self.method.clone();
-        let params = self.params.clone();
-        let headers = self.headers.clone();
-        let body_state = self.body_state.clone();
-        let auth_state = self.auth_state.clone();
-        let auth_type = self.get_auth_type();
         let response_tab = self.response_tab;
         let builder_tab = self.builder_tab;
         let sidebar_tab = self.sidebar_tab;
-        let settings = self.settings.clone();
         let request_tabs = self.request_tabs.clone();
         let active_tab = self.active_tab;
         // 检查所有对话框保存后是否需要刷新
@@ -5205,6 +5226,7 @@ let method_clr = method_color(&entry.method);
                                                                             self.response_highlight
                                                                                 .as_ref()
                                                                                 .map(|cache| cache.highlighted.as_ref()),
+                                                                            window,
                                                                         ).into_any_element())
                                                                 }
                                                             } else {
