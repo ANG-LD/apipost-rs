@@ -5,6 +5,8 @@ use crate::ui::components::{ghost_button, segment_button, segment_group};
 use crate::ui::themes::Theme;
 use std::sync::Arc;
 use gpui::*;
+// `when` 等流式构造方法来自 prelude（与 main_view.rs 保持一致）
+use gpui::prelude::*;
 use gpui::prelude::FluentBuilder;
 use gpui_component::button::Button;
 use gpui_component::input::Input;
@@ -294,7 +296,6 @@ fn render_key_value_editor(
                 .flex()
                 .flex_row()
                 .gap_2()
-                .mb_1()
                 .children({
                     let mut children: Vec<gpui::Div> = vec![
                         // 占位 24/22 与数据行的复选框、删除按钮等宽，居中的列标题才会对准输入框
@@ -329,11 +330,11 @@ fn render_key_value_editor(
                     );
                     children
                 }),
+            // 表头与首行输入之间只留外层 .gap_2() 的 8px（原先叠了表头 mb_1 +
+            // 本容器 py_1/mt_1 + 每行 mt_1，约 24px，标题与输入框显得隔太开）
             div()
                 .flex_col()
                 .gap_2()
-                .py_1()
-                .mt_1()
                 .children(entries.iter().enumerate().map(|(idx, entry)| {
                     let is_file =
                         entry.param_type == FormDataParamType::File;
@@ -343,8 +344,10 @@ fn render_key_value_editor(
                         }
                         crate::ui::body::FormDataValue::File(_, _) => None,
                     };
+                    // 首行不加顶部外边距：表头到首行只留外层 .gap_2() 的 8px；
+                    // 其余行保留 4px，输入框之间维持原来的 12px 间距
                     div()
-                        .mt_1()
+                        .when(idx > 0, |d| d.mt_1())
                         .flex()
                         .flex_row()
                         .gap_2()

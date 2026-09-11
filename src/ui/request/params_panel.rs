@@ -1,6 +1,8 @@
 use crate::ui::main_view::MainView;
 use crate::ui::Theme;
 use gpui::*;
+// `when` 等流式构造方法来自 prelude（与 main_view.rs 保持一致）
+use gpui::prelude::*;
 use gpui_component::button::Button;
 use gpui_component::input::Input;
 use gpui_component::{Icon, IconName, Sizable, StyledExt};
@@ -29,7 +31,6 @@ pub fn render_params_panel(
                 .flex()
                 .flex_row()
                 .gap_2()
-                .mb_1()
                 .children([
                     // 表头左右占位分别取 24/22：和数据行的复选框(w24)、删除按钮(w22)等宽，
                     // 这样居中的列标题正好落在下方输入框的正中间
@@ -48,14 +49,17 @@ pub fn render_params_panel(
                         .child(this.t("ui.value")),
                     div().w(px(22.0)).child(""),
                 ]),
+            // 表头与首行输入之间只保留外层 .gap_2() 的 8px：
+            // 原来这里还叠了表头 .mb_1()、本容器 .py_1()/.mt_1()、每行 .mt_1()，合计约 24px，
+            // 标题与输入框看起来「隔太开」。
             div()
                 .flex_col()
                 .gap_2()
-                .py_1()
-                .mt_1()
                 .children(this.params.iter().enumerate().map(|(idx, param)| {
+                    // 首行不加顶部外边距：表头到首行只留外层 .gap_2() 的 8px；
+                    // 其余行保留 4px，输入框之间维持原来的 12px 间距
                     div()
-                        .mt_1()
+                        .when(idx > 0, |d| d.mt_1())
                         .flex()
                         .flex_row()
                         .gap_2()
