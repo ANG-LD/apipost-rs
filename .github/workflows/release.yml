@@ -28,6 +28,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # linuxdeploy 在 CI 里没 FUSE，靠这个环境变量走「解包再运行」，否则报 exit 127
+  APPIMAGE_EXTRACT_AND_RUN: "1"
 
 jobs:
   release:
@@ -38,8 +40,10 @@ jobs:
           - os: ubuntu-latest
             triple: x86_64-unknown-linux-gnu
             asset: apipost-rs-x86_64-unknown-linux-gnu
-            package: deb
-            package_files: dist/*.deb
+            package: deb,appimage
+            package_files: |
+              dist/*.deb
+              dist/*.AppImage
           - os: windows-latest
             triple: x86_64-pc-windows-msvc
             asset: apipost-rs-x86_64-pc-windows-msvc.exe
@@ -55,7 +59,7 @@ jobs:
     env:
       HAS_APPLE_CERT: ${{ secrets.APPLE_CERTIFICATE != '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Linux 需要 GTK / WebKitGTK / X11 / Wayland 等系统库（与 packaging.yml 一致）
       - name: Install system dependencies (Linux)
@@ -72,7 +76,8 @@ jobs:
             libxkbcommon-x11-dev \
             libgraphene-1.0-dev \
             libpng-dev \
-            libjpeg-dev
+            libjpeg-dev \
+            patchelf
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -147,6 +152,10 @@ jobs:
             target/aarch64-apple-darwin/release/apipost-rs \
             target/x86_64-apple-darwin/release/apipost-rs
           lipo -info target/universal-apple-darwin/release/apipost-rs
+          # packager.toml 的 binaries-dir 固定为 target/release，而交叉 --target 构建
+          # 不会在那里产出二进制，所以这里再放一份，否则打包时报 No such file or directory
+          mkdir -p target/release
+          cp target/universal-apple-darwin/release/apipost-rs target/release/apipost-rs
 
       # 二进制重命名为带 target-triple 的资产名，便于按平台区分。
       - name: Stage asset (Linux)

@@ -6,10 +6,13 @@ on:
   workflow_dispatch:
 
 jobs:
-  linux-deb:
+  linux-packages:
     runs-on: ubuntu-latest
+    env:
+      # linuxdeploy 在 CI 里没有 FUSE，必须靠它解包运行，否则 AppImage 阶段报 exit 127
+      APPIMAGE_EXTRACT_AND_RUN: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install system dependencies
         run: |
@@ -24,7 +27,8 @@ jobs:
             libxkbcommon-x11-dev \
             libgraphene-1.0-dev \
             libpng-dev \
-            libjpeg-dev
+            libjpeg-dev \
+            patchelf
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -36,18 +40,20 @@ jobs:
       - name: Build release
         run: cargo build --release
 
-      - name: Package deb
-        run: cargo packager -c packager.toml -f deb --release
+      - name: Package deb + AppImage
+        run: cargo packager -c packager.toml -f deb,appimage --release
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
-          name: apipost-rs-deb
-          path: dist/*.deb
+          name: apipost-rs-linux
+          path: |
+            dist/*.deb
+            dist/*.AppImage
 
   windows-nsis:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -70,7 +76,51 @@ jobs:
       - name: Package nsis
         run: cargo packager -c packager.toml -f nsis --release
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: apipost-rs-nsis
           path: dist/*.exe
+
+  # macOS 出通用二进制（arm64 + x86_64）。放在这里而不是只放 release.yml，
+  # 是为了让 macOS 打包在每次推送到 main/master 时就能被验证 —— 否则只有打 tag
+  # 发版才跑到，路径类问题（例如二进制找不到）会一路拖到发版才暴露。
+  macos-app:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          # 通用二进制：两个架构各编一遍，再用 lipo 合体
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-packager
+        run: cargo install cargo-packager --locked
+
+      - name: Build both architectures
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+
+      - name: Merge universal binary
+        run: |
+          mkdir -p target/universal-apple-darwin/release
+          lipo -create \
+            -output target/universal-apple-darwin/release/apipost-rs \
+            target/aarch64-apple-darwin/release/apipost-rs \
+            target/x86_64-apple-darwin/release/apipost-rs
+          lipo -info target/universal-apple-darwin/release/apipost-rs
+          # packager.toml 的 binaries-dir 固定为 target/release，而带 --target 的构建
+          # 不会在那里产出二进制，所以这里再放一份，否则打包时报 No such file or directory
+          mkdir -p target/release
+          cp target/universal-apple-darwin/release/apipost-rs target/release/apipost-rs
+
+      - name: Package app + dmg
+        run: cargo packager -c packager.toml -f app,dmg --target universal-apple-darwin --release
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: apipost-rs-macos
+          path: dist/*.dmg

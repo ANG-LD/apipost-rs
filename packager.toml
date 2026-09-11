@@ -1,6 +1,6 @@
 name = "apipost-rs"
 product-name = "ApiPost-Rs"
-version = "0.2.0"
+version = "0.2.1"
 identifier = "com.apipost-rs.apipost-rs"
 description = "A Postman alternative built with Rust and gpui"
 homepage = "https://github.com/ANG-LD/apipost-rs"
@@ -33,6 +33,8 @@ icons = [
 
 out-dir = "./dist"
 binaries = [{ path = "apipost-rs", main = true }]
+# 固定为 target/release：macOS 的通用二进制由工作流额外复制到这里（见 release.yml
+# 的 lipo 合并步骤）。实测省略本字段不会按 --target 解析，反而会去 out-dir(dist/) 找。
 binaries-dir = "target/release"
 
 [linux]
@@ -41,6 +43,10 @@ generate-desktop-entry = true
 [macos]
 # gpui / winit 与 wgpu 的最低要求；写死避免默认值过高把老系统挡在门外
 minimum-system-version = "11.0"
+# 签名路径（CI 里配了 APPLE_CERTIFICATE 时）走 hardened runtime，必须带这份
+# entitlement，否则 wgpu 运行时生成机器码会被系统拒绝、app 启动即被杀。
+# 未签名打包不读它，所以 Linux/Windows 构建不受影响。
+entitlements = "assets/macos/entitlements.plist"
 
 [deb]
 depends = ["libwebkit2gtk-4.1-0", "libgtk-3-0", "libglib2.0-0", "libc6", "libx11-6", "libwayland-client0"]

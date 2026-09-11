@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        hardened runtime 默认禁止「生成并执行机器码」，而 gpui 的 wgpu 后端会在运行时
+        编译着色器、gpui 自身的渲染管线也要可写可执行的页。少了这几项，签名后的 app
+        一启动就被系统杀掉（表现为双击无反应、控制台报 Code Signature Invalid）。
+        未签名构建不套用 hardened runtime，用不到这份文件，但留着不影响它。
+    -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>
