@@ -3661,7 +3661,11 @@ fn settings_popover(
     sections.push(section_title(t_theme_title, theme).into_any_element());
     for (row_index, chunk) in theme_items.chunks(4).enumerate() {
         // 两行主题按钮之间留出小间距（容器 gap 在滚动包装下不生效，这里显式给）
-        let mut row = div().flex().flex_row().gap(px(GAP_XS));
+        let mut row = div()
+            .flex()
+            .flex_row()
+            .gap(px(GAP_XS))
+            .gap(px(GAP_XS));
         if row_index > 0 {
             row = row.mt(px(GAP_XS + 2.0));
         }
@@ -3968,7 +3972,8 @@ fn settings_popover(
                         .flex_none()
                         .w_full()
                         .flex_col()
-                        .children(sections),
+                        .px_4()
+                                            .children(sections),
                 ),
         )
 }
