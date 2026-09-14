@@ -757,4 +757,41 @@ fn per_row_click_targets_keep_row_scoped_ids() {
     assert!(body.contains("enabled_toggle("), "表单数据面板应当使用 components::enabled_toggle");
 }
 
+#[test]
+fn response_time_switches_unit_at_one_second() {
+    // 用户口径：<1s 用毫秒；>=1s 用秒，且**只有带小数时**才保留 2 位小数。
+    // 断言逐个写完整字符串（不用 contains）：`1.10 s` 丢掉末尾 0、整数秒被补成 `2.00 s`、
+    // 或 60s 以上被"优化"成 `1m 5s` 这类改动，都必须在测试里立刻挂掉。
+    use super::main_view::format_response_time;
+
+    // 1s 以内：毫秒，不换算
+    assert_eq!(format_response_time(0), "0 ms");
+    assert_eq!(format_response_time(1), "1 ms");
+    assert_eq!(format_response_time(999), "999 ms");
+
+    // 正好/四舍五入后是整数秒：只写整数，不补 `.00`（1999ms 见下）
+    assert_eq!(format_response_time(1000), "1 s");
+    assert_eq!(format_response_time(2000), "2 s");
+    assert_eq!(format_response_time(65000), "65 s"); // 60s 以上仍用秒，不做分/秒混排
+
+    // 1s 以上且带小数：固定 2 位（`1.10 s` / `1.01 s` 末尾的 0 必须保留）
+    assert_eq!(format_response_time(1005), "1.01 s");
+    assert_eq!(format_response_time(1100), "1.10 s");
+    assert_eq!(format_response_time(1234), "1.23 s");
+    assert_eq!(format_response_time(65430), "65.43 s");
+
+    // 关键回归：四舍五入到 2 位之后才变成整数秒的，也要走整数档
+    // （1999ms = 1.999s：既不是 `1.99 s`，也不是 `2.00 s`）
+    assert_eq!(format_response_time(1999), "2 s");
+
+    // 刻度边界：四舍五入到百分之一秒（1.004s 舍成 1.00、1.995s 进成 2.00），
+    // 不是直接截断 —— 截断会把 1995ms 显示成 `1.99 s`。
+    assert_eq!(format_response_time(1004), "1 s"); // 1.004s -> 1.00 -> 整数档
+    assert_eq!(format_response_time(1994), "1.99 s");
+    assert_eq!(format_response_time(1995), "2 s"); // 1.995s -> 2.00 -> 整数档
+
+    // 防御：耗时不该为负，真拿到负值也按 0 显示，界面上不能出现 `-5 ms`
+    assert_eq!(format_response_time(-5), "0 ms");
+}
+
 

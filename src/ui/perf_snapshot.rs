@@ -1320,7 +1320,10 @@ mod tests {
 
     // ---------- 第八轮：侧栏历史列表每行的派生文案 ----------
 
-    use crate::ui::main_view::{HistoryList, HistoryRow};
+    // 复刻 UI 文案的耗时格式化：本文件里凡是出现耗时文案的地方都必须调
+    // `format_response_time` 本体，不能自己写 `format!("{}ms", t)` —— 否则量的是/断言的是
+    // 另一段代码，UI 改了格式这里也不会失败（等于没测真代码）。
+    use crate::ui::main_view::{format_response_time, HistoryList, HistoryRow};
 
     fn history_entries(n: usize) -> Vec<crate::app::database::HistoryEntry> {
         (0..n)
@@ -1367,7 +1370,7 @@ mod tests {
                             entry.response_status.unwrap_or(0),
                             entry
                                 .response_time_ms
-                                .map(|t| format!("{}ms", t))
+                                .map(format_response_time)
                                 .unwrap_or_default()
                         ));
                     }
@@ -1409,7 +1412,7 @@ mod tests {
                     status,
                     entry
                         .response_time_ms
-                        .map(|t| format!("{}ms", t))
+                        .map(format_response_time)
                         .unwrap_or_default()
                 ),
                 None => String::new(),

@@ -141,14 +141,15 @@ impl HistoryList {
                 element_id: SharedString::from(format!("history-row-{}", entry.id)),
                 method: SharedString::from(entry.method.as_str()),
                 url: SharedString::from(entry.url.as_str()),
-                // 与改造前同样的表达式：没有耗时时会留下一个空括号
+                // 耗时文案与响应面板共用 format_response_time（同为 "245 ms" / "1.23 s" 风格）；
+                // 没有耗时时为空字符串，所以有状态码但没耗时就会留下一个空括号
                 status_line: match entry.response_status {
                     Some(status) => SharedString::from(format!(
                         "{} ({})",
                         status,
                         entry
                             .response_time_ms
-                            .map(|t| format!("{}ms", t))
+                            .map(format_response_time)
                             .unwrap_or_default()
                     )),
                     None => SharedString::default(),
@@ -5194,7 +5195,7 @@ let method_clr = method_color(&entry.method);
                                                                     div()
                                                                         .text_xs()
                                                                         .text_color(theme.muted_foreground)
-                                                                        .child(format!("{} {}ms", self.t("response.time"), resp.time_ms)),
+                                                                        .child(format!("{} {}", self.t("response.time"), format_response_time(resp.time_ms))),
                                                                     div()
                                                                         .text_xs()
                                                                         .text_color(theme.muted_foreground)
@@ -5952,5 +5953,40 @@ pub(crate) fn tab_scroll_step_offset(current: f32, delta_tabs: i32, max_scroll: 
 
     let next = ((current / TAB_PITCH).round() + delta_tabs as f32) * TAB_PITCH;
     next.clamp(0.0, max_scroll.max(0.0))
+}
+
+/// 响应耗时的显示文案，**只有数值和单位**（如 `"245 ms"` / `"1.23 s"`），
+/// 不含"响应时间"这类标签 —— 标签由调用点用 `self.t("response.time")` 自己拼，
+/// 这样响应面板和历史列表用的是同一份数字格式，不会出现"面板 1.23 s、历史 1234 ms"。
+///
+/// 为什么分两档：
+/// - 1s 以内用毫秒：数值通常两三位，比 `0.25 s` 直观，也方便直接跟抓包工具的数字对照。
+/// - 1s 以上换秒：毫秒会变成四五位甚至更多（`65430 ms`），位数太长一眼读不出量级，
+///   所以换算成秒；秒档**固定保留 2 位小数**，是为了让相邻两条记录的数字宽度稳定，
+///   不出现 `1.2 s` / `1.23 s` 混排导致的左右跳动。
+/// - 但四舍五入后正好是整数秒时**不补 `.00`**：那两位小数没有任何信息量，纯属多两个字符，
+///   还会让"刚好 1 秒"显得比 `1000 ms` 更啰嗦。注意 `1999ms`（=1.999s）四舍五入到 2 位
+///   就是整数秒，也走这一档显示 `2 s`，而不是 `1.99 s`。
+/// - 不发明"分/秒混排"（不存在 `1m 5s`）：60s 以上照旧用秒，位数多一点但单位唯一、无需换算。
+///
+/// 全程**整数运算**：`ms as f64 / 1000.0` 再 `{:.2}` 会引入尾差
+/// （例如 `1.005` 这类刻度上得到 `1.00`），而先四舍五入到"百分之一秒"这个整数刻度
+/// 再做判断和格式化，就不会出现 `1.10` 写成 `1.1` 或 `1.09` 这类问题。
+pub(crate) fn format_response_time(time_ms: i64) -> String {
+    // 防御性 `.max(0)`：耗时来自 `Instant` 差值，理论上不会为负；
+    // 万一上游给了负值（例如历史数据被改坏），按 0 显示，绝不让界面上出现 `-5 ms`。
+    let ms = time_ms.max(0);
+    if ms < 1000 {
+        return format!("{} ms", ms);
+    }
+    // 先四舍五入到"百分之一秒"这个整数刻度：(ms + 5) / 10 即 2 位小数的四舍五入。
+    // 之后的整数秒判断和格式化都在这个整数上做，所以不会有浮点尾差。
+    let hundredths = (ms + 5) / 10;
+    if hundredths % 100 == 0 {
+        // 进位后正好是整数秒（含 1999ms -> 200 -> 2 s 这种）：不补 `.00`
+        format!("{} s", hundredths / 100)
+    } else {
+        format!("{}.{:02} s", hundredths / 100, hundredths % 100)
+    }
 }
 
