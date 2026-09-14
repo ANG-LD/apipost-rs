@@ -7,6 +7,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod assets;
 mod config;
 mod http;
 mod ui;
@@ -16,7 +17,6 @@ use app::AppState;
 use config::AppConfig;
 use gpui::*;
 use gpui_component::{Root, StyledExt};
-use gpui_component_assets::Assets;
 use gpui_platform::application;
 use ui::MainView;
 use log::info;
@@ -88,7 +88,10 @@ fn main() {
     let config = Arc::new(config);
 
     // 构建并运行应用
-    application().with_assets(Assets).run(move |cx: &mut App| {
+    // 资源源用 `assets::Assets`（应用自绘图标 + 组件库资源的桥接）：
+    // 直接用组件库那份 `gpui_component_assets::Assets` 时，应用自己的
+    // `assets/icons/*.svg` 解析不到，`gpui::svg()` 只会画出空白（原因见 src/assets.rs 顶部）
+    application().with_assets(assets::Assets::new()).run(move |cx: &mut App| {
         // 初始化gpui-component
         gpui_component::init(cx);
 

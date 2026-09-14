@@ -437,14 +437,130 @@ fn muted_icons_stay_readable_on_every_background() {
 
 #[test]
 fn tab_scroll_arrows_enable_in_the_right_directions() {
-    // 回归：`ScrollHandle::offset()` 向右滚动时为负值。早期实现忘了取反，
-    // 导致「左箭头永远置灰不可点、右箭头永远可点」。
-    use super::main_view::tab_scroll_button_states;
+    // 回归：`ScrollHandle::offset()` 向右滚动时为负值，且只允许在
+    // `tab_scroll_offset_from_handle` 里翻一次符号 —— 外部一律用非负的"已向右滚动距离"比较。
+    // 早期实现翻了两次（渲染处取反一次、纯函数里又取反一次，等于没翻），
+    // 于是 can_left 恒为假：「左箭头永远置灰不可点、右箭头永远可点」。
+    use super::main_view::{tab_scroll_button_states, tab_scroll_offset_from_handle};
+    // 第一步：负值 offset → 非负的"已向右滚动距离"
+    assert_eq!(tab_scroll_offset_from_handle(0.0), 0.0);
+    assert_eq!(tab_scroll_offset_from_handle(-150.0), 150.0);
+    assert_eq!(tab_scroll_offset_from_handle(-0.4), 0.4);
+    // 防御：gpui 只会在 [-max, 0] 里写 offset；万一拿到正值，一律当"未滚动"，
+    // 不能让它把左箭头误判成可用
+    assert_eq!(tab_scroll_offset_from_handle(7.0), 0.0);
+    // 第二步：由"已滚动距离"判定两侧箭头
     assert_eq!(tab_scroll_button_states(0.0, 300.0), (false, true)); // 最左：只能向右
-    assert_eq!(tab_scroll_button_states(-150.0, 300.0), (true, true)); // 中间：两边都可用
-    assert_eq!(tab_scroll_button_states(-300.0, 300.0), (true, false)); // 最右：只能向左
+    assert_eq!(tab_scroll_button_states(150.0, 300.0), (true, true)); // 中间：两边都可用
+    assert_eq!(tab_scroll_button_states(300.0, 300.0), (true, false)); // 最右：只能向左
     assert_eq!(tab_scroll_button_states(0.0, 0.0), (false, false)); // 标签未溢出：都禁用
+    // 边界：可滚动范围小到不足 1px 时，方向判定两侧都应用同一个 0.5px 容差，
+    // 否则会出现「两个箭头同时亮」这种自相矛盾的状态
+    assert_eq!(tab_scroll_button_states(0.0, 0.4), (false, false));
+    assert_eq!(tab_scroll_button_states(0.4, 0.4), (false, false));
+    // 半像素抖动不该让箭头闪烁
+    assert_eq!(tab_scroll_button_states(0.49, 300.0), (false, true));
+    // 弹性越界（gpui 会把 offset 夹回区间内）也不能把「已滚到最右」判成还能继续右滚
+    assert_eq!(tab_scroll_button_states(300.0, 300.0).1, false);
 }
+
+#[test]
+fn tab_scroll_left_arrow_is_clickable_when_active_tab_is_rightmost() {
+    // 用户报的场景：**激活的标签在最右侧**（标签条已滚到最右）时，左箭头必须可用可点。
+    // 这里把整条链路（gpui 原始 offset → 已滚动距离 → 箭头状态）都钉住，
+    // 让"渲染处已取反 + 纯函数又取反"的双重取负错误无法再溜过去。
+    use super::main_view::{
+        tab_scroll_button_states, tab_scroll_limit, tab_scroll_offset_from_handle,
+    };
+    // 1200 宽窗口：标签条可视宽 836，7 个定宽标签内容宽 =(150+1)*7-1 = 1056
+    let max = tab_scroll_limit(151.0 * 7.0 - 1.0, 836.0);
+    assert_eq!(max, 220.0);
+    // 滚到最右时 gpui 写回的原始 offset 是 -220 → 两个箭头状态必须是（左可用、右置灰）
+    let scrolled = tab_scroll_offset_from_handle(-max);
+    assert_eq!(scrolled, 220.0);
+    assert_eq!(tab_scroll_button_states(scrolled, max), (true, false));
+    // 停在最左时仍是（左置灰、右可用）—— 不能矫枉过正成"左箭头永远可点"
+    assert_eq!(tab_scroll_button_states(tab_scroll_offset_from_handle(0.0), max), (false, true));
+    // 反向走一屏（-0.49 是浮点抖动）：不构成"已滚动"，左箭头保持置灰
+    assert_eq!(tab_scroll_button_states(tab_scroll_offset_from_handle(-0.49), max), (false, true));
+}
+
+#[test]
+fn tab_scroll_limit_covers_viewport_edge_cases() {
+    // 回归：可视宽度以前来自一个「只在构造时写过 0.0」的字段，等于视口恒为 0。
+    // 于是"内容宽 - 视口"退化成"整个内容宽"，右箭头恒可点、左箭头恒灰。
+    use super::main_view::tab_scroll_limit;
+    // 未溢出：内容比视口窄
+    assert_eq!(tab_scroll_limit(600.0, 1000.0), 0.0);
+    // 内容宽刚好等于可视宽：边界上不可滚动
+    assert_eq!(tab_scroll_limit(1000.0, 1000.0), 0.0);
+    // 内容宽略大于可视宽：可滚动，且范围就是差值
+    assert_eq!(tab_scroll_limit(1000.5, 1000.0), 0.5);
+    assert_eq!(tab_scroll_limit(1149.0, 1000.0), 149.0);
+    // 一个标签都没有（内容宽为 0）也不该算出负的可滚动范围
+    assert_eq!(tab_scroll_limit(0.0, 1000.0), 0.0);
+    // 退化输入：视口宽度还没测出来（首次 prepaint 之前），必须当作「不可滚动」。
+    // 若按"视口 = 0"去算，会得到等于整个内容宽的虚高范围 —— 那正是本次 bug
+    assert_eq!(tab_scroll_limit(1207.0, 0.0), 0.0);
+    assert_eq!(tab_scroll_limit(1207.0, -1.0), 0.0);
+    // 内容宽为 0 且视口未知时同样是 0（不出现 NaN / 负数）
+    assert_eq!(tab_scroll_limit(0.0, 0.0), 0.0);
+}
+
+#[test]
+fn tab_scroll_click_enables_the_left_arrow() {
+    // 用户可见行为的纯函数复现：点一次右箭头之后，左箭头必须变成可用且能点。
+    // 这条链路是 tab_scroll_step_offset（点一次算新偏移）→ tab_scroll_button_states
+    // （由新偏移决定箭头状态），任何一段的符号/夹紧写错都会在这里暴露。
+    // 注意偏移量统一用非负数（"已向右滚动的距离"），符号只在
+    // tab_scroll_offset_from_handle 里翻一次 —— 否则就是双重取负那个老 bug。
+    use super::main_view::{tab_scroll_button_states, tab_scroll_limit, tab_scroll_step_offset};
+
+    // 可视宽 1000，9 个定宽标签：内容宽 = (150+1)*9-1 = 1358，可滚动范围 358
+    let max = tab_scroll_limit(1358.0, 1000.0);
+    assert_eq!(max, 358.0);
+
+    // 最左：左箭头不可点
+    let mut offset = 0.0;
+    assert_eq!(tab_scroll_button_states(offset, max), (false, true));
+
+    // 点一次右箭头 → 左箭头立刻可用（步进 = 标签宽 150 + 间距 1）
+    offset = tab_scroll_step_offset(offset, 1, max);
+    assert_eq!(offset, 151.0);
+    assert_eq!(tab_scroll_button_states(offset, max), (true, true));
+
+    // 继续点到超过最大范围：夹在 max 上，右箭头置灰、左箭头仍可用
+    offset = tab_scroll_step_offset(offset, 5, max);
+    assert_eq!(offset, max);
+    assert_eq!(tab_scroll_button_states(offset, max), (true, false));
+
+    // 在最右端点一次左箭头：回到上一格（358/151 先对齐到第 2 格，再退 1 格），
+    // 右箭头重新可用
+    offset = tab_scroll_step_offset(offset, -1, max);
+    assert_eq!(offset, 151.0);
+    assert_eq!(tab_scroll_button_states(offset, max), (true, true));
+
+    // 一路点回最左：不会越过 0，左箭头重新置灰
+    offset = tab_scroll_step_offset(offset, -3, max);
+    assert_eq!(offset, 0.0);
+    assert_eq!(tab_scroll_button_states(offset, max), (false, true));
+
+    // 未溢出（内容宽比可视宽窄）：两个方向都不可滚动，点也不会产生偏移
+    let no_max = tab_scroll_limit(600.0, 1000.0);
+    assert_eq!(no_max, 0.0);
+    let stuck = tab_scroll_step_offset(0.0, 1, no_max);
+    assert_eq!(stuck, 0.0);
+    assert_eq!(tab_scroll_button_states(stuck, no_max), (false, false));
+
+    // 视口未知（首次 prepaint 之前）：同样不可滚动，不会出现"能点但滚不动"的箭头
+    let unknown_max = tab_scroll_limit(1358.0, 0.0);
+    assert_eq!(tab_scroll_step_offset(0.0, 1, unknown_max), 0.0);
+    assert_eq!(
+        tab_scroll_button_states(0.0, unknown_max),
+        (false, false)
+    );
+}
+
 
 // ==================== 可点击控件的反馈色规则 ====================
 //

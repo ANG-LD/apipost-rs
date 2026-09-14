@@ -521,10 +521,30 @@ pub fn button_size_for_icon(tier: IconTier) -> Size {
 /// （不写尺寸时 `Icon` 会退化成当前窗口文字的字号，等于把尺寸交给上下文，
 /// 同一个图标在不同面板里就会不一样大）。
 pub fn themed_icon(name: IconName, tier: IconTier, tone: IconTone, theme: &Theme) -> Icon {
-    let icon = Icon::new(name).with_size(px(tier.px()));
+    apply_icon_style(Icon::new(name), tier, tone, theme)
+}
+
+/// 自绘图标（不在组件库图标集里）的构造出口，与 `themed_icon` 共用同一套规则。
+///
+/// 为什么要单独一个入口：`themed_icon` 收的是组件库的 `IconName`，而自绘图标
+/// 没有对应的枚举项，只有一个资源路径。但"尺寸档 + 语义色"必须仍然只有一套规则 ——
+/// 另起一套就又会漂移成"同一语义两个颜色"。所以这里只换"字形从哪来"，
+/// 尺寸与颜色仍旧走 `apply_icon_style`。
+///
+/// `path` 是资源源里的路径，必须真的能被 `AssetSource` 解析到：
+/// 组件库图标走组件库那份资源源，自绘图标走 `crate::assets` 的桥接
+/// （清单见 `crate::assets`，例如 `HISTORY_ICON_PATH`）。
+pub fn themed_svg_icon(path: &str, tier: IconTier, tone: IconTone, theme: &Theme) -> Icon {
+    apply_icon_style(Icon::empty().path(path), tier, tone, theme)
+}
+
+/// `themed_icon` / `themed_svg_icon` 共用的尺寸与语义色映射 —— 全应用图标的唯一规则点
+fn apply_icon_style(icon: Icon, tier: IconTier, tone: IconTone, theme: &Theme) -> Icon {
+    let icon = icon.with_size(px(tier.px()));
     match icon_tone_color(tone, theme) {
         Some(color) => icon.text_color(color),
-        // Inherit：刻意不写 text_color，让 Icon 用窗口文字色渲染，
+        // Inherit：刻意不写 text_color，让 Icon 用窗口文字色渲染
+        // （`RenderOnce for Icon` 里读 `window.text_style().color`），
         // 这样容器 hover / 选中换文字色时图标跟着变
         None => icon,
     }

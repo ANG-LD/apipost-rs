@@ -8,9 +8,9 @@ use crate::app::HttpResponse;
 use crate::http::HttpRequest;
 use crate::ui::components::{
     button_size_for_icon, ghost_button, popup_panel, primary_button_sm, section_divider,
-    section_title, segment_button, segment_group, themed_icon, tooltip_popup, IconTier, IconTone,
-    CONTROL_H, CONTROL_H_SM, GAP_L, GAP_M, GAP_S, GAP_XS, ICON_TEXT_GAP, RADIUS_LG, RADIUS_SM,
-    RADIUS_XS,
+    section_title, segment_button, segment_group, themed_icon, themed_svg_icon, tooltip_popup,
+    IconTier, IconTone, CONTROL_H, CONTROL_H_SM, GAP_L, GAP_M, GAP_S, GAP_XS, ICON_TEXT_GAP,
+    RADIUS_LG, RADIUS_SM, RADIUS_XS,
 };
 use crate::ui::dialogs::{
     render_code_gen_dialog_overlay, render_env_dialog_overlay,
@@ -300,8 +300,6 @@ pub struct MainView {
     pub(crate) tabs_scroll: gpui::ScrollHandle,
     /// 启动/恢复工作区后，需要在首次布局完成时把当前标签滚动到可见区域
     pub(crate) tabs_reveal_pending: bool,
-    /// 上次可见的标签条宽度（0 表示尚未布局），用于在窗口/侧边栏宽度变化后重新定位当前标签
-    pub(crate) tabs_viewport: f32,
     pub(crate) response: Option<Arc<HttpResponse>>,
     pub(crate) response_tab: ResponseTab,
     pub(crate) body_view_mode: BodyViewMode,
@@ -1052,7 +1050,6 @@ impl MainView {
             active_tab: 0,
             tabs_scroll: gpui::ScrollHandle::new(),
             tabs_reveal_pending: true,
-            tabs_viewport: 0.0,
             response: None,
             response_tab: ResponseTab::Body,
             body_view_mode: BodyViewMode::Pretty,
@@ -2190,7 +2187,7 @@ impl MainView {
         let new_idx = self.request_tabs.len() - 1;
         self.active_tab = new_idx;
         // 让新标签滚动到可见区域
-        self.reveal_tab(new_idx, self.tabs_viewport);
+        self.reveal_tab(new_idx, self.tabs_viewport());
 
         // 加载默认 TabState，重置所有 UI 组件（body/auth/settings/scripts 等）
         let new_tab = self.request_tabs[new_idx].clone();
@@ -2263,6 +2260,18 @@ impl MainView {
     }
 
 
+    /// 标签条**实测**可视宽度（px，未布局时为 0）。
+    ///
+    /// 为什么不自己维护一个字段：可视宽度只有布局阶段才知道，布局结果只有 gpui 有。
+    /// `ScrollHandle::bounds()` 正是 gpui 在每次 prepaint 里回填的实测值
+    /// （gpui `Div::prepaint` → `Interactivity::prepaint` → `clamp_scroll_position`），
+    /// 读它永远和 gpui 真正使用的滚动区域一致。
+    /// 之前这里是个只在构造时写过 0.0 的字段，等于"可视宽度恒为 0"，会把可滚动范围
+    /// 虚高成整个内容宽（右箭头恒可点、左箭头恒灰、滚不动也读不回 offset）。
+    fn tabs_viewport(&self) -> f32 {
+        f32::from(self.tabs_scroll.bounds().size.width)
+    }
+
     /// 把指定标签滚动到可见范围内。
     ///
     /// 标签是定宽（见 REQUEST_TAB_WIDTH），所以第 idx 个标签在标签条内的位置可以直接算出来；
@@ -2276,8 +2285,8 @@ impl MainView {
             return false;
         }
         let tab_left = TAB_PITCH * idx as f32;
-        // offset 为正数，表示内容向左滚动的距离
-        let mut offset = -self.tabs_scroll.offset().x.as_f32();
+        // 非负的"已向右滚动距离"：符号只在 tab_scroll_offset_from_handle 里翻一次
+        let mut offset = tab_scroll_offset_from_handle(self.tabs_scroll.offset().x.as_f32());
         if tab_left < offset {
             // 标签在可见区域左侧
             offset = tab_left;
@@ -2299,11 +2308,12 @@ impl MainView {
         const TAB_PITCH: f32 = REQUEST_TAB_WIDTH + REQUEST_TAB_GAP;
 
         let content = TAB_PITCH * self.request_tabs.len() as f32 - REQUEST_TAB_GAP;
-        let max = (content - self.tabs_viewport).max(0.0);
-        let current = -self.tabs_scroll.offset().x.as_f32();
-        let next = ((current / TAB_PITCH).round() + delta_tabs as f32) * TAB_PITCH;
-        self.tabs_scroll
-            .set_offset(point(px(-next.clamp(0.0, max)), px(0.0)));
+        // 可视宽度取实测值：用坏掉的 0 会算出虚高的可滚动范围，
+        // 让 gpui 在 prepaint 里把 offset 夹回 0（点了右箭头也不动）
+        let max = tab_scroll_limit(content, self.tabs_viewport());
+        let current = tab_scroll_offset_from_handle(self.tabs_scroll.offset().x.as_f32());
+        let next = tab_scroll_step_offset(current, delta_tabs, max);
+        self.tabs_scroll.set_offset(point(px(-next), px(0.0)));
     }
 
     /// 关闭指定标签页（至少保留一个）
@@ -2324,7 +2334,7 @@ impl MainView {
         // 直接加载目标标签数据
         self.active_tab = new_active;
         // 关闭标签后确保当前标签仍可见
-        self.reveal_tab(new_active, self.tabs_viewport);
+        self.reveal_tab(new_active, self.tabs_viewport());
         let tab = self.request_tabs[new_active].clone();
         self.load_tab_meta(&tab, window, cx);
         self.save_workspace(cx);
@@ -2338,7 +2348,7 @@ impl MainView {
         self.save_current_tab_meta(cx);
         self.active_tab = tab_idx;
         // 切换到可见区域外的标签时自动滚动出来
-        self.reveal_tab(tab_idx, self.tabs_viewport);
+        self.reveal_tab(tab_idx, self.tabs_viewport());
         let tab = self.request_tabs[tab_idx].clone();
         self.load_tab_meta(&tab, window, cx);
         self.save_workspace(cx);
@@ -4172,12 +4182,25 @@ impl Render for MainView {
         let tabs_content_w = (REQUEST_TAB_WIDTH + REQUEST_TAB_GAP)
             * self.request_tabs.len() as f32
             - REQUEST_TAB_GAP;
-        let tabs_max = (tabs_content_w - self.tabs_viewport).max(0.0);
-        // 取反：ScrollHandle::offset() 向右滚动时为**负值**，与本文件其它处统一为
-        // 「正数 = 已向右滚动的距离」。漏掉取反不会编译报错，只会让 can_left 恒假
-        // （左箭头永远置灰不可点）、can_right 恒真。
-        let tabs_offset = -f32::from(self.tabs_scroll.offset().x);
+        // 可视宽度必须是**实测**值（见 tabs_viewport()）：自己维护的字段拿不到布局结果，
+        // 一旦恒为 0，可滚动范围就虚高成整个内容宽 —— 右箭头恒可点、左箭头恒灰、
+        // 点了右箭头 gpui 又会把 offset 夹回 0（于是左箭头永远等不到"已向右滚动"）
+        let tabs_viewport_used = self.tabs_viewport();
+        let tabs_max = tab_scroll_limit(tabs_content_w, tabs_viewport_used);
+        // 「已向右滚动的距离」（正数）。gpui 的 offset 向右滚动为负值，符号只在
+        // tab_scroll_offset_from_handle 里翻一次；这里（以及所有比较）都用非负数。
+        let tabs_offset = tab_scroll_offset_from_handle(f32::from(self.tabs_scroll.offset().x));
         let tabs_overflow = tabs_max > 0.5;
+        // 本帧的箭头状态是按上面这份几何算出来的（可视宽度 / 可滚动范围都来自上一次
+        // prepaint）。把它交给标签条的 prepaint 回调比对：本帧布局结束后若实测值变了，
+        // 说明这一帧用的是过期几何，需要补一帧重算 —— 最典型的就是第一帧
+        // （prepaint 之前可视宽度还是 0，不补帧箭头就永远算不出来）。
+        // 注意 ScrollHandle::offset() 同理来自上一次 prepaint，所以这里比对 max_offset
+        // 就能同时覆盖"标签增删导致内容宽变化"（宽度不变但可滚动范围变了）。
+        let tabs_geometry_used = (
+            tabs_viewport_used,
+            f32::from(self.tabs_scroll.max_offset().x),
+        );
         // 设置浮层：挂到**根容器**渲染。
         // 1) 原先在侧边栏子树里，比侧边栏宽的部分会被主工作区盖住（内容被截断）
         // 2) 根容器是 flex_col，绝对定位子元素会被当作 flex 项 —— 所以外面必须包一层
@@ -4437,11 +4460,14 @@ impl Render for MainView {
                                             }))
                                             // 侧栏 tab 图标：独立图标 → 标准档；
                                             // 选中时容器把文字色换成 accent_foreground，图标 Inherit 才会跟着换；
-                                            // 字形取 Undo2（回到过去）：原来的 GalleryVerticalEnd 是排版里的
-                                            // "行末标记"，与"历史记录"毫无关系；图标集里没有时钟/列表字形，
-                                            // 逆时针回退箭头是唯一表达"回溯过去"的一档
-                                            .child(themed_icon(
-                                                IconName::Undo2,
+                                            // 字形是本应用自绘的「历史记录」——assets/icons/history.svg
+                                            // （钟面 + 缺口处逆时针回溯箭头）：钟面提供"时间/过去"这个锚点，
+                                            // 于是不会像原来借用的 Undo2 那样被读成"撤销刚才那步"。
+                                            // 它不是组件库图标集里的字形，所以走 themed_svg_icon + 资源路径，
+                                            // 由 crate::assets 的桥接资源源加载（include_str! 内嵌自绘图标，
+                                            // 其余路径委托给组件库资源源）；没有那层桥接就是一片空白
+                                            .child(themed_svg_icon(
+                                                crate::assets::HISTORY_ICON_PATH,
                                                 IconTier::Regular,
                                                 IconTone::Inherit,
                                                 &theme,
@@ -4811,6 +4837,30 @@ let method_clr = method_color(&entry.method);
                                     // 标签条：每个标签定宽，标签过多时整条左右滚动（滚轮即可横向滚动）
                                     .child(
                                         div()
+                                            // 布局结束后校准箭头状态：
+                                            // prepaint 里 gpui 已经把实测几何写回同一个 ScrollHandle，
+                                            // 与"本帧渲染时用的几何"不一致就补一帧重算。
+                                            // 只在真的变了才补帧，所以最多多一帧就收敛，不会自激重绘。
+                                            // （这里不能直接调 cx.notify()：绘制阶段 notify 会被
+                                            //   gpui 丢掉，必须挂到下一帧的帧回调里再 notify）
+                                            .on_children_prepainted({
+                                                let scroll = self.tabs_scroll.clone();
+                                                let (used_viewport, used_max) = tabs_geometry_used;
+                                                let view_id = cx.entity_id();
+                                                move |_children: Vec<Bounds<Pixels>>,
+                                                      window: &mut Window,
+                                                      cx: &mut App| {
+                                                    let viewport = f32::from(scroll.bounds().size.width);
+                                                    let max = f32::from(scroll.max_offset().x);
+                                                    if (viewport - used_viewport).abs() > 0.5
+                                                        || (max - used_max).abs() > 0.5
+                                                    {
+                                                        window.on_next_frame(move |_, cx| {
+                                                            cx.notify(view_id)
+                                                        });
+                                                    }
+                                                }
+                                            })
                                             .id("request-tabs-scroll")
                                             .flex_1()
                                             .min_w(px(0.0))
@@ -4821,6 +4871,10 @@ let method_clr = method_color(&entry.method);
                                             .flex_row()
                                             .items_end()
                                             .gap_px()
+                                            // 真正让它成为可滚动容器的是下面这行：
+                                            // `.track_scroll()` 只把句柄与这个容器的滚动状态关联起来，
+                                            // 它本身不会开启滚动。缺了 `.overflow_x_scroll()`，
+                                            // `set_offset()` 写的偏移会在 prepaint 里被夹回 0，滚不动也读不回
                                             .overflow_x_scroll()
                                             .track_scroll(&self.tabs_scroll)
                                             .children(request_tabs.iter().enumerate().map(|(i, tab)| {
@@ -5851,11 +5905,52 @@ let method_clr = method_color(&entry.method);
 
 
 
+/// 把 `ScrollHandle::offset().x`（gpui 约定：向右滚动为**负值**）换算成本文件统一的
+/// 「已向右滚动的距离」（非负，0 = 停在最左）。
+///
+/// 这是**唯一**允许出现负号的地方：所有读 offset 的代码都走这里，符号只在函数内部翻一次，
+/// 外部一律用非负数比较。上一版正是把这一步在渲染处和 `tab_scroll_button_states` 里各做了一次
+/// （双重取负，等于没翻），于是 `can_left` 恒为假 —— 左箭头永远置灰、连 click 监听都不会挂上，
+/// 看起来就是"根本点击不到"。符号写反不会有编译错误，所以必须有测试钉住（见 theme_tests.rs）。
+pub(crate) fn tab_scroll_offset_from_handle(raw_offset_x: f32) -> f32 {
+    // `.max(0.0)` 是防御性的：gpui 会把 offset 夹进 [-max, 0]，理论上不会为正；
+    // 万一拿到正值只可能是别处写错，此时按"未滚动"处理，绝不让左箭头误判为可用。
+    (-raw_offset_x).max(0.0)
+}
+
 /// 标签条左右滚动箭头是否可用，返回 `(can_left, can_right)`。
 ///
-/// 为什么抽成纯函数：`ScrollHandle::offset()` 向右滚动时返回**负值**，这个符号约定
-/// 写错不会有编译错误，只表现为「左箭头永远置灰」，因此必须有测试能钉住它。
-pub(crate) fn tab_scroll_button_states(raw_offset_x: f32, max_scroll: f32) -> (bool, bool) {
-    let scrolled = -raw_offset_x;
+/// `scrolled` 是**已向右滚动的距离**（非负，来自 `tab_scroll_offset_from_handle`），
+/// `max_scroll` 是最大可滚动距离（来自 `tab_scroll_limit`）。
+/// 0.5px 容差：布局是浮点算出来的，贴边时不要抖成"两个都灰"。
+pub(crate) fn tab_scroll_button_states(scrolled: f32, max_scroll: f32) -> (bool, bool) {
     (scrolled > 0.5, scrolled < max_scroll - 0.5)
 }
+
+/// 标签条最大可滚动距离 = 内容宽 - 实测可视宽（负值归零，即未溢出时为 0）。
+///
+/// `viewport_w <= 0` 表示可视宽度**还没测出来**（首次 prepaint 之前，或标签条不在元素树里）。
+/// 这种退化输入必须返回 0（＝"不可滚动"），绝不能当成"可视区宽度为 0"去算：
+/// 那会得到等于整个内容宽的虚高范围 —— 这正是上一版 `tabs_viewport` 字段恒为 0 时
+/// 「右箭头恒可点、左箭头恒灰、点了也没反应」的成因。
+/// 真实宽度会在 prepaint 后被测出来，并由 prepaint 回调补一帧重算箭头状态。
+pub(crate) fn tab_scroll_limit(content_w: f32, viewport_w: f32) -> f32 {
+    if viewport_w <= 0.0 {
+        return 0.0;
+    }
+    (content_w - viewport_w).max(0.0)
+}
+
+/// 左右按钮点一下之后的新滚动偏移（正数 = 已向右滚动的距离）。
+///
+/// 以「标签宽 + 间距」为步进：先把当前偏移对齐到标签边界再走 delta 个标签，
+/// 最后夹到 `[0, max_scroll]`。抽成纯函数是为了能用测试钉住
+/// 「点一下右箭头之后左箭头必须变成可用」这条用户可见行为。
+pub(crate) fn tab_scroll_step_offset(current: f32, delta_tabs: i32, max_scroll: f32) -> f32 {
+    /// 标签占位宽度：标签宽度 + 间距
+    const TAB_PITCH: f32 = REQUEST_TAB_WIDTH + REQUEST_TAB_GAP;
+
+    let next = ((current / TAB_PITCH).round() + delta_tabs as f32) * TAB_PITCH;
+    next.clamp(0.0, max_scroll.max(0.0))
+}
+
