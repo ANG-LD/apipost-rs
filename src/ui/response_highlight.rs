@@ -6,27 +6,19 @@
 //!
 //! 现在：
 //! * `build()` 只在响应到达或主题变化时调用一次；
-//! * 结果是按行组织的「着色片段」，文本用 `SharedString`（本质是 Arc），
+//! * 结果只有**一份**正文表示：一个 `SharedString`（本质是 Arc）+ 一张 run 长度表，
 //!   渲染时 clone 一次只是引用计数 +1，不再复制字符串；
-//! * 相邻同色片段会合并，片段数从「每个字符一个」降到「每行几个」。
+//! * 相邻同色片段会合并，片段数从「每个字符一个」降到「整块几十~几百个」。
+//!
+//! 曾经这里还额外保留了 `lines: Vec<Vec<Run>>`（每行若干片段，每个片段各持一个
+//! `SharedString`）。渲染早已改成读 `styled`，`lines` 只剩测试在读，代价却是
+//! **整份正文被存了两遍**（`styled.text` 一份 + 逐片段再来一遍）外加每个片段一次堆分配。
+//! 现在把它删掉：一个响应体在内存里只有一份正文表示。
 
 use crate::ui::themes::Theme;
 use gpui::{Rgba, SharedString};
 use std::ops::Range;
 use std::sync::Arc;
-
-/// 行内的一个着色片段。
-///
-/// `text` 用 `SharedString`：渲染时 `clone()` 是 O(1) 的引用计数操作，
-/// 不会像 `String` 那样每帧复制一遍正文。
-#[derive(Clone, Debug, PartialEq)]
-pub struct Run {
-    pub text: SharedString,
-    pub color: Rgba,
-}
-
-/// 一行由若干着色片段拼成
-pub type Line = Vec<Run>;
 
 /// 整块响应体的渲染计划：一段拼好的正文 + 一张 run 长度表。
 ///
@@ -41,25 +33,17 @@ pub struct StyledBody {
 }
 
 /// 一段响应体的高亮结果
+///
+/// 「一份正文」这条约束靠类型本身保证：这里除了
+/// `plain`（非 JSON 原文）与 `styled`（JSON 的正文 + 长度表）之外没有第三个字段，
+/// 两者互斥（`plain` 为 `Some` 时 `styled` 是空的），所以任何一个响应体
+/// 在内存里都只有一份正文表示。
 #[derive(Clone, Debug, Default)]
 pub struct HighlightedBody {
-    /// 逐行片段；JSON 走这里（渲染不再用它建元素，保留给测试与按行统计）
-    pub lines: Vec<Line>,
     /// 非 JSON 原文：直接持有响应体的 `Arc<str>`，渲染时零拷贝
     pub plain: Option<Arc<str>>,
     /// 整块渲染计划；JSON 走这里，`plain` 为 `Some` 时是空的
     pub styled: StyledBody,
-}
-
-impl HighlightedBody {
-    /// 行数（给测试和后续按可视区域渲染用）
-    pub fn line_count(&self) -> usize {
-        if self.plain.is_some() {
-            1
-        } else {
-            self.lines.len()
-        }
-    }
 }
 
 /// 响应体渲染缓存。
@@ -116,7 +100,6 @@ pub fn build(body: &str, content_type: Option<&str>, theme: &Theme) -> Highlight
     if !is_json_like(content_type, body) {
         // 非 JSON：不需要美化也不分词，直接把 Arc 交给渲染层
         return HighlightedBody {
-            lines: Vec::new(),
             plain: Some(Arc::from(body)),
             styled: StyledBody::default(),
         };
@@ -129,52 +112,39 @@ pub fn build(body: &str, content_type: Option<&str>, theme: &Theme) -> Highlight
     };
 
     let colored = colorize(&formatted, theme);
-    let lines = split_lines(&formatted, &colored);
     HighlightedBody {
-        styled: compress(&lines, theme),
-        lines,
+        styled: compress(formatted, &colored),
         plain: None,
     }
 }
 
-/// 把「逐行片段」压成「整块正文 + run 长度表」。
+/// 把「分词上色结果」压成「整块正文 + run 长度表」。
 ///
-/// 换行符并入它前面那个 run：`TextRun` 只是一段字节长度，正文里的 `'\n'` 必须落在
-/// 某个 run 里，而换行本身不可见，挂在哪个颜色上都一样。这样 run 长度之和
-/// 恰好等于正文长度（`StyledText::with_runs` 会严格校验这件事，对不上会 panic）。
-fn compress(lines: &[Line], theme: &Theme) -> StyledBody {
-    // 先按「正文 + 行间换行」算准容量，避免反复扩容
-    let total: usize = lines
-        .iter()
-        .flat_map(|line| line.iter())
-        .map(|run| run.text.len())
-        .sum::<usize>()
-        + lines.len().saturating_sub(1);
-    let mut text = String::with_capacity(total);
-    let mut runs: Vec<(u32, Rgba)> = Vec::new();
-
-    for (index, line) in lines.iter().enumerate() {
-        if index > 0 {
-            text.push('\n');
-            match runs.last_mut() {
-                // 换行并进上一个 run
-                Some(last) => last.0 += 1,
-                // 空行开头：正文以换行起头，得先有个 run 承载它
-                None => runs.push((1, theme.json_bracket)),
-            }
-        }
-        for run in line {
-            // 单个片段超过 4GB 才会溢出；真到了那个量级宁可在这里直接报错，
-            // 也不要静默截断长度表（那会让 run 长度之和和正文对不上）
-            let len = u32::try_from(run.text.len()).expect("单个着色片段超过 4GB");
-            text.push_str(&run.text);
-            // 相邻同色直接并进上一个 run，run 数与行内片段数一致
-            match runs.last_mut() {
-                Some(last) if last.1 == run.color => last.0 += len,
-                _ => runs.push((len, run.color)),
-            }
+/// `text` 按值传入（而不是 `&str`）：`SharedString::from(String)` 直接接管这块缓冲区，
+/// 不再复制第二遍正文；换行符就留在正文里，由它前面那个 run 的长度承载
+/// —— 换行本身不可见，挂在哪个颜色上都一样。这样 run 长度之和恰好等于正文长度
+/// （`StyledText::with_runs` 会严格校验这件事，对不上会 panic）。
+fn compress(text: String, colored: &[(Rgba, Range<usize>)]) -> StyledBody {
+    // 上色结果已经是「相邻同色合并过」的连续区间，长度表可以直接按它铺；
+    // 容量按区间数预留，避免反复扩容。
+    let mut runs: Vec<(u32, Rgba)> = Vec::with_capacity(colored.len());
+    for (color, range) in colored {
+        // 单个片段超过 4GB 才会溢出；真到了那个量级宁可在这里直接报错，
+        // 也不要静默截断长度表（那会让 run 长度之和和正文对不上）
+        let len = u32::try_from(range.len()).expect("单个着色片段超过 4GB");
+        match runs.last_mut() {
+            Some(last) if last.1 == *color => last.0 += len,
+            _ => runs.push((len, *color)),
         }
     }
+
+    // 不变式：上色区间恰好覆盖正文的每个字节一次。跑到 release 里这行会被去掉，
+    // 但 debug/测试下它是「长度表与正文严格对齐」的第一道闸门。
+    debug_assert_eq!(
+        runs.iter().map(|(len, _)| *len as usize).sum::<usize>(),
+        text.len(),
+        "run 长度之和必须等于正文长度"
+    );
 
     StyledBody {
         text: SharedString::from(text),
@@ -353,43 +323,6 @@ fn colorize(json: &str, theme: &Theme) -> Vec<(Rgba, Range<usize>)> {
     colored
 }
 
-/// 按换行切分，生成逐行片段。
-/// 每个片段只在这里分配一次 `SharedString`，之后每帧复用。
-fn split_lines(json: &str, colored: &[(Rgba, Range<usize>)]) -> Vec<Line> {
-    let mut lines: Vec<Line> = Vec::new();
-    let mut current: Line = Vec::new();
-
-    for (color, range) in colored {
-        let text = &json[range.clone()];
-        let mut rest = text;
-        loop {
-            match rest.find('\n') {
-                Some(pos) => {
-                    if pos > 0 {
-                        current.push(Run {
-                            text: SharedString::from(&rest[..pos]),
-                            color: *color,
-                        });
-                    }
-                    lines.push(std::mem::take(&mut current));
-                    rest = &rest[pos + 1..];
-                }
-                None => {
-                    if !rest.is_empty() {
-                        current.push(Run {
-                            text: SharedString::from(rest),
-                            color: *color,
-                        });
-                    }
-                    break;
-                }
-            }
-        }
-    }
-    lines.push(current);
-    lines
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -402,42 +335,74 @@ mod tests {
         r#"{"name":"apipost","version":2,"nested":{"ok":true,"list":[1,2.5,-3e2],"none":null},"中文":"值"}"#
     }
 
-    /// 摊平成「每行文本 + 颜色」，方便断言。行间换行符的颜色按空白处理（bracket 色）。
-    fn flatten(hl: &HighlightedBody, theme: &Theme) -> Vec<(String, Vec<(char, Rgba)>)> {
-        let mut lines: Vec<(String, Vec<(char, Rgba)>)> = Vec::new();
-        for (index, line) in hl.lines.iter().enumerate() {
-            let mut text = String::new();
-            let mut chars: Vec<(char, Rgba)> = Vec::new();
-            if index > 0 {
-                text.push('\n');
-                chars.push(('\n', theme.json_bracket));
+    /// 按 run 长度表给正文的每个字符配一个颜色（换行也在内：它被并进前一个 run）。
+    ///
+    /// 长度表和正文对不上就会在这里 panic —— 那正是渲染时 `StyledText::with_runs` 会炸的情况。
+    fn colored_chars(hl: &HighlightedBody) -> Vec<(char, Rgba)> {
+        let mut out = Vec::new();
+        let mut runs = hl.styled.runs.iter();
+        let mut current = runs.next().map(|(len, color)| (*len as usize, *color));
+        for ch in hl.styled.text.chars() {
+            while matches!(current, Some((0, _))) {
+                current = runs.next().map(|(len, color)| (*len as usize, *color));
             }
-            for run in line {
-                text.push_str(&run.text);
-                for ch in run.text.chars() {
-                    chars.push((ch, run.color));
-                }
-            }
-            lines.push((text, chars));
+            let (left, color) = current.expect("run 长度表比正文短");
+            out.push((ch, color));
+            current = Some((left.saturating_sub(ch.len_utf8()), color));
         }
-        lines
+        assert!(matches!(current, Some((0, _)) | None), "run 长度表比正文长");
+        out
     }
 
-    fn colors_of(hl: &HighlightedBody, theme: &Theme) -> Vec<(char, Rgba)> {
-        flatten(hl, theme)
-            .into_iter()
-            .flat_map(|(_, chars)| chars)
+    /// run 长度之和必须恰好等于正文长度 —— `StyledText::with_runs` 的硬校验
+    fn assert_runs_cover_text(hl: &HighlightedBody) {
+        let sum: usize = hl.styled.runs.iter().map(|(len, _)| *len as usize).sum();
+        assert_eq!(sum, hl.styled.text.len(), "run 长度之和与正文长度不一致");
+    }
+
+    /// 每个 run 的边界都必须落在字符边界上，否则多字节字符会被从中间切开
+    fn assert_runs_are_char_aligned(hl: &HighlightedBody) {
+        let mut offset = 0usize;
+        for (len, _) in &hl.styled.runs {
+            offset += *len as usize;
+            assert!(
+                hl.styled.text.is_char_boundary(offset),
+                "run 边界 {offset} 落在字符中间"
+            );
+        }
+        assert_eq!(offset, hl.styled.text.len(), "run 长度之和与正文长度不一致");
+    }
+
+    /// 正文里某段文本（按子串查找）**每个字符**的颜色。
+    ///
+    /// 断言整段同色，比改造前逐行实现里「只看 `chars[offset]` 一个字符」更严：
+    /// 一个 token 只对了一半的颜色也会被抓出来。
+    fn colors_of_text(hl: &HighlightedBody, needle: &str) -> Vec<Rgba> {
+        let start = hl
+            .styled
+            .text
+            .find(needle)
+            .unwrap_or_else(|| panic!("正文里找不到 {needle:?}"));
+        let head = hl.styled.text[..start].chars().count();
+        let count = needle.chars().count();
+        let chars = colored_chars(hl);
+        chars[head..head + count]
+            .iter()
+            .map(|(_, color)| *color)
             .collect()
     }
 
-    fn joined_text(hl: &HighlightedBody, theme: &Theme) -> String {
-        flatten(hl, theme)
-            .into_iter()
-            .map(|(text, _)| text)
-            .collect()
+    fn assert_text_colored(hl: &HighlightedBody, needle: &str, expected: Rgba, what: &str) {
+        let got = colors_of_text(hl, needle);
+        assert!(
+            got.iter().all(|color| *color == expected),
+            "{what}（{needle:?}）必须整段使用同一个颜色，实际 {}/{} 个字符不是",
+            got.iter().filter(|color| **color != expected).count(),
+            got.len()
+        );
     }
 
-    /// 切分不能丢字、错序：拼回来必须正好是美化后的 JSON。
+    /// 正文不能丢字、错序：必须正好是美化后的 JSON，且长度表严丝合缝盖住它。
     #[test]
     fn text_round_trips_to_pretty_json() {
         let theme = theme();
@@ -454,11 +419,13 @@ mod tests {
             )
             .expect("序列化不应失败");
             let hl = build(body, None, &theme);
-            assert_eq!(joined_text(&hl, &theme), expected, "文本不一致: {body}");
+            assert_eq!(hl.styled.text.as_ref(), expected, "文本不一致: {body}");
+            assert_runs_cover_text(&hl);
+            assert_runs_are_char_aligned(&hl);
         }
     }
 
-    /// 每类 token 的颜色必须是主题里对应的字段。
+    /// 每类 token 的颜色必须是主题里对应的字段（整段断言，不只首字符）。
     ///
     /// 旧实现在这两点上是有 bug 的，顺手修掉（渲染逻辑重写后必须显式钉住）：
     /// 1. `true` / `false` / `null` 被拆成单个字母，落到空白色，从没用到
@@ -468,73 +435,89 @@ mod tests {
     fn token_colors_follow_theme() {
         let theme = theme();
         let hl = build(sample(), None, &theme);
-        let chars = colors_of(&hl, &theme);
 
-        let color_at = |needle: &str| -> Rgba {
-            let offset = joined_text(&hl, &theme)
-                .find(needle)
-                .unwrap_or_else(|| panic!("样例里找不到 {needle}"));
-            chars[offset].1
-        };
-
-        assert_eq!(color_at("\"name\""), theme.json_key, "key 应该用 key 色");
-        assert_eq!(color_at("\"apipost\""), theme.json_string, "值应该用 string 色");
-        assert_eq!(color_at("2"), theme.json_number, "数字应该用 number 色");
-        assert_eq!(color_at("true"), theme.json_boolean, "布尔应该用 boolean 色");
-        assert_eq!(color_at("null"), theme.json_null, "null 应该用 null 色");
-        assert_eq!(color_at(":"), theme.json_bracket, "标点应该用 bracket 色");
+        assert_text_colored(&hl, "\"name\"", theme.json_key, "key 应该用 key 色");
+        assert_text_colored(&hl, "\"apipost\"", theme.json_string, "值应该用 string 色");
+        assert_text_colored(&hl, "2", theme.json_number, "数字应该用 number 色");
+        assert_text_colored(&hl, "true", theme.json_boolean, "布尔应该用 boolean 色");
+        assert_text_colored(&hl, "null", theme.json_null, "null 应该用 null 色");
+        assert_text_colored(&hl, ":", theme.json_bracket, "标点应该用 bracket 色");
     }
 
-    /// 行数必须和换行一致，否则渲染会错行
+    /// 行由正文里的换行承载，所以「多一个 / 少一个换行」会直接错行。
+    ///
+    /// 原来这条断言读的是已删除的 `lines.len()`；现在读正文的换行数 ——
+    /// 覆盖的仍是同一件事（行切分与美化结果一致、末尾换行不被吞掉），
+    /// 只是数据来源换成了唯一的正文表示。
     #[test]
-    fn split_lines_matches_newline_count() {
+    fn text_carries_exactly_the_expected_newlines() {
         let theme = theme();
-        for body in [sample(), r#"[1,2,3]"#, r#"{"a":{"b":1}}"#] {
+        for body in [
+            sample(),
+            r#"[1,2,3]"#,
+            r#"{"a":{"b":1}}"#,
+            // 解析失败 → 直接用原文：原文自带换行，且以换行结尾（末尾这个换行
+            // 一旦被吃掉，最后一行就会并进上一行 —— 这正是原断言要拦的错行）
+            "{\n  \"a\": 1,\n}\n",
+        ] {
             let hl = build(body, None, &theme);
-            let pretty = serde_json::to_string_pretty(
-                &serde_json::from_str::<serde_json::Value>(body).expect("样例必须是合法 JSON"),
-            )
-            .expect("序列化不应失败");
-            assert_eq!(hl.line_count(), pretty.matches('\n').count() + 1, "{body}");
+            let expected = match serde_json::from_str::<serde_json::Value>(body) {
+                Ok(value) => serde_json::to_string_pretty(&value).expect("序列化不应失败"),
+                Err(_) => body.to_string(),
+            };
+            assert_eq!(
+                hl.styled.text.matches('\n').count(),
+                expected.matches('\n').count(),
+                "换行数与美化结果不一致（会错行）: {body}"
+            );
+            assert_eq!(hl.styled.text.as_ref(), expected, "文本不一致: {body}");
         }
     }
 
-    /// 非 JSON 走 plain 分支：直接持有 Arc，不复制正文
+    /// 非 JSON 走 plain 分支：直接持有 Arc，不复制正文，也不建长度表
     #[test]
     fn plain_body_shares_arc() {
         let hl = build("hello world", None, &theme());
         let plain = hl.plain.expect("非 JSON 应该有 plain");
         assert_eq!(&*plain, "hello world");
-        assert!(hl.lines.is_empty());
+        // 正文只有一份：plain 有值时 styled 必须是空的（两个分支不许同时留正文）
+        assert_eq!(hl.styled.text.len(), 0);
+        assert!(hl.styled.runs.is_empty());
     }
 
-    /// 中文、emoji 等多字节字符不能被按字节切断
+    /// 中文、emoji 等多字节字符不能被按字节切断：文本完整、run 边界落在字符边界上、
+    /// 且多字节的 key / 值整段同色。
     #[test]
     fn handles_multibyte() {
-        let hl = build(r#"{"名字":"张三","emoji":"🚀"}"#, None, &theme());
-        let text = joined_text(&hl, &theme());
+        let theme = theme();
+        let hl = build(r#"{"名字":"张三","emoji":"🚀"}"#, None, &theme);
+        let text = hl.styled.text.to_string();
         assert!(text.contains("张三"));
         assert!(text.contains("🚀"));
+        assert_runs_cover_text(&hl);
+        assert_runs_are_char_aligned(&hl);
+        assert_text_colored(&hl, "\"名字\"", theme.json_key, "中文 key");
+        assert_text_colored(&hl, "\"张三\"", theme.json_string, "中文值");
+        assert_text_colored(&hl, "\"🚀\"", theme.json_string, "emoji 值");
     }
 
-    /// 片段数应该是「每行几个」，而不是「每个字符一个」
+    /// 片段数应该是「整块几十~几百个」，而不是「每个字符一个」。
+    ///
+    /// 原来量的是逐行片段总数（`lines` 里每个片段一个 div），现在直接量 run 表长度。
+    /// 合并规则没变（相邻同色合并，跨行也合并），所以这个上界只可能更紧。
     #[test]
-    fn runs_are_merged_per_line() {
+    fn runs_are_merged_not_per_character() {
         let theme = theme();
         let body = serde_json::to_string(&serde_json::json!({
             "items": (0..50).map(|i| serde_json::json!({"id": i, "ok": true})).collect::<Vec<_>>()
         }))
         .unwrap();
         let hl = build(&body, None, &theme);
-        let runs: usize = hl.lines.iter().map(|line| line.len()).sum();
-        let chars: usize = hl
-            .lines
-            .iter()
-            .flat_map(|line| line.iter())
-            .map(|run| run.text.chars().count())
-            .sum();
+        let runs = hl.styled.runs.len();
+        let chars = hl.styled.text.chars().count();
+        assert_runs_cover_text(&hl);
         // 旧实现是「每个字符一个 div + 一次 to_string()」，
-        // 现在是「每行几个片段、且不再分配字符串」。
+        // 现在是「整块几百个片段、且正文只存一份」。
         assert!(runs * 3 < chars, "合并效果不够：{runs} 个片段 / {chars} 个字符");
     }
 
@@ -578,19 +561,30 @@ mod tests {
 
         // ---- 新路径：缓存建立一次 ----
         let (build_allocs, build_bytes, hl) = measure(|| build(&body, None, &theme));
-        let runs: usize = hl.lines.iter().map(|line| line.len()).sum();
-        println!("高亮结果: {} 行, {} 个片段（旧实现是每个字符一个元素）", hl.lines.len(), runs);
+        let runs = hl.styled.runs.len();
+        // 响应体在高亮结果里的**常驻表示**：一份正文 + 一张长度表 + 结构体本身。
+        // （删掉 `lines` 之前，正文还要按「行 × 片段」再存一份，见下面的报告行）
+        let text_bytes = hl.styled.text.len();
+        let run_bytes = runs * std::mem::size_of::<(u32, Rgba)>();
+        let struct_bytes = std::mem::size_of::<HighlightedBody>();
+        println!(
+            "高亮结果（常驻表示）: {} 字节正文 + {} 个片段 × {} 字节 = {} + 结构体 {} = 合计 {} 字节",
+            text_bytes,
+            runs,
+            std::mem::size_of::<(u32, Rgba)>(),
+            run_bytes,
+            struct_bytes,
+            text_bytes + run_bytes + struct_bytes
+        );
 
-        // ---- 新路径：每帧渲染（clone 片段是引用计数操作） ----
+        // ---- 新路径：每帧渲染（正文 clone 是引用计数，run 表只按长度铺开） ----
         let (frame_allocs, frame_bytes, _) = measure(|| {
+            let text: SharedString = hl.styled.text.clone();
+            std::hint::black_box(&text);
             let mut elements = 0usize;
-            for line in &hl.lines {
-                for run in line {
-                    let text: SharedString = run.text.clone();
-                    let _color = run.color;
-                    std::hint::black_box(text);
-                    elements += 1;
-                }
+            for (len, color) in &hl.styled.runs {
+                std::hint::black_box((*len, *color));
+                elements += 1;
             }
             elements
         });
@@ -598,6 +592,18 @@ mod tests {
         println!("\n每帧分配次数:   旧 {old_allocs:>8}  ->  新 {frame_allocs:>8}");
         println!("每帧分配字节数: 旧 {old_bytes:>8}  ->  新 {frame_bytes:>8}");
         println!("一次性建缓存:   {build_allocs} 次分配 / {build_bytes} 字节（只在响应到达或换主题时付一次）");
+        // 只有一份正文：常量级断言，防止有人把「逐片段各持一份字符串」的表示再加回来
+        let pretty = serde_json::to_string_pretty(&payload).unwrap();
+        assert_eq!(
+            hl.styled.text.as_ref(),
+            pretty,
+            "正文只应保留一份（美化后的 JSON 原文）"
+        );
+        assert!(
+            runs * 3 < pretty.len(),
+            "片段数应远小于字节数（{runs} vs {}）",
+            pretty.len()
+        );
         println!(
             "每帧分配次数下降: {:.1} 倍\n",
             old_allocs as f64 / frame_allocs.max(1) as f64

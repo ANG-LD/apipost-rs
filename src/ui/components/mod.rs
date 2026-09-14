@@ -305,6 +305,11 @@ pub fn toggle_switch(
     let on_color = theme.success;
     let off_color = theme.border;
     let knob = theme.accent_foreground;
+    // 轨道的常态色本身就是语义色（success / border），所以 hover / 按下按同一套
+    // 「在底色上叠一档前景色」的派生规则加深，颜色仍然全部来自主题
+    let track = if value { on_color } else { off_color };
+    let hover_track = theme.tint_hover(track);
+    let active_track = theme.tint_active(track);
     div()
         .id(id)
         .w(px(34.0))
@@ -315,10 +320,85 @@ pub fn toggle_switch(
         .when(!value, |d| d.justify_start())
         .px(px(2.0))
         .rounded_full()
-        .bg(if value { on_color } else { off_color })
+        .bg(track)
         .cursor_pointer()
+        // 开关本身是可点击控件：原来只有 cursor_pointer，点上去没有任何反馈
+        .hover(move |s| s.bg(hover_track))
+        .active(move |s| s.bg(active_track))
         .child(div().w(px(14.0)).h(px(14.0)).rounded_full().bg(knob).shadow_sm())
 }
+
+/// 行内「启用 / 禁用」开关（列表行左侧的 ✓ / ○ 方块）的前景色。
+///
+/// 两种状态各有一个语义色，只有这一份定义：
+/// ✓ = 启用 = `success`，○ = 禁用 = `muted_foreground`。
+/// 抽成函数是为了让 `theme_tests` 能拿**同一个来源**去断言两种状态压在
+/// hover / 按下底色上的可读性 —— 测试与实现读同一处，才不会各说各话。
+pub fn toggle_chip_foreground(enabled: bool, theme: &Theme) -> Rgba {
+    if enabled {
+        theme.success
+    } else {
+        theme.muted_foreground
+    }
+}
+
+/// 行内「启用 / 禁用」开关在 hover / 按下时的前景色。
+///
+/// 两种状态统一换成 `foreground`（正文色）：反馈底色是 muted_background 系，
+/// 实测 12 套主题里 `foreground` 压在这两个底色上最低 5.52（latte，测试里打印），
+/// 而保留状态色会掉到 `muted_foreground × active_bg` 的 1.40（dracula）——
+/// 那样"补反馈"反而把 ○ 看没了。状态本身由字形表达（✓ / ○）：
+/// 在 light / sepia / latte 这几套主题里，success 与 muted_foreground 的对比
+/// 本来就只有 1.0~1.3，区分状态从来靠的是字形。
+pub fn toggle_chip_hover_foreground(theme: &Theme) -> Rgba {
+    theme.foreground
+}
+
+/// 行内「启用 / 禁用」开关：24×24 的 ✓ / ○ 方块。
+///
+/// 参数 / 请求头 / 表单数据三个面板的行内开关共用这一份实现，于是两条规则
+/// 只需要写一遍：
+/// 1. **必须带唯一 id** —— gpui 的 `.hover()` / `.active()` 只在元素有
+///    `global_id`（即 `.id()`）时才参与样式计算，而 id 只有在列表项里带上该项
+///    下标/参数名时才唯一；共用 id 会变成「悬停一行、所有行一起高亮」；
+/// 2. hover / 按下的底色一律取设计令牌（`hover_bg()` / `active_bg()`），不许写死颜色。
+///
+/// 方块尺寸 / 文字档位与改造前一致（24×24 + `text_sm`），只多了反馈底色与圆角。
+pub fn enabled_toggle(id: impl Into<ElementId>, enabled: bool, theme: &Theme) -> Stateful<Div> {
+    let hover_bg = theme.hover_bg();
+    let active_bg = theme.active_bg();
+    let foreground = toggle_chip_foreground(enabled, theme);
+    let feedback_foreground = toggle_chip_hover_foreground(theme);
+    div()
+        .id(id)
+        .w(px(24.0))
+        .h(px(24.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_sm()
+        // 反馈底色是 24×24 的小色块，圆角跟着「小元素」档走（RADIUS_XS），
+        // 免得在全是圆角小块的界面里出现一个方角
+        .rounded(px(RADIUS_XS))
+        .cursor_pointer()
+        .text_color(foreground)
+        // hover / 按下：底色给反馈，同时把字换成正文色保证压得住（见上面的说明）
+        .hover(move |s| s.bg(hover_bg).text_color(feedback_foreground))
+        .active(move |s| s.bg(active_bg).text_color(feedback_foreground))
+        .child(if enabled { "✓" } else { "○" })
+}
+
+// ==================== 表单数据行的 true / false 值切换 chip ====================
+// 底色 = 状态色（success / error）按 alpha 叠在面板底色上。三档浓度只有这一份定义：
+// `theme_tests` 拿同一组常量按 12 套主题断言"补了 hover/按下反馈之后，
+// true / false 的字仍然够读"——测试与实现读同一处，才不会各改各的。
+
+/// 常态浓度（与改造前一致）
+pub const VALUE_CHIP_BASE_ALPHA: f32 = 0.14;
+/// 悬停浓度：比常态浓一档（浓度越高越"亮"，足以看出反馈）
+pub const VALUE_CHIP_HOVER_ALPHA: f32 = 0.22;
+/// 按下浓度：比 hover 再浓一档
+pub const VALUE_CHIP_PRESSED_ALPHA: f32 = 0.32;
 
 /// 设置面板等处的区块标题
 pub fn section_title(label: impl Into<SharedString>, theme: &Theme) -> gpui::Div {

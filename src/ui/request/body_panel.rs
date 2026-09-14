@@ -358,40 +358,31 @@ fn render_key_value_editor(
                         .gap_2()
                         .items_center()
                         .children({
-                            let mut children: Vec<gpui::Div> = vec![
-                                div()
-                                    .w(px(24.0))
-                                    .h(px(24.0))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .text_sm()
-                                    .text_color(if entry.enabled {
-                                        theme.success
-                                    } else {
-                                        theme.muted_foreground
-                                    })
-                                    .cursor_pointer()
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(
-                                            move |this,
-                                                  _: &MouseDownEvent,
-                                                  _window: &mut Window,
-                                                  cx: &mut Context<
-                                                MainView,
-                                            >| {
-                                                this.toggle_form_data_entry(
-                                                    idx, cx,
-                                                );
-                                            },
-                                        ),
-                                    )
-                                    .child(if entry.enabled {
-                                        "✓"
-                                    } else {
-                                        "○"
-                                    }),
+                            let mut children: Vec<gpui::AnyElement> = vec![
+                                // 行内启用开关：id 必须带行下标（gpui 的 hover/active 状态
+                                // 挂在 element id 上，共用 id 会「悬停一行、全部高亮」）；
+                                // 尺寸、字形与两种状态的颜色统一由 enabled_toggle 给出
+                                crate::ui::components::enabled_toggle(
+                                    format!("{}-toggle-{}", add_btn_id, idx),
+                                    entry.enabled,
+                                    &theme,
+                                )
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(
+                                        move |this,
+                                              _: &MouseDownEvent,
+                                              _window: &mut Window,
+                                              cx: &mut Context<
+                                            MainView,
+                                        >| {
+                                            this.toggle_form_data_entry(
+                                                idx, cx,
+                                            );
+                                        },
+                                    ),
+                                )
+                                .into_any_element(),
                                 div().flex_1().child(
                                     Input::new(&entry.key)
                                         .small()
@@ -401,7 +392,8 @@ fn render_key_value_editor(
                                         .border_color(theme.border)
                                         .rounded(px(RADIUS_SM))
                                         .text_color(theme.foreground),
-                                ),
+                                )
+                                .into_any_element(),
                             ];
 
                             if show_type_column {
@@ -415,7 +407,8 @@ fn render_key_value_editor(
                                                 // 不显式给颜色时，选中文字会落到占位符的弱化色，
                                                 // 看起来"不跟随主题设定的颜色"
                                                 .text_color(theme.foreground),
-                                        ),
+                                        )
+                                        .into_any_element(),
                                 );
                             }
 
@@ -430,6 +423,8 @@ fn render_key_value_editor(
                                 let toggle_entity = val_entity.clone();
                                 children.push(
                                     div()
+                                        // 可点击的值切换 chip：id 同样必须按行唯一
+                                        .id(format!("{}-bool-{}", add_btn_id, idx))
                                         .flex_1()
                                         .h(px(CONTROL_H))
                                         .flex()
@@ -439,9 +434,13 @@ fn render_key_value_editor(
                                         // true/false 用主题的成功色/错误色，不再写死十六进制，
                                         // 这样 gruvbox/sepia 这类暖色主题下也能和整体配色一致
                                         .bg(if is_true {
-                                            theme.success.alpha(0.14)
+                                            theme.success.alpha(
+                                                crate::ui::components::VALUE_CHIP_BASE_ALPHA,
+                                            )
                                         } else {
-                                            theme.error.alpha(0.14)
+                                            theme.error.alpha(
+                                                crate::ui::components::VALUE_CHIP_BASE_ALPHA,
+                                            )
                                         })
                                         .text_color(if is_true {
                                             theme.success
@@ -451,6 +450,34 @@ fn render_key_value_editor(
                                         .text_sm()
                                         .font_semibold()
                                         .cursor_pointer()
+                                        // 反馈：底色按同一个语义色加浓一档（浓度是 components 里的常量），
+                                        // 同时把文字换成正文色 —— 底色越浓就越靠近状态色，文字若仍是
+                                        // 状态色会越描越糊（实测最低只剩 2.1），换正文色后同一批底色上
+                                        // 最低 4.1。状态由底色色相 + "true"/"false" 字面表达，不会丢。
+                                        .hover(|s| {
+                                            s.bg(if is_true {
+                                                theme.success.alpha(
+                                                    crate::ui::components::VALUE_CHIP_HOVER_ALPHA,
+                                                )
+                                            } else {
+                                                theme.error.alpha(
+                                                    crate::ui::components::VALUE_CHIP_HOVER_ALPHA,
+                                                )
+                                            })
+                                            .text_color(theme.foreground)
+                                        })
+                                        .active(|s| {
+                                            s.bg(if is_true {
+                                                theme.success.alpha(
+                                                    crate::ui::components::VALUE_CHIP_PRESSED_ALPHA,
+                                                )
+                                            } else {
+                                                theme.error.alpha(
+                                                    crate::ui::components::VALUE_CHIP_PRESSED_ALPHA,
+                                                )
+                                            })
+                                            .text_color(theme.foreground)
+                                        })
                                         .on_mouse_down(
                                             MouseButton::Left,
                                             cx.listener(
@@ -495,23 +522,29 @@ fn render_key_value_editor(
                                             } else {
                                                 "false"
                                             },
-                                        ),
+                                        )
+                                        .into_any_element(),
                                 );
                             } else if !is_file {
-                                children.push(div().flex_1().child(
-                                    Input::new(
-                                        &entry
-                                            .value
-                                            .get_input_entity(),
-                                    )
-                                    .small()
-                                    .h(px(CONTROL_H))
-                                    .bg(theme.control_bg())
-                                    .border_1()
-                                    .border_color(theme.border)
-                                    .rounded(px(RADIUS_SM))
-                                    .text_color(theme.foreground),
-                                ));
+                                children.push(
+                                    div()
+                                        .flex_1()
+                                        .child(
+                                            Input::new(
+                                                &entry
+                                                    .value
+                                                    .get_input_entity(),
+                                            )
+                                            .small()
+                                            .h(px(CONTROL_H))
+                                            .bg(theme.control_bg())
+                                            .border_1()
+                                            .border_color(theme.border)
+                                            .rounded(px(RADIUS_SM))
+                                            .text_color(theme.foreground),
+                                        )
+                                        .into_any_element(),
+                                );
                             } else {
                                 let file_path = entry
                                     .value
@@ -523,6 +556,8 @@ fn render_key_value_editor(
                                 let is_placeholder = display_path.is_empty();
                                 children.push(
                                     div()
+                                        // 可点击的「选择文件」框：id 与其它行内控件一样按行唯一
+                                        .id(format!("{}-file-{}", add_btn_id, idx))
                                         .flex_1()
                                         .h(px(CONTROL_H))
                                         .items_center()
@@ -531,6 +566,10 @@ fn render_key_value_editor(
                                         .border_1()
                                         .border_color(theme.border)
                                         .cursor_pointer()
+                                        // 它看着像输入框、行为是按钮：hover / 按下给底色反馈，
+                                        // 颜色取设计令牌（hover_bg / active_bg）
+                                        .hover(|s| s.bg(theme.hover_bg()))
+                                        .active(|s| s.bg(theme.active_bg()))
                                         .on_mouse_down(
                                             MouseButton::Left,
                                             cx.listener(
@@ -573,7 +612,8 @@ fn render_key_value_editor(
                                                         display_path
                                                     },
                                                 ),
-                                        ),
+                                        )
+                                        .into_any_element(),
                                 );
                             }
 
@@ -623,7 +663,8 @@ fn render_key_value_editor(
                                             cx.notify();
                                         },
                                     )),
-                                ),
+                                )
+                                .into_any_element(),
                             );
 
                             children

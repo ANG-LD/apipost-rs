@@ -129,6 +129,20 @@ impl Theme {
         self.accent
     }
 
+    /// 「底色本身就是语义色」的控件的悬停色（开关轨道 = success / border 等）。
+    ///
+    /// 派生方式和 `active_bg()` / `accent_hover()` 一致：在底色上叠一档前景色，
+    /// 于是比常态重一档、色相不变，12 套主题自动协调，不需要为每种语义色
+    /// 再各加一个 hover 字段（那就会出现「某套主题忘了填」）。
+    pub fn tint_hover(&self, base: Rgba) -> Rgba {
+        mix(base, self.foreground, 0.12)
+    }
+
+    /// 与 `tint_hover()` 同源的按下色，比 hover 再重一档
+    pub fn tint_active(&self, base: Rgba) -> Rgba {
+        mix(base, self.foreground, 0.22)
+    }
+
     /// 可编辑控件（输入框、文本域）的底色。
     ///
     /// 统一走 `input_background`：在 light / latte / tokyonight 里

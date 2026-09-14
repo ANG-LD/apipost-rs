@@ -511,19 +511,10 @@ mod tests {
 
     use crate::ui::response_highlight::{self, HighlightedBody};
     use crate::ui::themes::Theme;
-    use gpui::Rgba;
+    use gpui::{Rgba, SharedString};
 
     fn dark() -> Theme {
         Theme::from_str("dark")
-    }
-
-    /// 把 `lines` 摊平成「可见字符 + 颜色」（换行原本由行容器承载，不在这里）
-    fn visible_chars_from_lines(hl: &HighlightedBody) -> Vec<(char, Rgba)> {
-        hl.lines
-            .iter()
-            .flat_map(|line| line.iter())
-            .flat_map(|run| run.text.chars().map(move |c| (c, run.color)))
-            .collect()
     }
 
     /// 把 `styled` 摊平成「可见字符 + 颜色」：按 run 的字节长度走，跳过换行。
@@ -591,13 +582,63 @@ mod tests {
             let sum: usize = hl.styled.runs.iter().map(|(len, _)| *len as usize).sum();
             assert_eq!(sum, hl.styled.text.len(), "run 长度之和与正文长度不一致: {body}");
 
-            // 3) 每个可见字符的颜色必须和逐行数据完全一致
+            // 3) 每个字符的颜色必须钉在主题颜色上（换行不参与：它的颜色只是
+            //    「被并进前一个 run」，不可见、不构成断言）
+            //
+            //    改造前这条比较的是「逐行片段」与「整块长度表」两种表示是否一致；
+            //    `lines` 删除后没有第二种表示可比，改成直接断言绝对颜色 ——
+            //    覆盖的是同一批字符，且不再依赖「两份数据恰好一起算错」的自洽性。
+            let colors = visible_colors(&hl);
             assert_eq!(
-                visible_chars_from_styled(&hl),
-                visible_chars_from_lines(&hl),
-                "字符或颜色不一致: {body}"
+                colors.len(),
+                hl.styled.text.chars().filter(|c| *c != '\n').count(),
+                "每个可见字符都要有颜色: {body}"
             );
+            for (needle, expected, what) in [
+                ("\"a\"", theme.json_key, "key"),
+                ("1", theme.json_number, "数字"),
+            ] {
+                if let Some(at) = visible_offsets(&hl, needle).first().copied() {
+                    let count = needle.chars().count();
+                    for color in &colors[at..at + count] {
+                        assert_eq!(*color, expected, "{what} 的颜色不对（{needle}）: {body}");
+                    }
+                }
+            }
+            // 每个 run 的长度都非零，且边界落在字符边界上（否则多字节会被切开）
+            let mut offset = 0usize;
+            for (len, _) in &hl.styled.runs {
+                assert!(*len > 0, "run 长度不能为 0: {body}");
+                offset += *len as usize;
+                assert!(
+                    hl.styled.text.is_char_boundary(offset),
+                    "run 边界 {offset} 落在字符中间: {body}"
+                );
+            }
+            assert_eq!(offset, hl.styled.text.len(), "run 表必须盖满正文: {body}");
         }
+    }
+
+    /// 把「正文 + 长度表」摊平成「可见字符 + 颜色」（换行由正文承载，这里跳过）
+    fn visible_colors(hl: &HighlightedBody) -> Vec<Rgba> {
+        visible_chars_from_styled(hl).into_iter().map(|(_, c)| c).collect()
+    }
+
+    /// 某个子串在「可见字符序列」里的起始下标（找不到就返回空）
+    fn visible_offsets(hl: &HighlightedBody, needle: &str) -> Vec<usize> {
+        let chars: Vec<char> = hl
+            .styled
+            .text
+            .chars()
+            .filter(|c| *c != '\n')
+            .collect();
+        let needle: Vec<char> = needle.chars().collect();
+        chars
+            .windows(needle.len())
+            .enumerate()
+            .filter(|(_, w)| *w == needle.as_slice())
+            .map(|(i, _)| i)
+            .collect()
     }
 
     /// 非 JSON 走 plain 分支，不应该多出一份正文
@@ -625,16 +666,45 @@ mod tests {
         let body = serde_json::to_string(&payload).unwrap();
         let hl = response_highlight::build(&body, None, &dark());
 
-        let spans: usize = hl.lines.iter().map(|line| line.len()).sum();
+        // 旧实现的元素数要「每行一个 div + 行内每个着色片段一个 div」，而这些片段
+        // 就是删掉的 `lines` 的逐行切分。它可以从「正文 + 长度表」**精确**推回来：
+        // 每个 run 在它跨过的每一行里各算一个片段（行由正文里的换行承载），
+        // 切分规则与被删的 `split_lines` 逐字一致（换行处断行、空片段不计数）。
+        let mut offset = 0usize;
+        let mut lines = 1usize;
+        let mut spans = 0usize;
+        for (len, _) in &hl.styled.runs {
+            let mut rest = &hl.styled.text[offset..offset + *len as usize];
+            offset += *len as usize;
+            loop {
+                match rest.find('\n') {
+                    Some(pos) => {
+                        if pos > 0 {
+                            spans += 1;
+                        }
+                        lines += 1;
+                        rest = &rest[pos + 1..];
+                    }
+                    None => {
+                        if !rest.is_empty() {
+                            spans += 1;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        assert_eq!(offset, hl.styled.text.len(), "run 表必须盖满正文");
         // 旧：外层 flex_col 容器 + 每行一个 div + 每个片段一个 div
-        let old_elements = 1 + hl.lines.len() + spans;
+        let old_elements = 1 + lines + spans;
         // 新：外层「不折行」容器 + 一个 StyledText（正文、换行、颜色全在里面）
         let new_elements = 2;
 
         println!(
-            "响应体 {} 字节：{} 行 / {} 个着色片段",
+            "响应体 {} 字节：{} 行 / {} 个着色片段（合并后 {} 个 run）",
             body.len(),
-            hl.lines.len(),
+            lines,
+            spans,
             hl.styled.runs.len()
         );
         println!("每帧元素数：旧 {old_elements} -> 新 {new_elements}");
@@ -642,6 +712,12 @@ mod tests {
         assert!(
             old_elements > 10_000,
             "旧实现每帧确实要建上万个元素（实际 {old_elements}）"
+        );
+        assert!(
+            spans > hl.styled.runs.len(),
+            "跨行合并后 run 数必须少于逐行片段数（{} vs {}）",
+            hl.styled.runs.len(),
+            spans
         );
         assert!(
             new_elements * 3 <= old_elements,
@@ -653,6 +729,163 @@ mod tests {
             hl.styled.runs.len() * 3 < chars,
             "run 数应远小于字符数（{} vs {chars}）",
             hl.styled.runs.len()
+        );
+    }
+
+    /// `HighlightedBody` 只保留**一份**正文：结构体里没有第二个存正文的字段。
+    ///
+    /// 改造前还有 `lines: Vec<Vec<Run>>`，每个片段各持一个 `SharedString`，
+    /// 于是正文的每个字节在内存里存了两遍（`styled.text` 一份 + 逐片段一份），
+    /// 外加每个片段一次堆分配。这条测试把「第二份正文」的代价量化出来：
+    /// 用「与已删除的 `lines` 同构」的重建体做对照，量两边在一次构建/保留中的分配量。
+    #[test]
+    fn highlighted_body_keeps_a_single_copy_of_the_text() {
+        use crate::ui::response_highlight::{self, HighlightedBody, StyledBody};
+        use std::mem::size_of;
+
+        // 结构体只能由「plain + styled」两块组成：把任何一份额外的正文表示加回来
+        // （例如恢复 lines 字段）都会让这条立刻失败
+        assert_eq!(
+            size_of::<HighlightedBody>(),
+            size_of::<Option<Arc<str>>>() + size_of::<StyledBody>(),
+            "HighlightedBody 只能有 plain + styled 两块"
+        );
+
+        /// 与已删除的 `lines` 同构：把正文按「行 × 片段」切成若干 `SharedString`
+        /// （切分规则与被删的 `split_lines` 逐字一致：'\n' 处断行、空片段不计数）
+        fn lines_like(text: &str, runs: &[(u32, Rgba)]) -> Vec<Vec<SharedString>> {
+            let mut lines: Vec<Vec<SharedString>> = vec![Vec::new()];
+            let mut offset = 0usize;
+            for (len, _) in runs {
+                let mut rest = &text[offset..offset + *len as usize];
+                offset += *len as usize;
+                loop {
+                    match rest.find('\n') {
+                        Some(pos) => {
+                            if pos > 0 {
+                                lines.last_mut().unwrap().push(SharedString::from(&rest[..pos]));
+                            }
+                            lines.push(Vec::new());
+                            rest = &rest[pos + 1..];
+                        }
+                        None => {
+                            if !rest.is_empty() {
+                                lines.last_mut().unwrap().push(SharedString::from(rest));
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+            lines
+        }
+
+        // 与 per_frame_report 同一量级的响应体
+        let payload = serde_json::json!({
+            "items": (0..1000).map(|i| serde_json::json!({
+                "id": i,
+                "name": format!("item-{i}"),
+                "active": i % 2 == 0,
+                "score": i as f64 * 1.5,
+                "tags": ["alpha", "beta", "gamma"],
+            })).collect::<Vec<_>>()
+        });
+        let body = serde_json::to_string(&payload).unwrap();
+        let hl = response_highlight::build(&body, None, &dark());
+
+        let text = hl.styled.text.clone();
+        let runs = hl.styled.runs.clone();
+        let text_bytes = text.len();
+        let newline_bytes = text.matches('\n').count();
+
+        // ---- 改造后的常驻表示：一份正文 + 一张长度表（+ 结构体本身，上面已断言只有两块）
+        let resident =
+            text_bytes + runs.len() * size_of::<(u32, Rgba)>() + size_of::<HighlightedBody>();
+
+        // ---- 已删除的 `lines` 表示：精确的常驻结构体开销（不依赖分配器读数）
+        let lines = lines_like(&text, &runs);
+        let line_count = lines.len();
+        let segments: usize = lines.iter().map(|line| line.len()).sum();
+        // 逐片段复制的正文字节数：片段拼起来 = 正文去掉换行
+        let segment_bytes: usize = lines.iter().flatten().map(|s| s.len()).sum();
+        /// 与已删除的 `Run` 同构（`SharedString` + `Rgba`），用来算那层表示的常驻开销
+        struct RunLike {
+            _text: SharedString,
+            _color: Rgba,
+        }
+        let removed_structs = line_count * size_of::<Vec<SharedString>>()
+            + segments * size_of::<RunLike>();
+
+        // ---- 分配器视角：重建那层表示一次要分配多少次 / 多少字节（取 7 轮最小值）
+        let mut old = || {
+            let lines = lines_like(&text, &runs);
+            std::hint::black_box(lines.len());
+        };
+        let mut new = || {
+            // 现在保留的表示：正文只 clone 一次（引用计数），长度表就是 run 表本身
+            let kept: SharedString = text.clone();
+            std::hint::black_box((kept.len(), runs.len()));
+        };
+        let stats = measure_steps(&mut [("旧 lines 表示", &mut old), ("现在的表示", &mut new)]);
+        let (old_allocs, old_bytes) = stats[0];
+        let (new_allocs, new_bytes) = stats[1];
+
+        println!(
+            "响应体 {} 字节 → 常驻表示 {} 字节（正文 {} + run 表 {} × {} + 结构体 {}）",
+            body.len(),
+            resident,
+            text_bytes,
+            runs.len(),
+            size_of::<(u32, Rgba)>(),
+            size_of::<HighlightedBody>(),
+        );
+        println!(
+            "已删除的 lines 表示：{} 行 × Vec 头 {} 字节 + {} 个片段 × Run {} 字节 = {} 字节常驻结构体；\
+             它还把这 {} 个片段逐段复制了一遍（合计 {} 字节，≈ 正文去掉换行）",
+            line_count,
+            size_of::<Vec<SharedString>>(),
+            segments,
+            size_of::<RunLike>(),
+            removed_structs,
+            segments,
+            segment_bytes,
+        );
+        println!(
+            "重建那层表示一次：{} 次分配 / {} 字节（含 Vec 扩容余量）；现在保留一份正文：{} 次 / {} 字节",
+            old_allocs, old_bytes, new_allocs, new_bytes
+        );
+
+        // 1) 那层表示逐片段复制了正文的每个非换行字节 —— 这就是「第二份正文」
+        assert_eq!(
+            segment_bytes + newline_bytes,
+            text_bytes,
+            "逐片段拼起来必须正好是正文去掉换行（说明第二份正文是完整的）"
+        );
+        // 2) 光结构体开销就比整个响应体还大
+        assert!(
+            removed_structs > text_bytes,
+            "已删除的那层表示的结构体开销应当大于正文本身（{} vs {}）",
+            removed_structs,
+            text_bytes
+        );
+        assert!(
+            segments > runs.len(),
+            "逐行片段数必须多于跨行合并后的 run 数（{} vs {}）",
+            segments,
+            runs.len()
+        );
+        // 3) 现在只保留一份：正文 clone 是引用计数，长度表本来就在，不该再分配
+        assert!(
+            new_bytes * 100 <= old_bytes,
+            "现在的表示不该再复制正文（{} vs {} 字节）",
+            new_bytes,
+            old_bytes
+        );
+        assert!(
+            new_allocs * 100 <= old_allocs,
+            "现在的表示不该再逐片段分配（{} vs {} 次）",
+            new_allocs,
+            old_allocs
         );
     }
 

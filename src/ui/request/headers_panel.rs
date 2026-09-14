@@ -64,23 +64,20 @@ pub fn render_headers_panel(
                         .gap_2()
                         .items_center()
                         .children([
-                            div()
-                                .w(px(24.0))
-                                .h(px(24.0))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .text_sm()
-                                .cursor_pointer()
-                                .text_color(if header.enabled {
-                                    theme.success
-                                } else {
-                                    theme.muted_foreground
-                                })
-                                .child(if header.enabled { "✓" } else { "○" })
+                            // 行内启用开关：id 带行下标（gpui 的 hover/active 状态挂在
+                            // element id 上，共用 id 会「悬停一行、全部高亮」）；
+                            // 尺寸、字形与两种状态的颜色统一由 enabled_toggle 给出。
+                            // 外层再包一层普通 div：children 数组要求元素类型一致
+                            div().child(
+                                crate::ui::components::enabled_toggle(
+                                    format!("header-toggle-{}", idx),
+                                    header.enabled,
+                                    &theme,
+                                )
                                 .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<MainView>| {
                                     this.toggle_header(idx, cx);
                                 })),
+                            ),
                             div().flex_1().child(
                                 Input::new(&header.key)
                                     .small()

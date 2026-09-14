@@ -578,11 +578,16 @@ fn render_preview_body(
                     .gap_3()
                     .p_2()
                     .children([
+                        // children 数组要求元素类型一致：两个子元素都转成 AnyElement
+                        // （第二个现在是带 id 的 Stateful<Div>，hover/active 才会生效）
                         div()
                             .text_color(theme.muted_foreground)
                             .text_sm()
-                            .child("HTML Response"),
+                            .child("HTML Response")
+                            .into_any_element(),
                         div()
+                            // 可点击的主色小按钮：hover / 按下各深一档（不写死颜色）
+                            .id("preview-open-in-browser")
                             .cursor_pointer()
                             .px_3()
                             .py_1()
@@ -590,6 +595,8 @@ fn render_preview_body(
                             .bg(theme.accent)
                             .text_color(theme.accent_foreground)
                             .text_sm()
+                            .hover(|s| s.bg(theme.accent_hover()))
+                            .active(|s| s.bg(theme.accent_pressed()))
                             .child(t("preview.open_in_browser"))
                             .on_mouse_down(MouseButton::Left, {
                                 let body = body_owned.clone();
@@ -606,7 +613,8 @@ fn render_preview_body(
                                         .arg(tmp_path.to_string_lossy().to_string())
                                         .spawn();
                                 }
-                            }),
+                            })
+                            .into_any_element(),
                     ]),
                 div()
                     .text_xs()
@@ -666,8 +674,11 @@ fn render_preview_body(
             .children([
                 div()
                     .text_color(theme.muted_foreground)
-                    .child("PDF Response"),
+                    .child("PDF Response")
+                    .into_any_element(),
                 div()
+                    // 同上：可点击的主色按钮补上 hover / 按下反馈
+                    .id("preview-open-external-pdf")
                     .cursor_pointer()
                     .px_3()
                     .py_2()
@@ -675,6 +686,8 @@ fn render_preview_body(
                     .bg(theme.accent)
                     .text_color(theme.accent_foreground)
                     .text_sm()
+                    .hover(|s| s.bg(theme.accent_hover()))
+                    .active(|s| s.bg(theme.accent_pressed()))
                     .child(t("preview.open_external"))
                     .on_mouse_down(MouseButton::Left, {
                         let pdf_bytes = pdf_bytes.clone();
@@ -690,7 +703,8 @@ fn render_preview_body(
                                 .arg(tmp_path.to_string_lossy().to_string())
                                 .spawn();
                         }
-                    }),
+                    })
+                    .into_any_element(),
             ])
             .into_any_element();
     }
@@ -4159,7 +4173,10 @@ impl Render for MainView {
             * self.request_tabs.len() as f32
             - REQUEST_TAB_GAP;
         let tabs_max = (tabs_content_w - self.tabs_viewport).max(0.0);
-        let tabs_offset = f32::from(self.tabs_scroll.offset().x);
+        // 取反：ScrollHandle::offset() 向右滚动时为**负值**，与本文件其它处统一为
+        // 「正数 = 已向右滚动的距离」。漏掉取反不会编译报错，只会让 can_left 恒假
+        // （左箭头永远置灰不可点）、can_right 恒真。
+        let tabs_offset = -f32::from(self.tabs_scroll.offset().x);
         let tabs_overflow = tabs_max > 0.5;
         // 设置浮层：挂到**根容器**渲染。
         // 1) 原先在侧边栏子树里，比侧边栏宽的部分会被主工作区盖住（内容被截断）
@@ -4359,6 +4376,22 @@ impl Render for MainView {
                                             .items_center()
                                             .justify_center()
                                             .cursor_pointer()
+                                            // 侧栏 tab 是可点击按钮：选中态用主色的 hover/按下档、
+                                            // 未选中态用通用 hover 底色（一律取设计令牌，不写死颜色）
+                                            .hover(|s| {
+                                                if sidebar_tab == SidebarTab::Collections {
+                                                    s.bg(theme.accent_hover())
+                                                } else {
+                                                    s.bg(theme.hover_bg())
+                                                }
+                                            })
+                                            .active(|s| {
+                                                if sidebar_tab == SidebarTab::Collections {
+                                                    s.bg(theme.accent_pressed())
+                                                } else {
+                                                    s.bg(theme.active_bg())
+                                                }
+                                            })
                                             .bg(if sidebar_tab == SidebarTab::Collections { theme.accent } else { theme.input_background })
                                             .text_color(if sidebar_tab == SidebarTab::Collections { theme.accent_foreground } else { theme.muted_foreground })
                                             .on_click(cx.listener(|this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
@@ -4381,6 +4414,22 @@ impl Render for MainView {
                                             .items_center()
                                             .justify_center()
                                             .cursor_pointer()
+                                            // 侧栏 tab 是可点击按钮：选中态用主色的 hover/按下档、
+                                            // 未选中态用通用 hover 底色（一律取设计令牌，不写死颜色）
+                                            .hover(|s| {
+                                                if sidebar_tab == SidebarTab::History {
+                                                    s.bg(theme.accent_hover())
+                                                } else {
+                                                    s.bg(theme.hover_bg())
+                                                }
+                                            })
+                                            .active(|s| {
+                                                if sidebar_tab == SidebarTab::History {
+                                                    s.bg(theme.accent_pressed())
+                                                } else {
+                                                    s.bg(theme.active_bg())
+                                                }
+                                            })
                                             .bg(if sidebar_tab == SidebarTab::History { theme.accent } else { theme.input_background })
                                             .text_color(if sidebar_tab == SidebarTab::History { theme.accent_foreground } else { theme.muted_foreground })
                                             .on_click(cx.listener(|this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
@@ -4406,6 +4455,22 @@ impl Render for MainView {
                                             .items_center()
                                             .justify_center()
                                             .cursor_pointer()
+                                            // 侧栏 tab 是可点击按钮：选中态用主色的 hover/按下档、
+                                            // 未选中态用通用 hover 底色（一律取设计令牌，不写死颜色）
+                                            .hover(|s| {
+                                                if sidebar_tab == SidebarTab::Environments {
+                                                    s.bg(theme.accent_hover())
+                                                } else {
+                                                    s.bg(theme.hover_bg())
+                                                }
+                                            })
+                                            .active(|s| {
+                                                if sidebar_tab == SidebarTab::Environments {
+                                                    s.bg(theme.accent_pressed())
+                                                } else {
+                                                    s.bg(theme.active_bg())
+                                                }
+                                            })
                                             .bg(if sidebar_tab == SidebarTab::Environments { theme.accent } else { theme.input_background })
                                             .text_color(if sidebar_tab == SidebarTab::Environments { theme.accent_foreground } else { theme.muted_foreground })
                                             .on_click(cx.listener(|this, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
@@ -4856,8 +4921,8 @@ let method_clr = method_color(&entry.method);
                                     // 左右滚动按钮：只在标签溢出时出现，某方向没有更多标签时置灰不可点
                                     // （鼠标滚轮悬停在标签条上也可以直接横向滚动）
                                     .when(tabs_overflow, |el| {
-                                        let can_left = tabs_offset > 0.5;
-                                        let can_right = tabs_offset < tabs_max - 0.5;
+                                        let (can_left, can_right) =
+                                            tab_scroll_button_states(tabs_offset, tabs_max);
                                         el.child(
                                             div()
                                                 .id("tabs-scroll-left")
@@ -5246,9 +5311,12 @@ let method_clr = method_color(&entry.method);
                                                                                         .border_color(theme.border)
                                                                                         .children([
                                                                                             div().text_xs().text_color(theme.muted_foreground)
-                                                                                                .child(format!("{}×{} px | {}", img_size.width.0, img_size.height.0, ct_str)),
-                                                                                            div().cursor_pointer().px_3().py_1().rounded(px(RADIUS_SM))
+                                                                                                .child(format!("{}×{} px | {}", img_size.width.0, img_size.height.0, ct_str))
+                                                                                                .into_any_element(),
+                                                                                            div().id("preview-open-external-image").cursor_pointer().px_3().py_1().rounded(px(RADIUS_SM))
                                                                                                 .bg(theme.accent).text_color(theme.accent_foreground).text_sm()
+                                                                                                .hover(|s| s.bg(theme.accent_hover()))
+                                                                                                .active(|s| s.bg(theme.accent_pressed()))
                                                                                                 .child(self.t("preview.open_external"))
                                                                                                 .on_mouse_down(MouseButton::Left, {
                                                                                                     let raw_bytes = raw_bytes.clone();
@@ -5264,7 +5332,8 @@ let method_clr = method_color(&entry.method);
                                                                                                             .arg(tmp_path.to_string_lossy().to_string())
                                                                                                             .spawn();
                                                                                                     }
-                                                                                                }),
+                                                                                                })
+                                                                                                .into_any_element(),
                                                                                         ]),
                                                                                 )
                                                                         } else {
@@ -5311,8 +5380,12 @@ let method_clr = method_color(&entry.method);
                                                                                 .gap_3()
                                                                                 .p_2()
                                                                                 .children([
-                                                                                    div().text_color(theme.muted_foreground).text_sm().child("HTML Response"),
+                                                                                    div().text_color(theme.muted_foreground).text_sm().child("HTML Response")
+                                                                                        .into_any_element(),
                                                                                     div()
+                                                                                        // 与 render_preview_body 里的同名按钮一致：
+                                                                                        // 可点击就必须有 hover / 按下反馈
+                                                                                        .id("html-open-in-browser")
                                                                                         .cursor_pointer()
                                                                                         .px_3()
                                                                                         .py_1()
@@ -5320,6 +5393,8 @@ let method_clr = method_color(&entry.method);
                                                                                         .bg(theme.accent)
                                                                                         .text_color(theme.accent_foreground)
                                                                                         .text_sm()
+                                                                                        .hover(|s| s.bg(theme.accent_hover()))
+                                                                                        .active(|s| s.bg(theme.accent_pressed()))
                                                                                         .child(self.t("preview.open_in_browser"))
                                                                                         .on_mouse_down(MouseButton::Left, {
                                                                                             let body = body.clone();
@@ -5334,7 +5409,8 @@ let method_clr = method_color(&entry.method);
                                                                                                     .arg(tmp_path.to_string_lossy().to_string())
                                                                                                     .spawn();
                                                                                             }
-                                                                                        }),
+                                                                                        })
+                                                                                        .into_any_element(),
                                                                                 ]),
                                                                             // 源码编辑器（flex_1 填充剩余空间）
                                                                             div()
@@ -5773,3 +5849,13 @@ let method_clr = method_color(&entry.method);
     }
 }
 
+
+
+/// 标签条左右滚动箭头是否可用，返回 `(can_left, can_right)`。
+///
+/// 为什么抽成纯函数：`ScrollHandle::offset()` 向右滚动时返回**负值**，这个符号约定
+/// 写错不会有编译错误，只表现为「左箭头永远置灰」，因此必须有测试能钉住它。
+pub(crate) fn tab_scroll_button_states(raw_offset_x: f32, max_scroll: f32) -> (bool, bool) {
+    let scrolled = -raw_offset_x;
+    (scrolled > 0.5, scrolled < max_scroll - 0.5)
+}

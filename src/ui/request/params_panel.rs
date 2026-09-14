@@ -67,23 +67,20 @@ pub fn render_params_panel(
                         .gap_2()
                         .items_center()
                         .children([
-                            div()
-                                .w(px(24.0))
-                                .h(px(24.0))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .text_sm()
-                                .cursor_pointer()
-                                .text_color(if param.enabled {
-                                    theme.success
-                                } else {
-                                    theme.muted_foreground
-                                })
-                                .child(if param.enabled { "✓" } else { "○" })
+                            // 行内启用开关：id 必须带行下标，否则所有行共用一份
+                            // hover/active 状态（悬停一行、全部高亮）；尺寸/字形/颜色
+                            // 都由 components::enabled_toggle 统一给出。
+                            // 外层再包一层普通 div：children 数组要求元素类型一致
+                            div().child(
+                                crate::ui::components::enabled_toggle(
+                                    format!("param-toggle-{}", idx),
+                                    param.enabled,
+                                    &theme,
+                                )
                                 .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<MainView>| {
                                     this.toggle_param(idx, window, cx);
                                 })),
+                            ),
                             div().flex_1().child(
                                 Input::new(&param.key)
                                     .small()

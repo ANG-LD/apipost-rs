@@ -433,3 +433,212 @@ fn muted_icons_stay_readable_on_every_background() {
         );
     }
 }
+
+
+#[test]
+fn tab_scroll_arrows_enable_in_the_right_directions() {
+    // 回归：`ScrollHandle::offset()` 向右滚动时为负值。早期实现忘了取反，
+    // 导致「左箭头永远置灰不可点、右箭头永远可点」。
+    use super::main_view::tab_scroll_button_states;
+    assert_eq!(tab_scroll_button_states(0.0, 300.0), (false, true)); // 最左：只能向右
+    assert_eq!(tab_scroll_button_states(-150.0, 300.0), (true, true)); // 中间：两边都可用
+    assert_eq!(tab_scroll_button_states(-300.0, 300.0), (true, false)); // 最右：只能向左
+    assert_eq!(tab_scroll_button_states(0.0, 0.0), (false, false)); // 标签未溢出：都禁用
+}
+
+// ==================== 可点击控件的反馈色规则 ====================
+//
+// 背景：界面里有若干「看着能点、点了没反应」的容器 —— 行内 ✓/○ 开关、文件选择框、
+// 侧栏 tab、预览区的「在浏览器打开」按钮等。补反馈时有两类坑，都用测试钉住：
+//   1. gpui 的 `.hover()` / `.active()` 只在元素带 `global_id`（= `.id()`）时才参与
+//      样式计算，且同层共用一个 id 会共享 element state（悬停一行、全部高亮）；
+//   2. 反馈底色压着前景色，颜色配错会把文字吃掉（尤其 ✓ 的 success 与 ○ 的 muted）。
+
+/// 行内 ✓/○ 开关的前景色来源：✓ = success，○ = muted_foreground。
+///
+/// 面板里的开关与这条断言读的是**同一个函数**（`components::toggle_chip_foreground`），
+/// 所以"改成别的语义色"会立刻在这里暴露。
+#[test]
+fn toggle_chip_foreground_follows_the_state() {
+    use crate::ui::components::toggle_chip_foreground;
+    for name in Theme::NAMES {
+        let theme = Theme::from_str(name);
+        assert_eq!(
+            toggle_chip_foreground(true, &theme),
+            theme.success,
+            "{} 的 ✓ 应当取 success",
+            name
+        );
+        assert_eq!(
+            toggle_chip_foreground(false, &theme),
+            theme.muted_foreground,
+            "{} 的 ○ 应当取 muted_foreground",
+            name
+        );
+    }
+}
+
+
+/// hover / 按下时两种状态用同一个前景色，且必须比常态更清楚（不能"补反馈把字吃掉"）。
+///
+/// 为什么统一换前景色而不是各自保留 success / muted：反馈底色是 muted_background 系，
+/// 实测 `muted_foreground × active_bg` 最低只有 1.40（dracula）、success × active_bg
+/// 最低 2.31（latte），保留状态色就会把字吃掉；换成 `foreground` 后同一批底色上
+/// 最低仍有 6.57（latte，见测试打印）。状态由字形（✓ / ○）表达 —— 在
+/// light/sepia/latte 里两种状态色的对比本来就只有 1.0~1.3，从来不是靠颜色区分的。
+///
+/// 门槛 4.5 = WCAG AA 对正文的要求（✓/○ 是 12px 字形）。
+/// 备注（既有配色，本轮不动）：latte 的 success 压在面板底色上只有 2.96，
+/// 那不是反馈引入的问题，而是该主题状态色本身的对比度。
+#[test]
+fn toggle_chip_feedback_foreground_is_the_most_readable_one() {
+    use crate::ui::components::{toggle_chip_foreground, toggle_chip_hover_foreground};
+    let mut worst = f32::MAX;
+    let mut worst_where = String::new();
+    for name in Theme::NAMES {
+        let theme = Theme::from_str(name);
+        let feedback = toggle_chip_hover_foreground(&theme);
+        for (state, fg) in [
+            ("✓ 启用", toggle_chip_foreground(true, &theme)),
+            ("○ 禁用", toggle_chip_foreground(false, &theme)),
+        ] {
+            for (bg_name, bg) in [("hover", theme.hover_bg()), ("按下", theme.active_bg())] {
+                let ratio = contrast(feedback, bg);
+                if ratio < worst {
+                    worst = ratio;
+                    worst_where = format!("{} / {} / {}", name, state, bg_name);
+                }
+                assert!(
+                    ratio >= 4.5,
+                    "{} 的 {} 压在 {} 底色 {} 上对比度只有 {:.2}",
+                    name,
+                    state,
+                    bg_name,
+                    hex(bg),
+                    ratio
+                );
+            }
+        }
+    }
+    println!("开关在反馈底色上的最差对比度：{:.2}（{}）", worst, worst_where);
+}
+
+/// 表单数据行 true / false 值切换 chip：加了 hover / 按下反馈后仍然够读。
+///
+/// 底色是状态色按 alpha 叠在面板底色上（chip 的父容器就是面板 → `theme.background`）。
+/// 浓度越高，底色越靠近状态色：若文字仍是状态色就会越描越糊（实测最低 1.96），
+/// 所以反馈态把文字换成 `foreground` —— 同一批底色上最低 4.07（latte 的 false 按下）。
+/// 门槛取 4.0（略低于 AA 的 4.5：这种 chip 是"按下瞬间"的临时态）。
+#[test]
+fn value_chip_feedback_keeps_the_label_readable() {
+    use crate::ui::components::{
+        VALUE_CHIP_BASE_ALPHA, VALUE_CHIP_HOVER_ALPHA, VALUE_CHIP_PRESSED_ALPHA,
+    };
+    use crate::ui::themes::tokens::mix;
+    assert!(
+        VALUE_CHIP_BASE_ALPHA < VALUE_CHIP_HOVER_ALPHA
+            && VALUE_CHIP_HOVER_ALPHA < VALUE_CHIP_PRESSED_ALPHA,
+        "反馈档必须比常态更浓、按下比 hover 更浓，否则看不出变化"
+    );
+    let mut worst = f32::MAX;
+    let mut worst_where = String::new();
+    for name in Theme::NAMES {
+        let theme = Theme::from_str(name);
+        for (state, color) in [("true", theme.success), ("false", theme.error)] {
+            // 常态：文字与底色同色（这是改造前就有的写法，保持不变）
+            let at_rest = contrast(
+                color,
+                mix(theme.background, color, VALUE_CHIP_BASE_ALPHA),
+            );
+            for (label, alpha) in [
+                ("hover", VALUE_CHIP_HOVER_ALPHA),
+                ("按下", VALUE_CHIP_PRESSED_ALPHA),
+            ] {
+                // 反馈态：文字换成正文色（面板里就是这么写的）
+                let ratio = contrast(
+                    theme.foreground,
+                    mix(theme.background, color, alpha),
+                );
+                if ratio < worst {
+                    worst = ratio;
+                    worst_where = format!("{} / {} / {}", name, state, label);
+                }
+                assert!(
+                    ratio >= 4.0,
+                    "{} 的 {} chip 在 {} 底色下文字对比度只有 {:.2}（常态 {:.2}）",
+                    name,
+                    state,
+                    label,
+                    ratio,
+                    at_rest
+                );
+            }
+        }
+    }
+    println!("true/false chip 在反馈底色上的最差对比度：{:.2}（{}）", worst, worst_where);
+}
+
+/// hover / 按下的派生色必须"比常态重一档"，且只朝前景色方向混（不跑到别的色相上）。
+///
+/// `toggle_switch` 的轨道常态是语义色（success / border），反馈色由 `tint_hover()` /
+/// `tint_active()` 派生 —— 这两条保证"看得出变化"且"颜色仍然来自主题"。
+#[test]
+fn tint_hover_and_active_deepen_toward_the_foreground() {
+    for name in Theme::NAMES {
+        let theme = Theme::from_str(name);
+        for base in [theme.success, theme.border, theme.accent] {
+            let hover = theme.tint_hover(base);
+            let active = theme.tint_active(base);
+            assert_ne!(hover, base, "{}：hover 色必须与常态不同", name);
+            assert_ne!(active, hover, "{}：按下色必须比 hover 再重一档", name);
+            for (original, target, result) in [
+                (base.r, theme.foreground.r, hover.r),
+                (base.g, theme.foreground.g, hover.g),
+                (base.b, theme.foreground.b, hover.b),
+            ] {
+                let (lo, hi) = if original <= target {
+                    (original, target)
+                } else {
+                    (target, original)
+                };
+                assert!(
+                    result >= lo - 1.0 / 255.0 && result <= hi + 1.0 / 255.0,
+                    "{}：派生色把通道混到了底色与前景色之间以外",
+                    name
+                );
+            }
+        }
+    }
+}
+
+/// 列表行里的可点击控件，id 必须带上该行的键（下标 / 参数名）。
+///
+/// gpui 的 `.hover()` / `.active()` 只在元素有 `global_id`（即 `.id()`）时才参与样式
+/// 计算；而同一层里多个元素共用同一个 id 会共享同一份 element state ——
+/// 表现就是「悬停一行、所有行一起高亮」。这四处正是本轮补反馈的地方，
+/// 用 `include_str!` 把"id 里必须带 `{}` 行键"钉住：谁把 `{}` 去掉，这里立刻失败。
+#[test]
+fn per_row_click_targets_keep_row_scoped_ids() {
+    let params = include_str!("request/params_panel.rs");
+    let headers = include_str!("request/headers_panel.rs");
+    let body = include_str!("request/body_panel.rs");
+
+    for (file, label, pattern) in [
+        (params, "参数行 ✓/○ 开关", "param-toggle-{}"),
+        (headers, "请求头行 ✓/○ 开关", "header-toggle-{}"),
+        (body, "表单数据行 ✓/○ 开关", "{}-toggle-{}"),
+        (body, "表单数据行 true/false 值切换", "{}-bool-{}"),
+        (body, "表单数据行文件选择框", "{}-file-{}"),
+    ] {
+        assert!(
+            file.contains(&format!("format!(\"{}\"", pattern)),
+            "{label} 的 id 必须由 format! 生成并带行键：{pattern}"
+        );
+    }
+    // 三个面板的行内开关必须走同一份实现（尺寸/颜色/hover 规则只写一遍）
+    assert!(params.contains("enabled_toggle("), "参数面板应当使用 components::enabled_toggle");
+    assert!(headers.contains("enabled_toggle("), "请求头面板应当使用 components::enabled_toggle");
+    assert!(body.contains("enabled_toggle("), "表单数据面板应当使用 components::enabled_toggle");
+}
+
+
