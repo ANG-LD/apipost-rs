@@ -16,7 +16,7 @@ use crate::http;
 use crate::i18n::I18nManager;
 
 pub use http::{HttpRequest, HttpResponse, HttpClient, RequestOptions};
-use gpui::SharedString;
+use gpui_kit::SharedString;
 use std::sync::Arc;
 
 /// 应用状态

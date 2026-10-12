@@ -27,16 +27,16 @@ use crate::ui::{
     FormDataEntry, FormDataParamType, FormDataValue, HeaderEntry, RawFormat, RequestSettings,
     SavedFormDataEntry, ScriptState, SettingsInputs, Theme,
 };
-use gpui::prelude::*;
-use gpui::InteractiveElement;
-use gpui::*;
-use gpui_component::button::Button;
-use gpui_component::dialog::{Dialog, DialogHeader, DialogTitle};
-use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_component::scroll::Scrollable;
-use gpui_component::scroll::ScrollableElement;
-use gpui_component::select::{Select, SelectEvent, SelectState};
-use gpui_component::{Disableable, IconName, IndexPath, Sizable, StyledExt, WindowExt};
+use gpui_kit::prelude::*;
+use gpui_kit::InteractiveElement;
+use gpui_kit::*;
+use gpui_kit::component::button::Button;
+use gpui_kit::component::dialog::{Dialog, DialogHeader, DialogTitle};
+use gpui_kit::component::input::{Editor, EditorState, Input, InputEvent, InputState};
+use gpui_kit::component::scroll::Scrollable;
+use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::select::{Select, SelectEvent, SelectState};
+use gpui_kit::component::{Disableable, IconName, IndexPath, Sizable, StyledExt, WindowExt};
 use std::collections::HashSet;
 use smallvec::smallvec;
 use std::sync::atomic::AtomicBool;
@@ -298,7 +298,7 @@ pub struct MainView {
     pub(crate) request_tabs: Arc<Vec<RequestTab>>,
     pub(crate) active_tab: usize,
     /// 请求标签条的横向滚动句柄（标签定宽，标签过多时左右滚动，并让当前标签始终可见）
-    pub(crate) tabs_scroll: gpui::ScrollHandle,
+    pub(crate) tabs_scroll: gpui_kit::ScrollHandle,
     /// 启动/恢复工作区后，需要在首次布局完成时把当前标签滚动到可见区域
     pub(crate) tabs_reveal_pending: bool,
     pub(crate) response: Option<Arc<HttpResponse>>,
@@ -334,10 +334,10 @@ pub struct MainView {
     pub(crate) needs_collections_refresh: bool,
     pub(crate) needs_drop_refresh: Arc<AtomicBool>,
     pub(crate) url_input: Entity<InputState>,
-    pub(crate) _url_change_sub: gpui::Subscription,
-    pub(crate) _param_input_subs: Vec<gpui::Subscription>,
-    pub(crate) _header_subs: Vec<gpui::Subscription>,
-    pub(crate) _form_data_type_subs: Vec<gpui::Subscription>,
+    pub(crate) _url_change_sub: gpui_kit::Subscription,
+    pub(crate) _param_input_subs: Vec<gpui_kit::Subscription>,
+    pub(crate) _header_subs: Vec<gpui_kit::Subscription>,
+    pub(crate) _form_data_type_subs: Vec<gpui_kit::Subscription>,
     pub(crate) method_select: Entity<SelectState<Vec<crate::ui::components::MethodItem>>>,
     pub(crate) builder_tab: BuilderTab,
     /// Arc 共享：请求编辑状态每帧都要取一份快照，写成 Arc 后快照只是引用计数 +1；
@@ -345,20 +345,20 @@ pub struct MainView {
     pub(crate) params: Arc<Vec<ParamEntry>>,
     pub(crate) headers: Arc<Vec<HeaderEntry>>,
     pub(crate) body_state: Arc<BodyState>,
-    pub(crate) body_type_select: Entity<SelectState<Vec<gpui::SharedString>>>,
-    pub(crate) raw_format_select: Entity<SelectState<Vec<gpui::SharedString>>>,
-    pub(crate) auth_type_select: Entity<SelectState<Vec<gpui::SharedString>>>,
+    pub(crate) body_type_select: Entity<SelectState<Vec<gpui_kit::SharedString>>>,
+    pub(crate) raw_format_select: Entity<SelectState<Vec<gpui_kit::SharedString>>>,
+    pub(crate) auth_type_select: Entity<SelectState<Vec<gpui_kit::SharedString>>>,
     pub(crate) auth_state: Arc<AuthState>,
     pub(crate) script_state: ScriptState,
     pub(crate) settings: Arc<RequestSettings>,
     pub(crate) settings_inputs: SettingsInputs,
     pub(crate) is_importing_curl: bool,
     pub(crate) last_synced_url: String,
-    pub(crate) response_input: Entity<InputState>,
-    pub(crate) response_pretty_input: Entity<InputState>,
+    pub(crate) response_input: Entity<EditorState>,
+    pub(crate) response_pretty_input: Entity<EditorState>,
     pub(crate) response_header_inputs: Vec<(Entity<InputState>, Entity<InputState>)>,
     pub(crate) response_raw_format: RawFormat,
-    pub(crate) response_raw_format_select: Entity<SelectState<Vec<gpui::SharedString>>>,
+    pub(crate) response_raw_format_select: Entity<SelectState<Vec<gpui_kit::SharedString>>>,
     pub(crate) response_soft_wrap: bool,
     pub(crate) next_tab_id: usize,
     pub(crate) splitter_dragging: bool,
@@ -372,7 +372,7 @@ pub struct MainView {
     /// 上次 workpace 保存时间（用于节流）
     pub(crate) last_workspace_save: std::time::Instant,
     /// 自动保存后台任务句柄（None = 未启动）
-    pub(crate) auto_save_task: Option<gpui::Task<()>>,
+    pub(crate) auto_save_task: Option<gpui_kit::Task<()>>,
     /// 代理地址输入（设置弹窗中使用）
     pub(crate) proxy_url_input: Entity<InputState>,
     /// 代理提示浮层显示状态
@@ -383,7 +383,7 @@ pub struct MainView {
     /// 代码生成对话框
     pub(crate) code_gen_dialog_state: Arc<Mutex<crate::ui::dialogs::CodeGenDialogState>>,
     /// 根元素 FocusHandle（用于确保快捷键始终生效）
-    pub(crate) root_focus_handle: gpui::FocusHandle,
+    pub(crate) root_focus_handle: gpui_kit::FocusHandle,
 }
 
 /// 保存到收藏夹的对话框状态
@@ -420,8 +420,8 @@ impl SaveRequestDialog {
     }
 }
 
-impl gpui::Focusable for MainView {
-    fn focus_handle(&self, _cx: &gpui::App) -> gpui::FocusHandle {
+impl gpui_kit::Focusable for MainView {
+    fn focus_handle(&self, _cx: &gpui_kit::App) -> gpui_kit::FocusHandle {
         self.root_focus_handle.clone()
     }
 }
@@ -456,7 +456,7 @@ fn highlighted_styled_text(
 ///
 /// 不写字号常量：让 gpui 的 `Styled` 先算一遍再取回来，
 /// 这样框架/组件库改了 `text_sm` 的定义也不会和 run 的字体脱节。
-fn body_text_refinement() -> gpui::TextStyleRefinement {
+fn body_text_refinement() -> gpui_kit::TextStyleRefinement {
     let mut probe = div().text_sm();
     probe.style().text.clone()
 }
@@ -905,36 +905,32 @@ impl MainView {
         // 创建 Headers 列表（从空开始，支持动态添加）
         let headers: Vec<HeaderEntry> = vec![];
 
-        // 创建 Body 状态（JSON 编辑器使用 code_editor 模式）
+        // 创建 Body 状态（JSON 编辑器用源码编辑器 EditorState）
         let raw_content = cx.new(|cx| {
-            InputState::new(window, cx)
+            EditorState::new(window, cx)
                 .default_value(r#"{"key": "value"}"#)
-                .multi_line(true)
-                .code_editor("json")
+                .language("json")
                 .line_number(true)
         });
         // XML 格式的 raw_content - 复制JSON编辑框
         let raw_content_xml = cx.new(|cx| {
-            InputState::new(window, cx)
+            EditorState::new(window, cx)
                 .default_value(r#"<root></root>"#)
-                .multi_line(true)
-                .code_editor("json")
+                .language("json")
                 .line_number(true)
         });
         // Text 格式的 raw_content - 复制JSON编辑框
         let raw_content_text = cx.new(|cx| {
-            InputState::new(window, cx)
+            EditorState::new(window, cx)
                 .default_value(r#"plain text"#)
-                .multi_line(true)
-                .code_editor("json")
+                .language("json")
                 .line_number(true)
         });
         // HTML 格式的 raw_content - 复制JSON编辑框
         let raw_content_html = cx.new(|cx| {
-            InputState::new(window, cx)
+            EditorState::new(window, cx)
                 .default_value(r#"<html></html>"#)
-                .multi_line(true)
-                .code_editor("json")
+                .language("json")
                 .line_number(true)
         });
         let body_state = BodyState::new(
@@ -966,15 +962,14 @@ impl MainView {
         // 创建响应体输入状态（用于 JSON 语法高亮显示）
         //
         // 这里**只有这一个**响应体编辑器：改造前还建了 xml / text / html 三个
-        // 同配置（都是 `code_editor("json")`）的 InputState，每次响应到达都把整篇
+        // 同配置（都是 `language("json")` 的 EditorState）的编辑器，每次响应到达都把整篇
         // 正文 `set_value` 进去，但它们从来没有被 `Input::new(...)` 渲染、也没人读
         // 它们的值（是只写状态）。每个 InputState 都会把正文抄一遍进自己的 Rope、
         // 并在绘制时跑一次语法解析，所以那是一份纯浪费：正文常驻内存 ×4、解析 ×4。
         // 删掉它们是纯内部改动：没有任何用户可见行为依赖它们。
         let response_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor("json")
-                .multi_line(true)
+            EditorState::new(window, cx)
+                .language("json")
                 .soft_wrap(true)
                 .line_number(true)
                 .default_value("")
@@ -982,9 +977,8 @@ impl MainView {
 
         // 创建响应体 Pretty 输入状态
         let response_pretty_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .multi_line(true)
-                .code_editor("json")
+            EditorState::new(window, cx)
+                .language("json")
                 .line_number(true)
                 .soft_wrap(true)
                 .default_value("")
@@ -1049,7 +1043,7 @@ impl MainView {
                 tab_state: TabState::default(),
             }].into(),
             active_tab: 0,
-            tabs_scroll: gpui::ScrollHandle::new(),
+            tabs_scroll: gpui_kit::ScrollHandle::new(),
             tabs_reveal_pending: true,
             response: None,
             response_tab: ResponseTab::Body,
@@ -3414,7 +3408,7 @@ impl MainView {
 /// 设置面板里的「关于」区：本地版本 + 从 GitHub Releases 检查更新
 ///
 /// 状态来自 MainView.update_status，由 check_for_updates 异步写入。
-fn update_section(this: &MainView, cx: &mut Context<MainView>, theme: &Theme) -> gpui::Div {
+fn update_section(this: &MainView, cx: &mut Context<MainView>, theme: &Theme) -> gpui_kit::Div {
     use crate::app::updater::{UpdateStatus, CURRENT_VERSION};
 
     let t_current = this.t("update.current");
@@ -3654,7 +3648,7 @@ fn settings_popover(
     cx: &mut Context<MainView>,
     theme: &Theme,
     max_height: f32,
-) -> gpui::Div {
+) -> gpui_kit::Div {
     let current_lang = this
         .app_state
         .lock()
@@ -5207,19 +5201,19 @@ let method_clr = method_color(&entry.method);
                                                                 segment_group(&theme)
                                                                     .children([
                                                                         segment_button("pretty", self.t("ui.pretty"), self.body_view_mode == BodyViewMode::Pretty, &theme)
-                                                                            .on_click(cx.listener(|this, _: &gpui::ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                            .on_click(cx.listener(|this, _: &gpui_kit::ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                                                 this.body_view_mode = BodyViewMode::Pretty;
                                                                                 cx.notify();
                                                                             }))
                                                                             .into_any_element(),
                                                                         segment_button("raw", self.t("ui.raw"), self.body_view_mode == BodyViewMode::Raw, &theme)
-                                                                            .on_click(cx.listener(|this, _: &gpui::ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                            .on_click(cx.listener(|this, _: &gpui_kit::ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                                                 this.body_view_mode = BodyViewMode::Raw;
                                                                                 cx.notify();
                                                                             }))
                                                                             .into_any_element(),
                                                                         segment_button("preview", self.t("ui.preview"), self.body_view_mode == BodyViewMode::Preview, &theme)
-                                                                            .on_click(cx.listener(|this, _: &gpui::ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                                                                            .on_click(cx.listener(|this, _: &gpui_kit::ClickEvent, _window: &mut Window, cx: &mut Context<Self>| {
                                                                                 this.body_view_mode = BodyViewMode::Preview;
                                                                                 cx.notify();
                                                                             }))
@@ -5293,7 +5287,7 @@ let method_clr = method_color(&entry.method);
                                                                 .border_color(theme.border)
                                                                 .rounded(px(RADIUS_SM))
                                                                 .child(
-                                                                    Input::new(&self.response_pretty_input)
+                                                                    Editor::new(&self.response_pretty_input)
                                                                         .w_full()
                                                                         .h_full()
                                                                         .bg(theme.code_background)
@@ -5311,7 +5305,7 @@ let method_clr = method_color(&entry.method);
                                                                 .border_color(theme.border)
                                                                 .rounded(px(RADIUS_SM))
                                                                 .child(
-                                                                    Input::new(&self.response_input)
+                                                                    Editor::new(&self.response_input)
                                                                         .w_full()
                                                                         .h_full()
                                                                         .bg(theme.code_background)
@@ -5414,7 +5408,7 @@ let method_clr = method_color(&entry.method);
                                                                         .border_color(theme.border)
                                                                         .rounded(px(RADIUS_SM))
                                                                         .child(
-                                                                            Input::new(&self.response_input)
+                                                                            Editor::new(&self.response_input)
                                                                                 .w_full()
                                                                                 .h_full()
                                                                                 .disabled(true),
@@ -5478,7 +5472,7 @@ let method_clr = method_color(&entry.method);
                                                                                 .rounded(px(RADIUS_SM))
                                                                                 .overflow_hidden()
                                                                                 .child(
-                                                                                    Input::new(&self.response_input)
+                                                                                    Editor::new(&self.response_input)
                                                                                         .w_full()
                                                                                         .h_full()
                                                                                         .disabled(true)
@@ -5777,10 +5771,10 @@ let method_clr = method_color(&entry.method);
                     drop(dialog);
                     let save_dialog = self.save_request_dialog.clone();
                     let save_app = self.app_state.clone();
-                    let dialog_title: gpui::SharedString = self.t("dialog.save_to_collections").into();
-                    let title_label: gpui::SharedString = self.t("dialog.title_label").into();
-                    let cancel_text: gpui::SharedString = self.t("dialog.cancel").into();
-                    let save_text: gpui::SharedString = self.t("dialog.save").into();
+                    let dialog_title: gpui_kit::SharedString = self.t("dialog.save_to_collections").into();
+                    let title_label: gpui_kit::SharedString = self.t("dialog.title_label").into();
+                    let cancel_text: gpui_kit::SharedString = self.t("dialog.cancel").into();
+                    let save_text: gpui_kit::SharedString = self.t("dialog.save").into();
                     d.child(
                         div()
                             .absolute()

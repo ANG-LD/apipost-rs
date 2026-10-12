@@ -5,8 +5,8 @@
 use crate::http::Cookie;
 use crate::ui::components::RADIUS_SM;
 use crate::ui::Theme;
-use gpui::*;
-use gpui_component::StyledExt;
+use gpui_kit::*;
+use gpui_kit::component::StyledExt;
 
 /// Cookie 查看器组件
 ///

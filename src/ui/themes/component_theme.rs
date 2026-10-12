@@ -1,7 +1,7 @@
 //! 应用调色板 → gpui_component 组件库主题的桥接。
 //!
 //! 为什么要这一层：输入框、按钮、下拉框（Select）、设置弹窗这些控件是
-//! gpui_component 渲染的，它们的颜色/圆角/焦点环全部读 `gpui_component::theme::Theme`
+//! gpui_component 渲染的，它们的颜色/圆角/焦点环全部读 `gpui_kit::component::theme::Theme`
 //! 这个全局量（见 crates/ui/src/input/input.rs、button/button.rs、
 //! theme/schema.rs 的 `ThemeConfig::apply_config`），跟我们自己的 `Theme` 无关。
 //! 不桥接的话，切到 gruvbox 这类主题时自绘面板是暖色、而输入框和下拉还是组件库
@@ -9,28 +9,28 @@
 //!
 //! 覆盖方式（读源码确认过，不是猜的）：
 //!
-//! * `gpui_component::theme::Theme::global_mut(cx)` 给出 `&mut Theme`；
+//! * `gpui_kit::component::theme::Theme::global_mut(cx)` 给出 `&mut Theme`；
 //! * 但**只改 `theme.colors.xxx` 是不够的** —— 按钮的 hover/active 取的是
 //!   `theme.tokens.button_primary_hover` 这类缓存值，`tokens` 只在
 //!   `ThemeConfig::apply_config` 里随 `colors` 一起刷新；
 //! * 所以这里走 `Theme::global_mut(cx).apply_config(&Rc<ThemeConfig>)`（`apply_config`
 //!   是 pub 的），一次把 colors + tokens + mode + radius + shadow 全部刷新；
-//! * 输入框里的 **JSON 编辑器**（`InputState::code_editor("json")`）另有两条读者：
+//! * 输入框里的 **JSON 编辑器**（`EditorState::new(..).language("json")`）另有两条读者：
 //!   正文/行号栏底色和行号颜色取自 `Theme::highlight_theme`，语法高亮取自
 //!   `SyntaxHighlighter` + `cx.theme().highlight_theme`。`highlight_theme` 只在
 //!   `ThemeConfig::highlight` 是 `Some` 时才会被重建，所以本层必须显式给出该字段
 //!   （见 `highlight_style`），否则会一直停在组件库自带的浅色高亮主题上。
-//! * 而且必须在 `gpui_component::init(cx)`（内部会 `Theme::change`）之后调用，
+//! * 而且必须在 `gpui_kit::component::init(cx)`（内部会 `Theme::change`）之后调用，
 //!   否则会被 init 里的默认主题覆盖掉。
 
 use super::tokens::{mix, RADIUS_LG, RADIUS_SM};
 use super::Theme;
-use gpui::{App, Rgba, SharedString};
-use gpui_component::highlighter::HighlightThemeStyle;
-use gpui_component::theme::{Theme as ComponentTheme, ThemeConfig, ThemeConfigColors, ThemeMode};
+use gpui_kit::{App, Rgba, SharedString};
+use gpui_kit::component::highlighter::HighlightThemeStyle;
+use gpui_kit::component::theme::{Theme as ComponentTheme, ThemeConfig, ThemeConfigColors, ThemeMode};
 use std::rc::Rc;
 
-/// 把 `Rgba` 转成组件库认的 `#rrggbbaa` 字面量（`gpui::Rgba::try_from` 支持该格式）。
+/// 把 `Rgba` 转成组件库认的 `#rrggbbaa` 字面量（`gpui_kit::Rgba::try_from` 支持该格式）。
 fn hex(color: Rgba) -> SharedString {
     format!("#{:08x}", u32::from(color)).into()
 }
@@ -106,7 +106,7 @@ pub fn readable_on(color: Rgba, background: Rgba, foreground: Rgba) -> Rgba {
 
 /// 编辑器（代码区）底色。
 ///
-/// 与 `json_editor::code_editor_view` 传给 `Input::bg()` 的是同一个值：
+/// 与 `json_editor::code_editor_view` 传给 `Editor::bg()` 的是同一个值：
 /// 行号栏由组件库自己绘制，正文由应用传参，两边必须取同一份底色，
 /// 否则行号栏和正文之间会出现一条色差缝。
 pub fn editor_background_color(theme: &Theme) -> Rgba {
@@ -284,7 +284,7 @@ pub(crate) fn component_config(theme: &Theme) -> ThemeConfig {
 /// 把应用主题套到 gpui_component 上（颜色 + tokens + 模式 + 圆角 + 阴影一起刷新）。
 ///
 /// 调用点只有两处：`main.rs` 启动时、`MainView::switch_theme` 切换主题时。
-/// 两处都必须在 `gpui_component::init(cx)` 之后。
+/// 两处都必须在 `gpui_kit::component::init(cx)` 之后。
 pub fn apply_component_theme(theme: &Theme, cx: &mut App) {
     let config = component_config(theme);
 

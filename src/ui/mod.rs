@@ -34,5 +34,5 @@ pub use settings::*;
 pub use themes::*;
 
 use crate::app::AppState;
-use gpui::*;
-use gpui_component::StyledExt;
+use gpui_kit::*;
+use gpui_kit::component::StyledExt;

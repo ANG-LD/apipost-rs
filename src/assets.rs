@@ -1,10 +1,10 @@
 //! 应用自己的资源源（`AssetSource` 桥接）
 //!
 //! 为什么必须有这一层（不写就永远看不到自绘图标）：
-//! `gpui::svg()` 画图标时不读文件系统，而是把 `path` 交给**全局资源源**去查
+//! `gpui_kit::svg()` 画图标时不读文件系统，而是把 `path` 交给**全局资源源**去查
 //! （gpui `window.rs` 的 `Window::paint_svg` → `SvgRenderer::render_alpha_mask`
 //! 里那句 `self.asset_source.load(&params.path)`，返回 None/Err 就整块不画）。
-//! 本项目原来装的是 `gpui_component_assets::Assets`：它用 RustEmbed 只把组件库
+//! 本项目原来装的是 `gpui_kit::assets::Assets`：它用 RustEmbed 只把组件库
 //! 自己那份 `assets/icons/**/*.svg` 打进二进制，只认 `icons/<组件库图标名>.svg`
 //! 这一组路径。应用自己的 `assets/icons/history.svg` 谁都解析不到 ——
 //! 文件躺在仓库里、界面却空白，原因就在这里。
@@ -16,7 +16,7 @@
 //! 刻意不引入 `rust-embed` 之类新依赖：这里只需要一个文件，
 //! `include_str!` 就是标准库自带的"把文件嵌进二进制"。
 
-use gpui::{AssetSource, Result, SharedString};
+use gpui_kit::{AssetSource, Result, SharedString};
 use std::borrow::Cow;
 
 /// 自绘「历史记录」图标在资源源里的路径。
@@ -29,7 +29,7 @@ pub const HISTORY_ICON_PATH: &str = "icons/history.svg";
 /// 本应用实际安装的资源源 = 应用自绘图标 + 组件库全部资源
 pub struct Assets {
     /// 组件库资源源：图标与字体都由它提供，除上面命中的路径外一律走它
-    inner: gpui_component_assets::Assets,
+    inner: gpui_kit::assets::Assets,
 }
 
 impl Assets {
@@ -38,7 +38,7 @@ impl Assets {
         // （没有 `Default` 实现），wasm 下是带 endpoint 的结构体 —— `new` 两个平台都有。
         // native 下 endpoint 参数按定义被忽略，这里传空串没有副作用。
         Self {
-            inner: gpui_component_assets::Assets::new(""),
+            inner: gpui_kit::assets::Assets::new(""),
         }
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "apipost-rs"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2021"
 description = "A Postman alternative built with Rust and gpui"
 license = "MIT"
@@ -8,14 +8,15 @@ authors = ["Lidong yang <735615901@qq.com>"]
 repository = "https://github.com/ANG-LD/apipost-rs"
 
 [dependencies]
-# GUI framework
-gpui = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
-gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
-gpui_web = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
-gpui_macros = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
-gpui-component = { git = "https://github.com/longbridge/gpui-component", branch = "main"}
-# 可选：使用内置默认资源
-gpui-component-assets = { git = "https://github.com/longbridge/gpui-component", branch = "main" }
+# GUI framework：gpui-kit 一个依赖即包含 gpui（gpui-pre 快照）+ gpui-base
+# + gpui-component 组件库 + 默认图标资源，平台特性（x11/wayland/font-kit/
+# runtime_shaders）由 gpui-kit 内部对 gpui-pre-platform 的依赖统一开启。
+#
+# `tree-sitter` 必须开：gpui-component 0.7.3 把语法高亮（JSON 编辑器）做成了
+# 可选特性，关掉时会退化成 wasm_stub —— 不但没有高亮，连
+# `editor.background`/`editor.line_number` 这些字段名都不再接受点号写法，
+# 我们桥接过去的高亮主题会整片失效（见 src/ui/themes/component_theme.rs）。
+gpui-kit = { version = "0.7.3", features = ["tree-sitter"] }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }

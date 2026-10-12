@@ -74,7 +74,7 @@ PostMan替代工具是一个使用Rust语言和gpui框架构建的开源API测�
 
 ### 核心框架
 - **Rust**: 系统级编程语言，提供高性能和内存安全
-- **gpui**: 基于Zed编辑器的GUI框架，提供原生跨平台体验
+- **gpui-kit**: 基于Zed GPUI 的桌面 UI 套件（一个依赖内含 gpui-pre `0.3.9`、gpui-base、gpui-component `0.7.3` 组件库与默认图标资源），提供原生跨平台体验
 - **tokio**: Rust异步运行时，支持并发请求处理
 
 ### HTTP处理

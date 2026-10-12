@@ -4,10 +4,10 @@ use crate::ui::components::{
 };
 use crate::ui::main_view::MainView;
 use crate::ui::Theme;
-use gpui::*;
-use gpui_component::input::Input;
-use gpui_component::select::Select;
-use gpui_component::{IconName, Sizable, StyledExt};
+use gpui_kit::*;
+use gpui_kit::component::input::Input;
+use gpui_kit::component::select::Select;
+use gpui_kit::component::{IconName, Sizable, StyledExt};
 
 pub fn render_url_bar(
     this: &mut MainView,
@@ -72,7 +72,7 @@ pub fn render_url_bar(
             // 次要操作：保存（描边按钮，放在发送左边）
             ghost_button("save-request", this.t("button.save"), &theme).on_click(cx.listener(
                 |this: &mut MainView,
-                 _: &gpui::ClickEvent,
+                 _: &gpui_kit::ClickEvent,
                  window: &mut Window,
                  cx: &mut Context<MainView>| {
                     this.save_current_request(window, cx);
@@ -109,7 +109,7 @@ pub fn render_url_bar(
             .min_w(px(96.0))
             .on_click(cx.listener(
                 |this: &mut MainView,
-                 _: &gpui::ClickEvent,
+                 _: &gpui_kit::ClickEvent,
                  window: &mut Window,
                  cx: &mut Context<MainView>| {
                     let url = this.url_input.read(cx).value().to_string();
@@ -120,7 +120,7 @@ pub fn render_url_bar(
                         .method_select
                         .read(cx)
                         .selected_value()
-                        .unwrap_or(&gpui::SharedString::from("GET"))
+                        .unwrap_or(&gpui_kit::SharedString::from("GET"))
                         .clone();
                     this.url = url;
                     this.method = method.to_string();

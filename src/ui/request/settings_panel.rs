@@ -3,11 +3,11 @@ use crate::ui::components::{
 };
 use crate::ui::main_view::MainView;
 use crate::ui::Theme;
-use gpui::*;
-use gpui_component::input::{Input, InputState};
-use gpui_component::Sizable;
-use gpui_component::StyledExt;
-use gpui_component::scroll::ScrollableElement;
+use gpui_kit::*;
+use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::Sizable;
+use gpui_kit::component::StyledExt;
+use gpui_kit::component::scroll::ScrollableElement;
 
 /// 请求设置面板：超时时间 / 重试次数 / 跟随重定向 / 校验 SSL
 ///

@@ -1,11 +1,11 @@
-use gpui::*;
-use gpui_component::StyledExt;
+use gpui_kit::*;
+use gpui_kit::component::StyledExt;
 
 use crate::ui::components::{RADIUS_MD, RADIUS_SM};
 use crate::ui::Theme;
 
 /// 上下文菜单面板（返回 Div，可继续链式调用）
-pub fn popup_panel(theme: &Theme) -> gpui::Div {
+pub fn popup_panel(theme: &Theme) -> gpui_kit::Div {
     div()
         .bg(theme.background)
         .border_1()

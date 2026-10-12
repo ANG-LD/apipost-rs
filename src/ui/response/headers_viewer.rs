@@ -4,9 +4,9 @@
 
 use crate::app::HttpResponse;
 use crate::ui::Theme;
-use gpui::*;
-use gpui_component::input::{Input, InputState};
-use gpui_component::StyledExt;
+use gpui_kit::*;
+use gpui_kit::component::input::{Textarea, TextareaState};
+use gpui_kit::component::StyledExt;
 
 /// 响应头查看器组件
 ///
@@ -26,9 +26,7 @@ pub fn response_headers_viewer(
         .join("\n");
 
     let headers_input = cx.new(|cx| {
-        InputState::new(window, cx)
-            .default_value(&headers_text)
-            .multi_line(true)
+        TextareaState::new(window, cx).default_value(&headers_text)
     });
 
     div()
@@ -41,7 +39,7 @@ pub fn response_headers_viewer(
         .rounded(px(crate::ui::components::RADIUS_SM))
         // 多行只读输入框本身不画边框/底色（外层容器负责），避免出现双层边框
         .child(
-            Input::new(&headers_input)
+            Textarea::new(&headers_input)
                 .w_full()
                 .h_full()
                 .bg(theme.code_background)

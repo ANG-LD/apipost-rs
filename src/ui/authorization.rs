@@ -2,10 +2,10 @@
 //!
 //! 支持多种认证类型：No Auth, Bearer Token, Basic Auth, API Key
 
-use gpui_component::input::{Input, InputState};
-use gpui_component::select::{Select, SelectState};
-use gpui_component::{IndexPath, Sizable, StyledExt};
-use gpui::*;
+use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::select::{Select, SelectState};
+use gpui_kit::component::{IndexPath, Sizable, StyledExt};
+use gpui_kit::*;
 use std::sync::Arc;
 
 /// 认证类型枚举
@@ -43,7 +43,7 @@ impl AuthType {
         }
     }
 
-    pub fn all() -> Vec<gpui::SharedString> {
+    pub fn all() -> Vec<gpui_kit::SharedString> {
         vec![
             "No Auth".into(),
             "Bearer Token".into(),
@@ -68,7 +68,7 @@ impl Default for ApiKeyLocation {
 }
 
 impl ApiKeyLocation {
-    pub fn all() -> Vec<gpui::SharedString> {
+    pub fn all() -> Vec<gpui_kit::SharedString> {
         vec!["Header".into(), "Query".into()]
     }
 
@@ -93,7 +93,7 @@ impl ApiKeyLocation {
 pub struct ApiKeyAuthData {
     pub key: Entity<InputState>,
     pub value: Entity<InputState>,
-    pub location: Entity<SelectState<Vec<gpui::SharedString>>>,
+    pub location: Entity<SelectState<Vec<gpui_kit::SharedString>>>,
     pub location_value: ApiKeyLocation,
 }
 
@@ -184,7 +184,7 @@ impl AuthState {
     }
 
     /// 创建认证类型选择器状态
-    pub fn create_auth_type_select(_app_state: Arc<std::sync::Mutex<crate::app::AppState>>, window: &mut Window, cx: &mut Context<crate::ui::MainView>) -> Entity<SelectState<Vec<gpui::SharedString>>> {
+    pub fn create_auth_type_select(_app_state: Arc<std::sync::Mutex<crate::app::AppState>>, window: &mut Window, cx: &mut Context<crate::ui::MainView>) -> Entity<SelectState<Vec<gpui_kit::SharedString>>> {
         let auth_types = AuthType::all();
         cx.new(|cx| {
             SelectState::new(auth_types, Some(IndexPath::default()), window, cx)

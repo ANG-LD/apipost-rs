@@ -5,10 +5,10 @@ use crate::ui::components::{
     button_size_for_icon, themed_icon, IconTier, IconTone, ICON_TEXT_GAP, RADIUS_LG,
 };
 use crate::ui::Theme;
-use gpui::*;
-use gpui::prelude::FluentBuilder;
-use gpui_component::button::Button;
-use gpui_component::{IconName, Sizable, StyledExt};
+use gpui_kit::*;
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::component::button::Button;
+use gpui_kit::component::{IconName, Sizable, StyledExt};
 use std::sync::{Arc, Mutex};
 
 /// 移动对话框状态
@@ -71,7 +71,7 @@ pub fn render_move_dialog_overlay(
     state: &Arc<Mutex<MoveDialogState>>,
     app_state: &Arc<Mutex<AppState>>,
     theme: &Theme,
-    entity_id: gpui::EntityId,
+    entity_id: gpui_kit::EntityId,
     cx: &mut Context<crate::ui::MainView>,
 ) -> AnyElement {
     // 提前获取渲染所需字段，尽早释放锁

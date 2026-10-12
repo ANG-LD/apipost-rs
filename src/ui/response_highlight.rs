@@ -16,7 +16,7 @@
 //! 现在把它删掉：一个响应体在内存里只有一份正文表示。
 
 use crate::ui::themes::Theme;
-use gpui::{Rgba, SharedString};
+use gpui_kit::{Rgba, SharedString};
 use std::ops::Range;
 use std::sync::Arc;
 

@@ -2,9 +2,9 @@
 //!
 //! 请求设置管理：超时、重试、跟随重定向、SSL验证等
 
-use gpui_component::input::{Input, InputState};
-use gpui_component::{Sizable, StyledExt};
-use gpui::*;
+use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::{Sizable, StyledExt};
+use gpui_kit::*;
 
 /// 请求设置
 #[derive(Clone, serde::Serialize, serde::Deserialize)]

@@ -9,11 +9,11 @@ use crate::ui::components::{
     themed_icon, IconTier, IconTone, RADIUS_LG, RADIUS_SM,
 };
 use crate::ui::Theme;
-use gpui::*;
-use gpui::prelude::FluentBuilder;
-use gpui_component::button::Button;
-use gpui_component::input::InputState;
-use gpui_component::{IconName, Sizable, StyledExt};
+use gpui_kit::*;
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::component::button::Button;
+use gpui_kit::component::input::EditorState;
+use gpui_kit::component::{IconName, Sizable, StyledExt};
 use std::sync::{Arc, Mutex};
 
 const CODE_LANGUAGES: &[(&str, &str)] = &[
@@ -31,7 +31,7 @@ pub struct CodeGenDialogState {
     pub request: Option<HttpRequest>,
     pub selected_language: String,
     pub generated_code: String,
-    pub code_input: Option<Entity<InputState>>,
+    pub code_input: Option<Entity<EditorState>>,
     pub toast_message: Option<String>,
     needs_update: bool,
 }
@@ -39,9 +39,7 @@ pub struct CodeGenDialogState {
 impl CodeGenDialogState {
     pub fn new(window: &mut Window, cx: &mut Context<crate::ui::MainView>) -> Self {
         let code_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .default_value("")
-                .multi_line(true)
+            EditorState::new(window, cx).default_value("")
         });
         Self {
             open: false,
@@ -91,7 +89,7 @@ pub fn render_code_gen_dialog_overlay(
 ) -> impl IntoElement {
     let mut state_lock = state.lock().unwrap();
     if !state_lock.open {
-        return gpui::div();
+        return gpui_kit::div();
     }
 
     let selected = state_lock.selected_language.clone();
@@ -114,7 +112,7 @@ pub fn render_code_gen_dialog_overlay(
     let state_rc = Arc::clone(state);
     let theme_rc = theme.clone();
 
-    gpui::div()
+    gpui_kit::div()
         .absolute()
         .inset_0()
         .bg(theme.scrim())
@@ -123,7 +121,7 @@ pub fn render_code_gen_dialog_overlay(
         .justify_center()
         .on_mouse_down(MouseButton::Left, |_: &MouseDownEvent, _window: &mut Window, cx: &mut App| cx.stop_propagation())
         .child(
-            gpui::div()
+            gpui_kit::div()
                 .w(px(660.0))
                 .h(px(520.0))
                 .bg(theme.background)
@@ -135,7 +133,7 @@ pub fn render_code_gen_dialog_overlay(
                 .flex_col()
                 .child(
                     // 标题栏
-                    gpui::div()
+                    gpui_kit::div()
                         .flex()
                         .items_center()
                         .justify_between()
@@ -144,14 +142,14 @@ pub fn render_code_gen_dialog_overlay(
                         .border_b_1()
                         .border_color(theme.border)
                         .child(
-                            gpui::div()
+                            gpui_kit::div()
                                 .text_lg()
                                 .font_weight(FontWeight(600.0))
                                 .text_color(theme.foreground)
                                 .child(t("code.title")),
                         )
                         .child(
-                            gpui::div()
+                            gpui_kit::div()
                                 // 可点击容器必须给 id：gpui 的 hover/active 样式挂在 element state 上，
                                 // 而 element state 只由 global_id 提供（`Element::id()` 直接读它），
                                 // 没 id 的元素 `hover()` 永远不参与样式计算
@@ -189,7 +187,7 @@ pub fn render_code_gen_dialog_overlay(
                 )
                 .child(
                     // 语言选择器
-                    gpui::div()
+                    gpui_kit::div()
                         .flex()
                         .flex_wrap()
                         .gap_2()
@@ -220,7 +218,7 @@ pub fn render_code_gen_dialog_overlay(
                 .child({
                     // 代码区底色统一用 code_background（与响应体查看器一致）
                     let bg = theme.code_background;
-                    gpui::div()
+                    gpui_kit::div()
                         .flex_1()
                         .px_4()
                         .pb_3()
@@ -231,7 +229,7 @@ pub fn render_code_gen_dialog_overlay(
                 })
                 .child(
                     // Footer: toast + buttons
-                    gpui::div()
+                    gpui_kit::div()
                         .flex()
                         .items_center()
                         .justify_between()
@@ -240,13 +238,13 @@ pub fn render_code_gen_dialog_overlay(
                         .border_t_1()
                         .border_color(theme.border)
                         .child(
-                            gpui::div()
+                            gpui_kit::div()
                                 .text_sm()
                                 .text_color(theme.success)
                                 .when_some(toast_text, |d, msg| d.child(msg)),
                         )
                         .child(
-                            gpui::div()
+                            gpui_kit::div()
                                 .flex()
                                 .gap_2()
                                 .child({

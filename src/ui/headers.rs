@@ -2,8 +2,8 @@
 //!
 //! 请求头表格形式管理
 
-use gpui_component::input::{Input, InputState};
-use gpui::*;
+use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::*;
 
 /// Header 条目
 #[derive(Clone)]

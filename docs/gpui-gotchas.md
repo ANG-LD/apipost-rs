@@ -2,8 +2,7 @@
 
 本文件记录在 apipost-rs 上实际踩到、并且**已经用测量数据验证过**的 gpui 坑。
 
-- gpui: rev `1d217ee39d381ac101b7cf49d3d22451ac1093fe`
-- gpui-component: `1505b14`
+- gpui-kit: `0.7.3`（内含 gpui-pre `0.3.9` / gpui-base `0.7.3` / gpui-component `0.7.3`）
 
 每条按「症状 → 根因 → 正确写法 → 代码位置 → 怎么验证」组织。
 
@@ -64,7 +63,7 @@ div().id("sidebar-collections-scroll")
 
 **症状**：给容器加"滚动条"（`overflow_y_scrollbar()`）之后，反而完全不能滚。
 
-**根因**：`gpui_component::scroll::Scrollable` 的 `RenderOnce` 实现会把传进来的元素包成：
+**根因**：`gpui_kit::component::scroll::Scrollable` 的 `RenderOnce` 实现会把传进来的元素包成：
 
 ```
 div().size_full()
@@ -86,7 +85,7 @@ div().id("history-scroll").size_full().flex_col().overflow_y_scroll()
 注意 `flex_none()`（或 `flex_shrink_0()`）是关键：flex 子项默认 `flex_shrink: 1`，
 不加就会被压缩到刚好装下，同样让滚动范围归零。
 
-> 另外注意区分两个同名项：`gpui_component::scroll::Scrollable`（结构体）
+> 另外注意区分两个同名项：`gpui_kit::component::scroll::Scrollable`（结构体）
 > 与 `ScrollableElement`（trait，`overflow_y_scrollbar` 的提供者）。
 > 引错会报 `no method named overflow_y_scrollbar found for struct Stateful<E>`。
 
@@ -126,7 +125,7 @@ div().id("history-scroll").size_full().flex_col().overflow_y_scroll()
 **正确写法**：颜色要挂在**列表项**上，实现 `SearchableListItem`：
 
 ```rust
-impl gpui_component::searchable_list::SearchableListItem for MethodItem {
+impl gpui_kit::component::searchable_list::SearchableListItem for MethodItem {
     type Value = SharedString;
     fn title(&self) -> SharedString { self.name.clone() }          // 兜底标题
     fn display_title(&self) -> Option<AnyElement> {                // 触发器里显示的文字

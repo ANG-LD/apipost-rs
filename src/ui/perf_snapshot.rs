@@ -511,7 +511,7 @@ mod tests {
 
     use crate::ui::response_highlight::{self, HighlightedBody};
     use crate::ui::themes::Theme;
-    use gpui::{Rgba, SharedString};
+    use gpui_kit::{Rgba, SharedString};
 
     fn dark() -> Theme {
         Theme::from_str("dark")
@@ -1222,7 +1222,7 @@ mod tests {
             ("新（Arc 查表）", &mut || {
                 for _ in 0..FRAMES {
                     for key in KEYS {
-                        std::hint::black_box(gpui::SharedString::from(Arc::clone(
+                        std::hint::black_box(gpui_kit::SharedString::from(Arc::clone(
                             translations.get(key).unwrap(),
                         )));
                     }
@@ -1284,14 +1284,14 @@ mod tests {
         let (old_allocs, old_bytes, _) = alloc_probe::measure(|| {
             for _ in 0..BODIES {
                 for _ in 0..4 {
-                    std::hint::black_box(gpui::SharedString::from(resp.body.as_ref()));
+                    std::hint::black_box(gpui_kit::SharedString::from(resp.body.as_ref()));
                 }
             }
         });
         // 新：1 个编辑器，直接接管 Arc<str>
         let (new_allocs, new_bytes, _) = alloc_probe::measure(|| {
             for _ in 0..BODIES {
-                std::hint::black_box(gpui::SharedString::from(Arc::clone(&resp.body)));
+                std::hint::black_box(gpui_kit::SharedString::from(Arc::clone(&resp.body)));
             }
         });
 
@@ -1361,7 +1361,7 @@ mod tests {
                     for entry in &entries {
                         std::hint::black_box(entry.method.clone());
                         std::hint::black_box(entry.url.clone());
-                        std::hint::black_box(gpui::SharedString::from(format!(
+                        std::hint::black_box(gpui_kit::SharedString::from(format!(
                             "history-row-{}",
                             entry.id
                         )));

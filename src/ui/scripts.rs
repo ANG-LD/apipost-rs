@@ -2,8 +2,8 @@
 //!
 //! Pre-request Script 和 Test Script 管理
 
-use gpui_component::input::{Input, InputState};
-use gpui::*;
+use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::*;
 
 /// 脚本状态
 #[derive(Clone)]

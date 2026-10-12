@@ -2,10 +2,10 @@
 //!
 //! 支持多种 Body 类型：none, form-data, x-www-form-urlencoded, raw, binary
 
-use gpui_component::input::{Input, InputState};
-use gpui_component::select::{Select, SelectState};
-use gpui_component::{IndexPath, Sizable, StyledExt};
-use gpui::*;
+use gpui_kit::component::input::{EditorState, Input, InputState};
+use gpui_kit::component::select::{Select, SelectState};
+use gpui_kit::component::{IndexPath, Sizable, StyledExt};
+use gpui_kit::*;
 use regex;
 
 /// Body 类型枚举
@@ -46,7 +46,7 @@ impl BodyType {
         }
     }
 
-    pub fn all() -> Vec<gpui::SharedString> {
+    pub fn all() -> Vec<gpui_kit::SharedString> {
         vec![
             "none".into(),
             "form-data".into(),
@@ -105,7 +105,7 @@ impl RawFormat {
         }
     }
 
-    pub fn all() -> Vec<gpui::SharedString> {
+    pub fn all() -> Vec<gpui_kit::SharedString> {
         vec![
             "JSON".into(),
             "XML".into(),
@@ -220,7 +220,7 @@ impl FormDataParamType {
         }
     }
 
-    pub fn all() -> Vec<gpui::SharedString> {
+    pub fn all() -> Vec<gpui_kit::SharedString> {
         vec![
             "Text".into(),
             "Boolean".into(),
@@ -230,7 +230,7 @@ impl FormDataParamType {
         ]
     }
 
-    pub fn create_select(window: &mut Window, cx: &mut Context<crate::ui::MainView>) -> Entity<SelectState<Vec<gpui::SharedString>>> {
+    pub fn create_select(window: &mut Window, cx: &mut Context<crate::ui::MainView>) -> Entity<SelectState<Vec<gpui_kit::SharedString>>> {
         let types = Self::all();
         cx.new(|cx| {
             SelectState::new(types, Some(IndexPath::default()), window, cx)
@@ -264,7 +264,7 @@ pub struct FormDataEntry {
     pub value: FormDataValue,
     pub enabled: bool,
     pub param_type: FormDataParamType,
-    pub type_select: Entity<SelectState<Vec<gpui::SharedString>>>,
+    pub type_select: Entity<SelectState<Vec<gpui_kit::SharedString>>>,
 }
 
 /// Body 状态
@@ -272,13 +272,13 @@ pub struct FormDataEntry {
 pub struct BodyState {
     pub body_type: BodyType,
     pub raw_format: RawFormat,
-    pub raw_content: Entity<InputState>,
+    pub raw_content: Entity<EditorState>,
     /// XML 格式的 raw_content
-    pub raw_content_xml: Entity<InputState>,
+    pub raw_content_xml: Entity<EditorState>,
     /// Text 格式的 raw_content
-    pub raw_content_text: Entity<InputState>,
+    pub raw_content_text: Entity<EditorState>,
     /// HTML 格式的 raw_content
-    pub raw_content_html: Entity<InputState>,
+    pub raw_content_html: Entity<EditorState>,
     /// Form-data 条目列表
     pub form_data: Vec<FormDataEntry>,
     /// URL-encoded 条目列表
@@ -304,10 +304,10 @@ pub struct BodyState {
 impl BodyState {
     /// 创建 Body 状态
     pub fn new(
-        raw_content: Entity<InputState>,
-        raw_content_xml: Entity<InputState>,
-        raw_content_text: Entity<InputState>,
-        raw_content_html: Entity<InputState>,
+        raw_content: Entity<EditorState>,
+        raw_content_xml: Entity<EditorState>,
+        raw_content_text: Entity<EditorState>,
+        raw_content_html: Entity<EditorState>,
     ) -> Self {
         Self {
             body_type: BodyType::None,
@@ -609,7 +609,7 @@ impl BodyState {
     }
 
     /// 创建 Body 类型选择器
-    pub fn create_body_type_select(window: &mut Window, cx: &mut Context<crate::ui::MainView>) -> Entity<SelectState<Vec<gpui::SharedString>>> {
+    pub fn create_body_type_select(window: &mut Window, cx: &mut Context<crate::ui::MainView>) -> Entity<SelectState<Vec<gpui_kit::SharedString>>> {
         let body_types = BodyType::all();
         cx.new(|cx| {
             SelectState::new(body_types, Some(IndexPath::default()), window, cx)
@@ -617,7 +617,7 @@ impl BodyState {
     }
 
     /// 创建 Raw 格式选择器
-    pub fn create_raw_format_select(window: &mut Window, cx: &mut Context<crate::ui::MainView>) -> Entity<SelectState<Vec<gpui::SharedString>>> {
+    pub fn create_raw_format_select(window: &mut Window, cx: &mut Context<crate::ui::MainView>) -> Entity<SelectState<Vec<gpui_kit::SharedString>>> {
         let raw_formats = RawFormat::all();
         cx.new(|cx| {
             SelectState::new(raw_formats, Some(IndexPath::default()), window, cx)

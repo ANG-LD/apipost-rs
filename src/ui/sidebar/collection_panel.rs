@@ -8,8 +8,8 @@ use crate::ui::components::{
 use crate::ui::main_view::MainView;
 use crate::ui::components::{RADIUS_SM, RADIUS_XS};
 use crate::ui::Theme;
-use gpui::*;
-use gpui_component::{IconName, StyledExt};
+use gpui_kit::*;
+use gpui_kit::component::{IconName, StyledExt};
 use std::sync::{Arc, Mutex};
 
 /// 拖拽数据
@@ -30,7 +30,7 @@ pub struct DragItem {
 /// 用和上下文菜单/悬浮提示同一套浮层配色（主题底色 + 边框 + 前景），
 /// 不再写死 rgba(0,0,0,0.8) + 白色文字。
 struct DragPreview {
-    label: gpui::SharedString,
+    label: gpui_kit::SharedString,
     bg: Rgba,
     border: Rgba,
     fg: Rgba,
@@ -217,7 +217,7 @@ pub fn render_collection_panel(
     let drag_fg = theme.foreground;
     let drop_tint = theme.accent.alpha(0.12);
 
-    let mut all_items: Vec<gpui::AnyElement> = Vec::new();
+    let mut all_items: Vec<gpui_kit::AnyElement> = Vec::new();
     for item in items {
         let elem = match item {
             CollectionItem::Folder { id, name, depth, is_expanded, children, keys } => {
@@ -497,7 +497,7 @@ pub fn render_folder_context_menu(
     cx: &mut Context<MainView>,
     theme: &Theme,
     t: &dyn Fn(&str) -> SharedString,
-) -> gpui::Div {
+) -> gpui_kit::Div {
     let fid = folder_id.to_string();
     let fname = folder_name.to_string();
 
@@ -544,7 +544,7 @@ pub fn render_request_context_menu(
     cx: &mut Context<MainView>,
     theme: &Theme,
     t: &dyn Fn(&str) -> SharedString,
-) -> gpui::Div {
+) -> gpui_kit::Div {
     let rid = request.id.clone();
     let rname = request.name.clone();
 

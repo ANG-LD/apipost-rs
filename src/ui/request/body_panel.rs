@@ -7,15 +7,15 @@ use crate::ui::components::{
 };
 use crate::ui::themes::Theme;
 use std::sync::Arc;
-use gpui::*;
+use gpui_kit::*;
 // `when` 等流式构造方法来自 prelude（与 main_view.rs 保持一致）
-use gpui::prelude::*;
-use gpui::prelude::FluentBuilder;
-use gpui_component::button::Button;
-use gpui_component::input::Input;
-use gpui_component::select::Select;
-use gpui_component::{IconName, Sizable, StyledExt};
-use gpui_component::scroll::ScrollableElement;
+use gpui_kit::prelude::*;
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::component::button::Button;
+use gpui_kit::component::input::Input;
+use gpui_kit::component::select::Select;
+use gpui_kit::component::{IconName, Sizable, StyledExt};
+use gpui_kit::component::scroll::ScrollableElement;
 
 pub fn render_body_panel(
     this: &mut MainView,
@@ -302,7 +302,7 @@ fn render_key_value_editor(
                 .flex_row()
                 .gap_2()
                 .children({
-                    let mut children: Vec<gpui::Div> = vec![
+                    let mut children: Vec<gpui_kit::Div> = vec![
                         // 占位 24/22 与数据行的复选框、删除按钮等宽，居中的列标题才会对准输入框
                         div().w(px(24.0)).child(""),
                         div()
@@ -358,7 +358,7 @@ fn render_key_value_editor(
                         .gap_2()
                         .items_center()
                         .children({
-                            let mut children: Vec<gpui::AnyElement> = vec![
+                            let mut children: Vec<gpui_kit::AnyElement> = vec![
                                 // 行内启用开关：id 必须带行下标（gpui 的 hover/active 状态
                                 // 挂在 element id 上，共用 id 会「悬停一行、全部高亮」）；
                                 // 尺寸、字形与两种状态的颜色统一由 enabled_toggle 给出

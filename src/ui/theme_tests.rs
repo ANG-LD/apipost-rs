@@ -9,14 +9,14 @@ use crate::ui::components::{
 use crate::ui::themes::component_theme::{component_config, contrast_ratio, readable_on};
 use crate::ui::themes::tokens::{GAP_XS, ICON_SIZE_MD, ICON_SIZE_SM, ICON_TEXT_GAP};
 use crate::ui::themes::Theme;
-use gpui::{rgb, Rgba};
-use gpui_component::Size;
+use gpui_kit::{rgb, Rgba};
+use gpui_kit::component::Size;
 use std::collections::HashSet;
 
 // ==================== 组件库高亮主题（编辑器配色）的回归守卫 ====================
 //
 // 背景：输入框里的 JSON 编辑器是 gpui_component 画的，它的正文底色、行号栏底色、
-// 行号颜色、语法高亮全部读 `gpui_component::theme::Theme::highlight_theme`。
+// 行号颜色、语法高亮全部读 `gpui_kit::component::theme::Theme::highlight_theme`。
 // 项目自己的 `ui::Theme` 不管这块，所以桥接层必须显式给一份，否则会停在该库
 // 自带的浅色高亮主题上：深色主题里行号栏变成白色（症状 1），JSON 的键/值用的是
 // 浅色主题的深蓝深绿，压在深色底上几乎看不见（症状 2）。
@@ -88,7 +88,7 @@ fn gutter_background_matches_the_editor_background_family() {
         let editor_bg = mapped_color(&theme, "/editor.background");
         let gutter = mapped_color(&theme, "/editor.gutter.background");
 
-        // 正文底必须等于 code_editor_view 传给 `Input::bg()` 的 code_background，
+        // 正文底必须等于 code_editor_view 传给 `Editor::bg()` 的 code_background，
         // 否则行号栏和正文之间会露出色差缝
         assert_eq!(
             editor_bg, theme.code_background,

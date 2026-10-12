@@ -13,7 +13,7 @@
 //! 新增控件时优先从这里取值；确需新档位时先在此处补常量，不要在面板里就地写数字。
 
 use super::Theme;
-use gpui::Rgba;
+use gpui_kit::Rgba;
 
 // ==================== 圆角档位 ====================
 // 只有 4 档。数值刻意对齐 gpui 的 rounded_xs/sm/lg 与 rounded_xl（4/6/8/12），

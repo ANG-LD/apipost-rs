@@ -10,12 +10,12 @@ use crate::ui::components::{
     RADIUS_LG, RADIUS_MD, RADIUS_SM,
 };
 use crate::ui::Theme;
-use gpui::*;
-use gpui::prelude::FluentBuilder;
-use gpui_component::button::Button;
-use gpui_component::input::{Input, InputState};
-use gpui_component::scroll::ScrollableElement;
-use gpui_component::{Disableable, IconName, Sizable, StyledExt};
+use gpui_kit::*;
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::component::button::Button;
+use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::{Disableable, IconName, Sizable, StyledExt};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -185,9 +185,9 @@ pub fn render_env_dialog_overlay(
     app_state: &Arc<Mutex<AppState>>,
     active_env_id: &Option<String>,
     theme: &Theme,
-    entity_id: gpui::EntityId,
+    entity_id: gpui_kit::EntityId,
     cx: &mut Context<crate::ui::MainView>,
-) -> gpui::AnyElement {
+) -> gpui_kit::AnyElement {
     let st = state.lock().unwrap();
     if !st.visible {
         return div().into_any_element();
@@ -616,13 +616,13 @@ fn render_var_section(
     count: usize,
     slots: &[(Entity<InputState>, Entity<InputState>)],
     theme: &Theme,
-    entity_id: gpui::EntityId,
+    entity_id: gpui_kit::EntityId,
     add_label: &str,
     key_label: &str,
     value_label: &str,
     empty_hint: &str,
     count_label: &str,
-) -> gpui::Div {
+) -> gpui_kit::Div {
     let s_add = state.clone();
     let s_add_empty = state.clone();
     let s_del = state.clone();

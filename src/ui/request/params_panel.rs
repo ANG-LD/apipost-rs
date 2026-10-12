@@ -1,13 +1,13 @@
 use crate::ui::components::{themed_icon, IconTier, IconTone, CONTROL_H, ICON_BTN, RADIUS_SM};
 use crate::ui::main_view::MainView;
 use crate::ui::Theme;
-use gpui::*;
+use gpui_kit::*;
 // `when` 等流式构造方法来自 prelude（与 main_view.rs 保持一致）
-use gpui::prelude::*;
-use gpui_component::button::Button;
-use gpui_component::input::Input;
-use gpui_component::{IconName, Sizable, StyledExt};
-use gpui_component::scroll::ScrollableElement;
+use gpui_kit::prelude::*;
+use gpui_kit::component::button::Button;
+use gpui_kit::component::input::Input;
+use gpui_kit::component::{IconName, Sizable, StyledExt};
+use gpui_kit::component::scroll::ScrollableElement;
 
 pub fn render_params_panel(
     this: &mut MainView,

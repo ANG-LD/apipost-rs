@@ -4,10 +4,10 @@
 
 use crate::app::AppState;
 use crate::ui::Theme;
-use gpui::*;
-use gpui_component::button::Button;
-use gpui_component::dialog::{DialogHeader, DialogTitle};
-use gpui_component::{Sizable, StyledExt, WindowExt};
+use gpui_kit::*;
+use gpui_kit::component::button::Button;
+use gpui_kit::component::dialog::{DialogHeader, DialogTitle};
+use gpui_kit::component::{Sizable, StyledExt, WindowExt};
 use std::sync::{Arc, Mutex};
 
 /// 语言配置
@@ -55,7 +55,7 @@ pub fn open_settings_dialog(app_state: &AppState, window: &mut Window, cx: &mut 
                                 .child(DialogTitle::new().child("\u{8bbe}\u{7f6e} / Settings")),
                         )
                         .child(
-                            gpui::div()
+                            gpui_kit::div()
                                 .id("settings-dialog-scroll")
                                 .p_4()
                                 .flex_col()
@@ -77,7 +77,7 @@ pub fn open_settings_dialog(app_state: &AppState, window: &mut Window, cx: &mut 
                 }
             })
             .footer(
-                gpui::div().flex().justify_end().child(
+                gpui_kit::div().flex().justify_end().child(
                     Button::new("close-settings")
                         .label("\u{5173}\u{95ed} / Close")
                         .on_click(|_, window, cx| {
@@ -94,17 +94,17 @@ fn language_section(
     app_state: Arc<Mutex<AppState>>,
     theme: &Theme,
 ) -> impl IntoElement {
-    gpui::div()
+    gpui_kit::div()
         .flex_col()
         .gap_2()
         .child(
-            gpui::div()
+            gpui_kit::div()
                 .text_sm()
                 .font_semibold()
                 .text_color(theme.muted_foreground)
                 .child("\u{8bed}\u{8a00} / Language"),
         )
-        .child(gpui::div().flex().gap_2().children(
+        .child(gpui_kit::div().flex().gap_2().children(
             LANGUAGES.iter().map(move |(code, label)| {
                 let is_active = current_lang == *code;
                 let app_state = app_state.clone();
@@ -140,17 +140,17 @@ fn theme_section(
     app_state: Arc<Mutex<AppState>>,
     theme: &Theme,
 ) -> impl IntoElement {
-    gpui::div()
+    gpui_kit::div()
         .flex_col()
         .gap_2()
         .child(
-            gpui::div()
+            gpui_kit::div()
                 .text_sm()
                 .font_semibold()
                 .text_color(theme.muted_foreground)
                 .child("\u{4e3b}\u{9898} / Theme"),
         )
-        .child(gpui::div().flex().flex_wrap().gap_2().children(
+        .child(gpui_kit::div().flex().flex_wrap().gap_2().children(
             THEMES.iter().map(move |(code, label)| {
                 let is_active = current_theme == *code;
                 let app_state = app_state.clone();

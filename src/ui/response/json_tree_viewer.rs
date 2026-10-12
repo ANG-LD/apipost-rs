@@ -2,8 +2,8 @@
 //!
 //! 递归渲染 JSON 树，按类型着色。超大 JSON（>500KB）降级为纯文本。
 
-use gpui::*;
-use gpui_component::scroll::ScrollableElement;
+use gpui_kit::*;
+use gpui_kit::component::scroll::ScrollableElement;
 use serde_json::Value;
 
 use crate::ui::themes::Theme;
@@ -131,7 +131,7 @@ fn render_json_node(value: &Value, depth: usize, theme: &Theme) -> AnyElement {
 }
 
 /// 创建类似 span 的内联元素（用 flex_none div 模拟）
-fn span_like(color: gpui::Rgba) -> Div {
+fn span_like(color: gpui_kit::Rgba) -> Div {
     div().flex_none().text_color(color)
 }
 

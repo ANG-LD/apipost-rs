@@ -4,9 +4,9 @@ pub mod popup_panel;
 pub use popup_panel::*;
 
 use crate::ui::Theme;
-use gpui::prelude::*;
-use gpui::*;
-use gpui_component::{Icon, IconName, Size, Sizable};
+use gpui_kit::prelude::*;
+use gpui_kit::*;
+use gpui_kit::component::{Icon, IconName, Size, Sizable};
 
 /// HTTP方法颜色 (返回RGB值)
 pub fn method_color(method: &str) -> u32 {
@@ -41,7 +41,7 @@ impl MethodItem {
     }
 }
 
-impl gpui_component::searchable_list::SearchableListItem for MethodItem {
+impl gpui_kit::component::searchable_list::SearchableListItem for MethodItem {
     type Value = SharedString;
 
     fn title(&self) -> SharedString {
@@ -102,7 +102,7 @@ pub fn status_color(status: u16) -> u32 {
 pub use crate::ui::themes::tokens::*;
 
 /// 分段按钮组外框：把组内按钮包成一个整体（浅底 + 2px 内边距）
-pub fn segment_group(theme: &Theme) -> gpui::Div {
+pub fn segment_group(theme: &Theme) -> gpui_kit::Div {
     // 组容器用 hover 面（muted_background）而不是 code_background：
     // 前者才是「比页面浅一档的凹槽」这一语义，后者是代码块底色
     let bg = theme.hover_bg();
@@ -401,7 +401,7 @@ pub const VALUE_CHIP_HOVER_ALPHA: f32 = 0.22;
 pub const VALUE_CHIP_PRESSED_ALPHA: f32 = 0.32;
 
 /// 设置面板等处的区块标题
-pub fn section_title(label: impl Into<SharedString>, theme: &Theme) -> gpui::Div {
+pub fn section_title(label: impl Into<SharedString>, theme: &Theme) -> gpui_kit::Div {
     let color = theme.muted_foreground;
     div()
         .w_full()
@@ -413,7 +413,7 @@ pub fn section_title(label: impl Into<SharedString>, theme: &Theme) -> gpui::Div
 }
 
 /// 区块之间的分隔线
-pub fn section_divider(theme: &Theme) -> gpui::Div {
+pub fn section_divider(theme: &Theme) -> gpui_kit::Div {
     let color = theme.border;
     div().w_full().h(px(1.0)).my(px(2.0)).bg(color)
 }

@@ -2,7 +2,7 @@
 //!
 //! 定义应用的主题色彩方案
 
-use gpui::*;
+use gpui_kit::*;
 
 // 设计令牌（尺寸常量 + 由调色板派生的语义色）与组件库主题桥接。
 // tokens 里的常量不在这里 re-export，统一由 components 模块对外提供（只有一条路径，
@@ -71,26 +71,26 @@ pub fn dark_theme() -> Theme {
 #[derive(Clone, PartialEq)]
 pub struct Theme {
     pub name: String,
-    pub background: gpui::Rgba,
-    pub foreground: gpui::Rgba,
-    pub muted_foreground: gpui::Rgba,
-    pub accent: gpui::Rgba,
-    pub accent_foreground: gpui::Rgba,
-    pub input_background: gpui::Rgba,
-    pub border: gpui::Rgba,
-    pub muted_background: gpui::Rgba,
-    pub sidebar_background: gpui::Rgba,
-    pub code_background: gpui::Rgba,
-    pub success: gpui::Rgba,
-    pub warning: gpui::Rgba,
-    pub error: gpui::Rgba,
+    pub background: gpui_kit::Rgba,
+    pub foreground: gpui_kit::Rgba,
+    pub muted_foreground: gpui_kit::Rgba,
+    pub accent: gpui_kit::Rgba,
+    pub accent_foreground: gpui_kit::Rgba,
+    pub input_background: gpui_kit::Rgba,
+    pub border: gpui_kit::Rgba,
+    pub muted_background: gpui_kit::Rgba,
+    pub sidebar_background: gpui_kit::Rgba,
+    pub code_background: gpui_kit::Rgba,
+    pub success: gpui_kit::Rgba,
+    pub warning: gpui_kit::Rgba,
+    pub error: gpui_kit::Rgba,
     // JSON 语法高亮颜色
-    pub json_key: gpui::Rgba,
-    pub json_string: gpui::Rgba,
-    pub json_number: gpui::Rgba,
-    pub json_boolean: gpui::Rgba,
-    pub json_null: gpui::Rgba,
-    pub json_bracket: gpui::Rgba,
+    pub json_key: gpui_kit::Rgba,
+    pub json_string: gpui_kit::Rgba,
+    pub json_number: gpui_kit::Rgba,
+    pub json_boolean: gpui_kit::Rgba,
+    pub json_null: gpui_kit::Rgba,
+    pub json_bracket: gpui_kit::Rgba,
 }
 
 /// 暖色主题

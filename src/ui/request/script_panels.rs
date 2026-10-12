@@ -1,11 +1,11 @@
 use crate::ui::components::RADIUS_SM;
 use crate::ui::main_view::MainView;
 use crate::ui::Theme;
-use gpui::*;
-use gpui_component::input::Input;
-use gpui_component::Sizable;
-use gpui_component::StyledExt;
-use gpui_component::scroll::ScrollableElement;
+use gpui_kit::*;
+use gpui_kit::component::input::Input;
+use gpui_kit::component::Sizable;
+use gpui_kit::component::StyledExt;
+use gpui_kit::component::scroll::ScrollableElement;
 
 pub fn render_pre_request_panel(
     this: &mut MainView,

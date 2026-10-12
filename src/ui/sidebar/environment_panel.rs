@@ -6,9 +6,9 @@ use crate::ui::components::{
 };
 use crate::ui::main_view::MainView;
 use crate::ui::Theme;
-use gpui::prelude::FluentBuilder;
-use gpui::*;
-use gpui_component::{IconName, StyledExt};
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::*;
+use gpui_kit::component::{IconName, StyledExt};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

@@ -15,9 +15,9 @@ mod i18n;
 
 use app::AppState;
 use config::AppConfig;
-use gpui::*;
-use gpui_component::{Root, StyledExt};
-use gpui_platform::application;
+use gpui_kit::*;
+use gpui_kit::component::{Root, StyledExt};
+use gpui_kit::application;
 use ui::MainView;
 use log::info;
 use std::sync::Arc;
@@ -89,11 +89,11 @@ fn main() {
 
     // 构建并运行应用
     // 资源源用 `assets::Assets`（应用自绘图标 + 组件库资源的桥接）：
-    // 直接用组件库那份 `gpui_component_assets::Assets` 时，应用自己的
-    // `assets/icons/*.svg` 解析不到，`gpui::svg()` 只会画出空白（原因见 src/assets.rs 顶部）
+    // 直接用组件库那份 `gpui_kit::assets::Assets` 时，应用自己的
+    // `assets/icons/*.svg` 解析不到，`gpui_kit::svg()` 只会画出空白（原因见 src/assets.rs 顶部）
     application().with_assets(assets::Assets::new()).run(move |cx: &mut App| {
-        // 初始化gpui-component
-        gpui_component::init(cx);
+        // 初始化 gpui-kit（含 gpui-component 组件库与默认图标资源）
+        gpui_kit::init(cx);
 
         // 把应用调色板（12 套主题）与圆角/焦点环同步给组件库：输入框、按钮、
         // 下拉框、设置弹窗都是组件库画的，颜色取自它自己的全局主题。
